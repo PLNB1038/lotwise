@@ -7,6 +7,7 @@ import { createApiServer } from "../src/api/server.mjs";
 import { RpcClient } from "../src/ingest/rpc.mjs";
 import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
+import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 
 const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 8787);
 const rpcUrl = process.argv.includes("--rpc") ? process.argv[process.argv.indexOf("--rpc") + 1] : "https://api.mainnet-beta.solana.com";
@@ -31,64 +32,73 @@ for (const t of registry.filter((x) => x.issuer === "backed")) {
   await sleep(300); // вежливость к публичному API
 }
 
+// Общий кэш-раннер: TTL + дедуп параллельных вызовов (одинаковый паттерн
+// для on-chain ридера, сканера кошельков и провайдера цен — вынесен в хелпер)
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const cached = (label) => {
+  const store = new Map(); // key -> { at, data }
+  const inflight = new Map(); // key -> Promise
+  return (key, fn) => {
+    const hit = store.get(key);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return Promise.resolve(hit.data);
+    if (!inflight.has(key)) {
+      inflight.set(
+        key,
+        Promise.resolve()
+          .then(fn)
+          .then((data) => {
+            store.set(key, { at: Date.now(), data });
+            return data;
+          })
+          .finally(() => inflight.delete(key)),
+      );
+    }
+    return inflight.get(key);
+  };
+};
+
 // On-chain план (Scaled UI Amount): публичный RPC, кэш 10 минут на минт —
 // витрина дёргает /onchain на каждый выбор токена, а квота публичных RPC конечна
 const rpc = new RpcClient({ endpoint: rpcUrl });
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const onchainCache = new Map(); // mint -> { at, data }
-const inflight = new Map(); // mint -> Promise (дедуп параллельных запросов)
+const onchainCached = cached("onchain");
 
-const onchainReader = async (mint) => {
-  const hit = onchainCache.get(mint);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
-  if (!inflight.has(mint)) {
-    inflight.set(
-      mint,
-      rpc
-        .call("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }])
-        .then((result) => parseScaledUiAmount(result.value))
-        .then((data) => {
-          onchainCache.set(mint, { at: Date.now(), data });
-          return data;
-        })
-        .finally(() => inflight.delete(mint)),
-    );
-  }
-  return inflight.get(mint);
-};
+const onchainReader = (mint) =>
+  onchainCached(mint, () =>
+    rpc
+      .call("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }])
+      .then((result) => parseScaledUiAmount(result.value)),
+  );
 
-// Кошельковый скан: дорогой (по getTransaction на транзакцию, ~350мс на публичном RPC),
-// поэтому кэш 10 минут на адрес + дедуп параллельных — тот же паттерн, что у on-chain ридера
-const walletCache = new Map(); // address -> { at, scan }
-const walletInflight = new Map();
+// Кошельковый скан: дорогой (по getTransaction на транзакцию, ~350мс на публичном RPC)
+const walletCached = cached("wallet");
 
-const walletScanner = (address) => {
-  const hit = walletCache.get(address);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return Promise.resolve(hit.scan);
-  if (!walletInflight.has(address)) {
+const walletScanner = (address) =>
+  walletCached(address, () => {
     console.log(`[serve] скан кошелька ${address} (потолок ${maxTxs} подписей)`);
-    walletInflight.set(
-      address,
-      scanWallet(rpc, address, registry, {
-        maxTxs,
-        onProgress: ({ fetched, total }) => {
-          if (fetched % 25 === 0 || fetched === total) console.log(`[serve] ${address}: ${fetched}/${total}`);
-        },
-      })
-        .then((scan) => {
-          walletCache.set(address, { at: Date.now(), scan });
-          console.log(`[serve] ${address}: готово — ${scan.txs.length} релевантных tx из ${scan.fetched}`);
-          return scan;
-        })
-        .finally(() => walletInflight.delete(address)),
-    );
-  }
-  return walletInflight.get(address);
+    return scanWallet(rpc, address, registry, {
+      maxTxs,
+      onProgress: ({ fetched, total }) => {
+        if (fetched % 25 === 0 || fetched === total) console.log(`[serve] ${address}: ${fetched}/${total}`);
+      },
+    }).then((scan) => {
+      console.log(`[serve] ${address}: готово — ${scan.txs.length} релевантных tx из ${scan.fetched}`);
+      return scan;
+    });
+  });
+
+// Цены (GeckoTerminal): пул минта + дневные свечи, оба — кэш 10 минут
+const gt = new GeckoTerminalClient();
+const poolCached = cached("pool");
+const candlesCached = cached("candles");
+
+const priceProvider = {
+  pool: (mint) => poolCached(mint, () => gt.bestBasePool(mint)),
+  candles: (poolAddress) => candlesCached(poolAddress, () => gt.dailyCandles(poolAddress)),
 };
 
 let server;
 try {
-  server = await createApiServer({ registry, events, port, onchainReader, walletScanner });
+  server = await createApiServer({ registry, events, port, onchainReader, walletScanner, priceProvider });
 } catch (err) {
   console.error(`[serve] не поднялся на порту ${port}: ${err.code ?? err.message}`);
   process.exit(1);
@@ -96,4 +106,4 @@ try {
 console.log(`\n[serve] Lotwise API: http://127.0.0.1:${server.address().port}`);
 console.log(`[serve] витрина: http://127.0.0.1:${server.address().port}/`);
 console.log(`[serve] токенов: ${registry.length}, событий: ${events.length}, on-chain RPC: ${rpcUrl}`);
-console.log(`[serve] попробуй: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet>`);
+console.log(`[serve] попробуй: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);

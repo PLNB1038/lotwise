@@ -5,9 +5,10 @@ import { MultiplierTimeline } from "../lots/timeline.mjs";
 import { reconcileMultiplier } from "../issuer/scaled-ui.mjs";
 import { isValidAddress } from "../wallet/scan.mjs";
 import { buildWalletReport } from "../wallet/report.mjs";
+import { crossCheckEvents } from "../events/crosscheck.mjs";
 import { renderPage } from "../ui/page.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null }) {
   // индексы собираются один раз; при изменении данных сервер пересоздаётся (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -111,6 +112,21 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // отчёт собираем в сервере: тут живут таймлайны множителей
       return json(res, 200, buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() }));
     }
+    if (url.pathname === "/crosscheck") {
+      const mint = resolveMint(q);
+      if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
+      if (!priceProvider) return json(res, 503, { error: "price provider not configured" });
+      let pool = null;
+      let candles = [];
+      try {
+        pool = await priceProvider.pool(mint); // null = пула с нашим base нет — все вердикты no-price-data
+        if (pool) candles = await priceProvider.candles(pool.address);
+      } catch (err) {
+        return json(res, 503, { error: err.message, kind: err.kind ?? null });
+      }
+      const { verdicts, coverage } = crossCheckEvents(eventsByMint.get(mint) ?? [], candles);
+      return json(res, 200, { mint, symbol: byMint.get(mint)?.symbol ?? null, pool, coverage, verdicts });
+    }
     if (url.pathname === "/health") return json(res, 200, { ok: true, tokens: registry.length, events: events.length });
     if (url.pathname === "/tokens") {
       const issuer = q.get("issuer");
@@ -147,7 +163,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 400, { error: err.message });
       }
     }
-    return json(res, 404, { error: "not found", endpoints: ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots"] });
+    return json(res, 404, { error: "not found", endpoints: ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots", "/crosscheck"] });
     } catch (err) {
       // страховка: любое необработанное исключение — 500, процесс живёт
       return json(res, 500, { error: "internal error" });

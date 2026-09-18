@@ -44,6 +44,7 @@ export function renderPage() {
   .verdict.ok { color: var(--ok); border-color: var(--ok); }
   .verdict.disagree { color: var(--bad); border-color: var(--bad); }
   .verdict.unavailable { color: var(--warn); border-color: var(--warn); }
+  .timeline .verdict { font-size: 11px; padding: 0 6px; margin-left: 6px; cursor: help; }
   .note { color: var(--muted); font-size: 13px; }
   input[type=number], input[type=date], select {
     background: #0d1117; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 14px;
@@ -122,7 +123,7 @@ export function renderPage() {
 
   <footer>
     This page is a sample consumer of the Lotwise REST API:
-    <code>/health</code> <code>/tokens</code> <code>/events</code> <code>/multiplier</code> <code>/summary</code> <code>/onchain</code> <code>/lots</code>.
+    <code>/health</code> <code>/tokens</code> <code>/events</code> <code>/multiplier</code> <code>/summary</code> <code>/onchain</code> <code>/lots</code> <code>/crosscheck</code>.
     All numbers come from the endpoints above — nothing is hardcoded in this page.
   </footer>
 </main>
@@ -189,15 +190,44 @@ function loadEvents(t) {
     .then(function (r) { return r.json(); })
     .then(function (list) {
       if (state.selected !== t) return; // устаревший ответ: пользователь уже переключил токен
-      if (!list.length) {
-        el('events').innerHTML = '<li><span class="what">No normalized events for this token yet.</span></li>';
-        return;
-      }
-      el('events').innerHTML = list.map(function (e) {
-        return '<li><div class="when">' + esc(e.effectiveDate) + ' — ' + esc(e.reason || e.type) + '</div>' +
-          '<div class="what">' + esc(e.multiplierFrom || '-') + ' &rarr; ' + esc(e.multiplierTo || '-') + '</div></li>';
-      }).join('');
+      renderEvents(list, null);
+      if (!list.length) return;
+      // вердикты кросс-чека цены приходят вторым заходом и дополняют таймлайн бейджами
+      fetch('/crosscheck?symbol=' + encodeURIComponent(t.symbol))
+        .then(function (r) { return r.json(); })
+        .then(function (xc) {
+          if (state.selected !== t) return;
+          var byDate = {};
+          (xc.verdicts || []).forEach(function (v) { byDate[v.effectiveDate] = v; });
+          renderEvents(list, byDate);
+        })
+        .catch(function () { /* бейджи — обогащение, не данные: молча без них */ });
     });
+}
+
+function xcBadge(v) {
+  if (!v) return '';
+  var map = {
+    consistent: ['ok', 'price: consistent'],
+    mismatch: ['disagree', 'price: mismatch'],
+    suspicious: ['disagree', 'price: suspicious'],
+    inconclusive: ['unavailable', 'price: inconclusive'],
+    'no-price-data': ['unavailable', 'price: no data'],
+  };
+  var m = map[v.verdict] || ['unavailable', 'price: ?'];
+  return ' <span class="verdict ' + m[0] + '" title="' + esc(v.note || '') + '">' + m[1] + '</span>';
+}
+
+function renderEvents(list, xcByDate) {
+  if (!list.length) {
+    el('events').innerHTML = '<li><span class="what">No normalized events for this token yet.</span></li>';
+    return;
+  }
+  el('events').innerHTML = list.map(function (e) {
+    return '<li><div class="when">' + esc(e.effectiveDate) + ' — ' + esc(e.reason || e.type) +
+      xcBadge(xcByDate ? xcByDate[e.effectiveDate] : null) + '</div>' +
+      '<div class="what">' + esc(e.multiplierFrom || '-') + ' &rarr; ' + esc(e.multiplierTo || '-') + '</div></li>';
+  }).join('');
 }
 
 function setVerdict(cls, text) {
