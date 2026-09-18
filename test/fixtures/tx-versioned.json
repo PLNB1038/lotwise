@@ -1,0 +1,26 @@
+{
+  "slot": 335000222,
+  "blockTime": 1760100060,
+  "version": 0,
+  "transaction": {
+    "message": { "accountKeys": ["Owner11111111111111111111111111111111111111111"], "instructions": [] },
+    "signatures": ["SigVersioned0000000000000000000000000000000000000000000"]
+  },
+  "meta": {
+    "err": null,
+    "preTokenBalances": [
+      {
+        "owner": "Owner11111111111111111111111111111111111111111",
+        "mint": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
+        "uiTokenAmount": { "amount": "2000000", "decimals": 8, "uiAmountString": "0.02" }
+      }
+    ],
+    "postTokenBalances": [
+      {
+        "owner": "Owner11111111111111111111111111111111111111111",
+        "mint": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
+        "uiTokenAmount": { "amount": "0", "decimals": 8, "uiAmountString": "0" }
+      }
+    ]
+  }
+}
