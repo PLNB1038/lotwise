@@ -1,0 +1,69 @@
+{
+ "jsonrpc": "2.0",
+ "result": {
+  "context": {
+   "slot": 448222791,
+   "apiVersion": "4.3.0-alpha.2"
+  },
+  "value": {
+   "lamports": 772637012,
+   "data": {
+    "program": "spl-token-2022",
+    "parsed": {
+     "info": {
+      "decimals": 9,
+      "extensions": [
+       {
+        "extension": "transferFeeConfig",
+        "state": {
+         "newerTransferFee": {
+          "epoch": 918,
+          "maximumFee": 18446744073709552000,
+          "transferFeeBasisPoints": 20
+         },
+         "olderTransferFee": {
+          "epoch": 918,
+          "maximumFee": 18446744073709552000,
+          "transferFeeBasisPoints": 20
+         },
+         "transferFeeConfigAuthority": "EXvTtxurWBUNNCtLojaN8ZBJFNJPZFSH3szoih9hh7YW",
+         "withdrawWithheldAuthority": "BnWEwDEZFGZkDQDMs7q7UtK8dFR9VUXprhH1xnLqD2j7",
+         "withheldAmount": 7351
+        }
+       },
+       {
+        "extension": "metadataPointer",
+        "state": {
+         "authority": "EXvTtxurWBUNNCtLojaN8ZBJFNJPZFSH3szoih9hh7YW",
+         "metadataAddress": "TSPXcLV76s6V2zDiZQ18kBfcbnjaE2ZzNT3ga2Pd99v"
+        }
+       },
+       {
+        "extension": "tokenMetadata",
+        "state": {
+         "additionalMetadata": [],
+         "mint": "TSPXcLV76s6V2zDiZQ18kBfcbnjaE2ZzNT3ga2Pd99v",
+         "name": "T-SpaceX",
+         "symbol": "tSpaceX",
+         "updateAuthority": "EXvTtxurWBUNNCtLojaN8ZBJFNJPZFSH3szoih9hh7YW",
+         "uri": "https://cdn.tesseralab.co/tessera/t-spacex.json"
+        }
+       }
+      ],
+      "freezeAuthority": "7n2PNcDXVDMK2m8dyV9cVPNY7p4jM4ZMHv7TzfibEt8o",
+      "isInitialized": true,
+      "mintAuthority": "EXvTtxurWBUNNCtLojaN8ZBJFNJPZFSH3szoih9hh7YW",
+      "supply": "1189973352546"
+     },
+     "type": "mint"
+    },
+    "space": 492
+   },
+   "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+   "executable": false,
+   "rentEpoch": 18446744073709552000,
+   "space": 492
+  }
+ },
+ "id": 1
+}

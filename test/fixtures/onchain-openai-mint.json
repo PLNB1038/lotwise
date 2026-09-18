@@ -1,0 +1,121 @@
+{
+ "jsonrpc": "2.0",
+ "result": {
+  "context": {
+   "slot": 448222791,
+   "apiVersion": "4.3.0-alpha.2"
+  },
+  "value": {
+   "lamports": 362899490,
+   "data": {
+    "program": "spl-token-2022",
+    "parsed": {
+     "info": {
+      "decimals": 9,
+      "extensions": [
+       {
+        "extension": "permanentDelegate",
+        "state": {
+         "delegate": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc"
+        }
+       },
+       {
+        "extension": "defaultAccountState",
+        "state": {
+         "accountState": "initialized"
+        }
+       },
+       {
+        "extension": "transferFeeConfig",
+        "state": {
+         "newerTransferFee": {
+          "epoch": 1032,
+          "maximumFee": 18446744073709552000,
+          "transferFeeBasisPoints": 50
+         },
+         "olderTransferFee": {
+          "epoch": 848,
+          "maximumFee": 0,
+          "transferFeeBasisPoints": 0
+         },
+         "transferFeeConfigAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "withdrawWithheldAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "withheldAmount": 22411065493
+        }
+       },
+       {
+        "extension": "confidentialTransferMint",
+        "state": {
+         "auditorElgamalPubkey": null,
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "autoApproveNewAccounts": false
+        }
+       },
+       {
+        "extension": "confidentialTransferFeeConfig",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "harvestToMintEnabled": true,
+         "withdrawWithheldAuthorityElgamalPubkey": "YIHVbuQq0xDvW8g8vW1enaIBxIdrm7v+7EyEiMaHDmM=",
+         "withheldAmount": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        }
+       },
+       {
+        "extension": "transferHook",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "programId": null
+        }
+       },
+       {
+        "extension": "scaledUiAmountConfig",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "multiplier": "1",
+         "newMultiplier": "1.4861347",
+         "newMultiplierEffectiveTimestamp": 1784305800
+        }
+       },
+       {
+        "extension": "metadataPointer",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "metadataAddress": "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF"
+        }
+       },
+       {
+        "extension": "pausableConfig",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "paused": false
+        }
+       },
+       {
+        "extension": "tokenMetadata",
+        "state": {
+         "additionalMetadata": [],
+         "mint": "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF",
+         "name": "OpenAI PreStocks",
+         "symbol": "OPENAI",
+         "updateAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "uri": "https://prestocks.com/metadata/openai.json"
+        }
+       }
+      ],
+      "freezeAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+      "isInitialized": true,
+      "mintAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+      "supply": "1901907811570"
+     },
+     "type": "mint"
+    },
+    "space": 902
+   },
+   "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+   "executable": false,
+   "rentEpoch": 18446744073709552000,
+   "space": 902
+  }
+ },
+ "id": 1
+}

@@ -8,6 +8,8 @@ import { RpcClient } from "../src/ingest/rpc.mjs";
 import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
+import { journalTransition } from "../src/events/normalize-onchain.mjs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 8787);
 const host = process.argv.includes("--host") ? process.argv[process.argv.indexOf("--host") + 1] : "127.0.0.1";
@@ -17,6 +19,42 @@ const maxTxs = Number(process.argv.includes("--max-txs") ? process.argv[process.
 const registry = await loadRegistry("data/tokens.json");
 const events = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rpcForJournal = new RpcClient({ endpoint: rpcUrl });
+
+// On-chain журнал: у PreStocks/Backpack нет API истории эмитента — их корп-события
+// живут прямо в минте (scaledUiAmountConfig). Бэкфилл при первом наблюдении,
+// далее дифф от прошлой эффективной величины. Живые находки 19.09: SPACEX ×5 (10.06),
+// OPENAI ×1.4861347 (17.07). Журнал — runtime-состояние, из цепи восстанавливается.
+const journalPath = "data/onchain-journal.json";
+let journal = {};
+try {
+  journal = JSON.parse(readFileSync(journalPath, "utf8"));
+} catch {
+  // первый запуск — пустой журнал, бэкфилл из цепи
+}
+for (const t of registry.filter((x) => x.issuer !== "backed")) {
+  try {
+    const raw = await rpcForJournal.call("getAccountInfo", [t.mint, { encoding: "jsonParsed", commitment: "confirmed" }]);
+    const parsed = parseScaledUiAmount(raw.value);
+    const { event, entry } = journalTransition(t, parsed, journal[t.mint] ?? null);
+    journal[t.mint] = entry;
+    if (entry.lastEffective !== "1" && event === null) {
+      console.warn(`[serve] ${t.symbol}: множитель ${entry.lastEffective} без истории журнала — from-value честно не восстановить, событие не выдумываем`);
+    }
+    if (event) {
+      events.push(...bindMintAndValidate([event], t.mint));
+      console.log(`[serve] ${t.symbol}: on-chain событие ${event.multiplierFrom} -> ${event.multiplierTo} @ ${event.effectiveDate.slice(0, 10)}`);
+    }
+  } catch (err) {
+    console.warn(`[serve] ${t.symbol}: on-chain журнал недоступен (${err.message}) — пропускаем, fail-closed`);
+  }
+  await sleep(200);
+}
+try {
+  writeFileSync(journalPath, JSON.stringify(journal, null, 1));
+} catch (err) {
+  console.warn(`[serve] журнал не сохранён (${err.message}) — события этой сессии живут в памяти`);
+}
 
 // xStocks: тянем историю по каждому символу (Ethereum-план несёт полные события,
 // Solana-эндпоинт историю не бэкфиллит — verified 18.09)

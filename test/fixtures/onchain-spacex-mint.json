@@ -1,0 +1,121 @@
+{
+ "jsonrpc": "2.0",
+ "result": {
+  "context": {
+   "slot": 448222791,
+   "apiVersion": "4.3.0-alpha.2"
+  },
+  "value": {
+   "lamports": 1397830680,
+   "data": {
+    "program": "spl-token-2022",
+    "parsed": {
+     "info": {
+      "decimals": 9,
+      "extensions": [
+       {
+        "extension": "permanentDelegate",
+        "state": {
+         "delegate": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc"
+        }
+       },
+       {
+        "extension": "defaultAccountState",
+        "state": {
+         "accountState": "initialized"
+        }
+       },
+       {
+        "extension": "transferFeeConfig",
+        "state": {
+         "newerTransferFee": {
+          "epoch": 1032,
+          "maximumFee": 18446744073709552000,
+          "transferFeeBasisPoints": 50
+         },
+         "olderTransferFee": {
+          "epoch": 848,
+          "maximumFee": 0,
+          "transferFeeBasisPoints": 0
+         },
+         "transferFeeConfigAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "withdrawWithheldAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "withheldAmount": 1661474341
+        }
+       },
+       {
+        "extension": "confidentialTransferMint",
+        "state": {
+         "auditorElgamalPubkey": null,
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "autoApproveNewAccounts": false
+        }
+       },
+       {
+        "extension": "confidentialTransferFeeConfig",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "harvestToMintEnabled": true,
+         "withdrawWithheldAuthorityElgamalPubkey": "YIHVbuQq0xDvW8g8vW1enaIBxIdrm7v+7EyEiMaHDmM=",
+         "withheldAmount": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        }
+       },
+       {
+        "extension": "transferHook",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "programId": null
+        }
+       },
+       {
+        "extension": "scaledUiAmountConfig",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "multiplier": "1",
+         "newMultiplier": "5",
+         "newMultiplierEffectiveTimestamp": 1781065800
+        }
+       },
+       {
+        "extension": "metadataPointer",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "metadataAddress": "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh"
+        }
+       },
+       {
+        "extension": "pausableConfig",
+        "state": {
+         "authority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "paused": false
+        }
+       },
+       {
+        "extension": "tokenMetadata",
+        "state": {
+         "additionalMetadata": [],
+         "mint": "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh",
+         "name": "SpaceX PreStocks",
+         "symbol": "SPACEX",
+         "updateAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+         "uri": "https://prestocks.com/metadata/spacex.json"
+        }
+       }
+      ],
+      "freezeAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+      "isInitialized": true,
+      "mintAuthority": "WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc",
+      "supply": "8742515277534"
+     },
+     "type": "mint"
+    },
+    "space": 902
+   },
+   "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+   "executable": false,
+   "rentEpoch": 18446744073709552000,
+   "space": 902
+  }
+ },
+ "id": 1
+}

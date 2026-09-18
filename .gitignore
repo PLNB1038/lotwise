@@ -2,3 +2,4 @@ node_modules/
 data/cache/
 .env
 *.log
+data/onchain-journal.json
