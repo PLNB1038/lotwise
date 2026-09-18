@@ -80,6 +80,20 @@ export function renderPage() {
     </table>
   </section>
 
+  <section id="wallet">
+    <h2>Wallet report</h2>
+    <div class="card">
+      <div class="row">
+        <label>Address <input id="addr-in" placeholder="Solana wallet" size="46" spellcheck="false"></label>
+        <button id="scan-btn">Scan</button>
+      </div>
+      <p class="note">Scans the wallet history on-chain and rebuilds tax lots for tracked tokens.
+        Raw balances are shown as stored on-chain; the adjusted view applies the multiplier timeline.
+        A first scan of an active wallet can take a minute on public RPC.</p>
+      <div id="wallet-out"></div>
+    </div>
+  </section>
+
   <section id="detail">
     <h2 id="detail-title"></h2>
 
@@ -108,7 +122,7 @@ export function renderPage() {
 
   <footer>
     This page is a sample consumer of the Lotwise REST API:
-    <code>/health</code> <code>/tokens</code> <code>/events</code> <code>/multiplier</code> <code>/summary</code> <code>/onchain</code>.
+    <code>/health</code> <code>/tokens</code> <code>/events</code> <code>/multiplier</code> <code>/summary</code> <code>/onchain</code> <code>/lots</code>.
     All numbers come from the endpoints above — nothing is hardcoded in this page.
   </footer>
 </main>
@@ -264,6 +278,67 @@ function calc() {
 document.getElementById('calc').onclick = calc;
 el('date-in').onchange = calc;
 el('raw-in').onchange = calc;
+
+function fmtUi(rawStr, decimals) {
+  var s = String(rawStr);
+  var sign = '';
+  if (s[0] === '-') { sign = '-'; s = s.slice(1); }
+  if (decimals === 0) return sign + s;
+  while (s.length <= decimals) s = '0' + s;
+  return sign + s.slice(0, -decimals) + '.' + s.slice(-decimals);
+}
+
+function scanWalletUi() {
+  var addr = (el('addr-in').value || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) {
+    el('wallet-out').innerHTML = '<p class="err">Enter a valid Solana address (base58).</p>';
+    return;
+  }
+  el('wallet-out').innerHTML = '<p class="note">Scanning wallet on-chain — first scan of an active wallet can take up to a minute.</p>';
+  fetch('/lots?address=' + encodeURIComponent(addr))
+    .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+    .then(function (res) {
+      if (!res.ok) {
+        el('wallet-out').innerHTML = '<p class="err">' + esc(res.body.error || 'scan failed') + '</p>';
+        return;
+      }
+      renderWallet(res.body);
+    })
+    .catch(function (e) {
+      el('wallet-out').innerHTML = '<p class="err">' + esc(e.message) + '</p>';
+    });
+}
+
+function renderWallet(rep) {
+  var c = rep.counts;
+  var head = '<dl class="kv">' +
+    '<dt>signatures scanned</dt><dd>' + c.signatures + ' (' + c.fetched + ' fetched, ' + c.skipped + ' skipped)</dd>' +
+    '<dt>scan window</dt><dd>' + (rep.truncated ? 'truncated at cap — older history not scanned' : 'full history') + '</dd>' +
+    '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' +
+      (rep.complete ? 'complete' : 'has gaps — lots may miss an opening balance') + '</dd></dl>';
+  var body = rep.tokens.length === 0
+    ? '<p class="note">No tracked tokens found in this wallet.</p>'
+    : rep.tokens.map(function (t) {
+        var gaps = t.gaps.length
+          ? '<dt class="err">scan gap</dt><dd class="err">' + t.gaps.map(function (g) {
+              return esc(g.missingQtyRaw) + ' base units predate the scan window' + (g.date ? ' (by ' + esc(g.date) + ')' : '');
+            }).join('; ') + '</dd>'
+          : '';
+        return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
+          '<dt>raw balance (on-chain)</dt><dd>' + esc(fmtUi(t.rawBalance, t.decimals)) + ' ' + esc(t.symbol) +
+            ' <span class="note">(' + esc(t.rawBalance) + ' base units)</span></dd>' +
+          '<dt>multiplier now</dt><dd>' + esc(t.multiplier.now) + ' <span class="note">(' + t.multiplier.events + ' events)</span></dd>' +
+          '<dt>adjusted (exact)</dt><dd>' + esc(fmtUi(t.adjusted.whole, t.decimals)) +
+            (t.adjusted.exact ? '' : ' + ' + esc(t.adjusted.remainder) + '/' + esc(t.adjusted.den) + ' base units') + '</dd>' +
+          '<dt>open lots (FIFO)</dt><dd>' + t.lots.length +
+            (t.realizedCount ? ', realized ' + t.realizedCount + ' disposals' : '') + '</dd>' +
+          gaps + '</dl></div>';
+      }).join('');
+  el('wallet-out').innerHTML = head + body;
+}
+
+document.getElementById('scan-btn').onclick = scanWalletUi;
+el('addr-in').onkeydown = function (e) { if (e.key === 'Enter') scanWalletUi(); };
 
 fetch('/health').then(function (r) { return r.json(); }).then(function (h) {
   return fetch('/summary').then(function (r) { return r.json(); }).then(function (list) {

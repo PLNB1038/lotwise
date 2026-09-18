@@ -3,9 +3,11 @@
 import { createServer } from "node:http";
 import { MultiplierTimeline } from "../lots/timeline.mjs";
 import { reconcileMultiplier } from "../issuer/scaled-ui.mjs";
+import { isValidAddress } from "../wallet/scan.mjs";
+import { buildWalletReport } from "../wallet/report.mjs";
 import { renderPage } from "../ui/page.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null }) {
   // индексы собираются один раз; при изменении данных сервер пересоздаётся (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -95,6 +97,20 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         verdict: rec.verdict,
       });
     }
+    if (url.pathname === "/lots") {
+      const address = q.get("address");
+      if (!address) return json(res, 400, { error: "address required" });
+      if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
+      if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
+      let scan;
+      try {
+        scan = await walletScanner(address);
+      } catch (err) {
+        return json(res, 503, { error: err.message, kind: err.kind ?? null });
+      }
+      // отчёт собираем в сервере: тут живут таймлайны множителей
+      return json(res, 200, buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() }));
+    }
     if (url.pathname === "/health") return json(res, 200, { ok: true, tokens: registry.length, events: events.length });
     if (url.pathname === "/tokens") {
       const issuer = q.get("issuer");
@@ -131,7 +147,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 400, { error: err.message });
       }
     }
-    return json(res, 404, { error: "not found", endpoints: ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain"] });
+    return json(res, 404, { error: "not found", endpoints: ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots"] });
     } catch (err) {
       // страховка: любое необработанное исключение — 500, процесс живёт
       return json(res, 500, { error: "internal error" });
