@@ -78,6 +78,12 @@ export function validateEvent(e) {
       requireFields(e, ["newMint"]);
       if (!MINT_RE.test(e.newMint)) throw new EventValidationError("newMint must be a base58 Solana pubkey", "newMint");
       if (e.newMint === e.mint) throw new EventValidationError("merger must change the mint", "newMint");
+      if (e.exchangeNumerator !== undefined || e.exchangeDenominator !== undefined) {
+        if (!Number.isInteger(e.exchangeNumerator) || e.exchangeNumerator <= 0 ||
+            !Number.isInteger(e.exchangeDenominator) || e.exchangeDenominator <= 0) {
+          throw new EventValidationError("exchange ratio must be two positive integers (old per new)", "exchangeNumerator");
+        }
+      }
       break;
     case "TICKER_CHANGE":
       requireFields(e, ["oldSymbol", "newSymbol"]);

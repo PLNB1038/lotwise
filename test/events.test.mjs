@@ -31,6 +31,12 @@ test("MERGER требует новый минт, отличный от стар�
   assert.equal(isValidEvent(valid({ type: "MERGER", newMint: MINT })), false);
 });
 
+test("MERGER-коэффициент обмена опционален, но если есть — целые положительные", () => {
+  assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu", exchangeNumerator: 2, exchangeDenominator: 1 })), true);
+  assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu", exchangeNumerator: 1.5, exchangeDenominator: 1 })), false);
+  assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu", exchangeDenominator: 1 })), false);
+});
+
 test("TICKER_CHANGE должен менять символ", () => {
   assert.equal(isValidEvent(valid({ type: "TICKER_CHANGE", oldSymbol: "TSLAx", newSymbol: "TSLA2x" })), true);
   assert.equal(isValidEvent(valid({ type: "TICKER_CHANGE", oldSymbol: "TSLAx", newSymbol: "TSLAx" })), false);
