@@ -357,6 +357,9 @@ function renderWallet(rep) {
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
           '<dt>raw balance (on-chain)</dt><dd>' + esc(fmtUi(t.rawBalance, t.decimals)) + ' ' + esc(t.symbol) +
             ' <span class="note">(' + esc(t.rawBalance) + ' base units)</span></dd>' +
+          '<dt>scan vs live chain</dt><dd>' + (t.reconciles
+            ? '<span class="verdict ok">reconciles</span>'
+            : '<span class="err">mismatch — history outside scan window (on-chain now: ' + esc(fmtUi(t.onchainNow, t.decimals)) + ')</span>') + '</dd>' +
           '<dt>multiplier now</dt><dd>' + esc(t.multiplier.now) + ' <span class="note">(' + t.multiplier.events + ' events)</span></dd>' +
           '<dt>adjusted (exact)</dt><dd>' + esc(fmtUi(t.adjusted.whole, t.decimals)) +
             (t.adjusted.exact ? '' : ' + ' + esc(t.adjusted.remainder) + '/' + esc(t.adjusted.den) + ' base units') + '</dd>' +

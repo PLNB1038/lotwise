@@ -62,19 +62,28 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
   }
 
   const tokens = [];
-  for (const [mint, s] of st) {
+  // сверка с цепью: аккаунты из скана (Map или объект); нет аккаунта = баланс должен быть 0
+  const accts = scan.accounts instanceof Map ? Object.fromEntries(scan.accounts) : (scan.accounts ?? {});
+  const seenMints = new Set(st.keys());
+
+  const pushToken = (mint, s) => {
     const t = byMint.get(mint);
     const tl = timelines.get(mint) ?? null;
     const mult = tl ? tl.multiplierAt(now) : "1";
     const scaled = tl
       ? tl.scaledQty(s.rawBalance, now)
       : { whole: s.rawBalance, remainder: 0n, den: 1n, exact: true };
+    const acct = accts[mint];
+    const onchainNow = acct ? String(acct.currentRaw) : "0";
+    const reconciles = acct ? s.rawBalance === BigInt(acct.currentRaw) : s.rawBalance === 0n;
     tokens.push({
       symbol: t.symbol,
       name: t.name,
       mint,
       decimals: t.decimals,
       rawBalance: String(s.rawBalance),
+      onchainNow,
+      reconciles, // дельты скана сходятся с живым балансом цепи — главный знак честности
       multiplier: { now: mult, events: tl ? tl.steps.length - 1 : 0 },
       // BigInt в JSON не сериализуется — наружу строками
       adjusted: {
@@ -88,10 +97,18 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       realizedQtyRaw: String(s.realized.reduce((acc, r) => acc + r.qtyRaw, 0n)),
       gaps: s.gaps.map((g) => ({ ...g, missingQtyRaw: String(g.missingQtyRaw) })),
     });
+  };
+
+  for (const [mint, s] of st) pushToken(mint, s);
+  // токен есть на цепи, но дельт нет: баланс старее окна скана — показываем, не прячем
+  for (const mint of Object.keys(accts)) {
+    if (seenMints.has(mint)) continue;
+    pushToken(mint, { queue: [], realized: [], gaps: [], rawBalance: 0n, lotSeq: 0 });
   }
   tokens.sort((a, b) => (b.lots.length + b.realizedCount) - (a.lots.length + a.realizedCount) || a.symbol.localeCompare(b.symbol));
 
   const hasGaps = tokens.some((t) => t.gaps.length > 0);
+  const allReconcile = tokens.every((t) => t.reconciles);
   return {
     owner,
     method: "fifo",
@@ -103,7 +120,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       skipped: scan.skipped.length,
     },
     truncated: Boolean(scan.truncated), // окно скана обрезано потолком — лоты могли не покрыться
-    complete: !scan.truncated && !hasGaps,
+    complete: !scan.truncated && !hasGaps && allReconcile,
     tokens,
   };
 }

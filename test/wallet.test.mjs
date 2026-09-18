@@ -18,17 +18,15 @@ const OTHER = "Wa11etSe11er" + "b".repeat(32);
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
 const AAPLx = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
 
-// фейк-клиент: страницы сигнатур + готовые транзакции по сигнатуре
-function fakeClient({ pages = [], txs = {} } = {}) {
-  let page = 0;
+// фейк-клиент: сигнатуры по каждому источнику + аккаунты + готовые транзакции
+function fakeClient({ sigPages = {}, txs = {}, accountsByProgram = {} } = {}) {
   const calls = [];
   return {
     calls,
     async call(method, params) {
       calls.push({ method, key: params[0] });
-      if (method === "getSignaturesForAddress") {
-        return pages[page++] ?? [];
-      }
+      if (method === "getSignaturesForAddress") return sigPages[params[0]] ?? [];
+      if (method === "getTokenAccountsByOwner") return accountsByProgram[params[1]?.programId] ?? { value: [] };
       if (method === "getTransaction") return txs[params[0]] ?? null;
       throw new Error(`unexpected method ${method}`);
     },
@@ -85,11 +83,11 @@ test("fetchTokenDeltas (строкой) сохранил контракт одн
 test("scanWallet: err-тx не fetch'ится, недоступные — в skipped, порядок хронологический", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const client = fakeClient({
-    pages: [[
+    sigPages: { [OWNER]: [
       { signature: "new-ok", slot: 3, blockTime: 300, err: null },
       { signature: "mid-fail", slot: 2, blockTime: 200, err: "InstructionError" },
       { signature: "old-ok", slot: 1, blockTime: 100, err: null },
-    ]],
+    ] },
     txs: {
       "new-ok": txOf("new-ok", [{ owner: OWNER, mint: SPYx, _pre: 10, uiTokenAmount: { amount: "20" } }], { slot: 3, blockTime: 300 }),
       "old-ok": txOf("old-ok", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "10" } }], { slot: 1, blockTime: 100 }),
@@ -109,11 +107,11 @@ test("scanWallet: err-тx не fetch'ится, недоступные — в ski
 
 test("scanWallet: потолок maxTxs режет окно честно — truncated: true", async () => {
   const registry = await loadRegistry("data/tokens.json");
-  const client = fakeClient({ pages: [[
+  const client = fakeClient({ sigPages: { [OWNER]: [
     { signature: "s1", slot: 1, blockTime: 1, err: null },
     { signature: "s2", slot: 2, blockTime: 2, err: null },
     { signature: "s3", slot: 3, blockTime: 3, err: null },
-  ]] });
+  ] } });
   const scan = await scanWallet(client, OWNER, registry, { maxTxs: 2 });
   assert.equal(scan.signatures, 2);
   assert.equal(scan.truncated, true);
@@ -127,10 +125,86 @@ test("scanWallet: мусорный адрес — ошибка, не скан", 
   );
 });
 
+// --- сканер v2: ATA-источники и сверка ---
+
+test("scanWallet v2: входящий перевод через token-аккаунт (владелец НЕ подписант) — пойман", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const ATA = "AtaSPYx" + "c".repeat(34); // base58, 42 символа
+  const client = fakeClient({
+    sigPages: {
+      [OWNER]: [{ signature: "self-buy", slot: 2, blockTime: 200, err: null }],
+      [ATA]: [
+        { signature: "incoming-recv", slot: 1, blockTime: 100, err: null }, // fee платил отправитель
+        { signature: "self-buy", slot: 2, blockTime: 200, err: null }, // дубль между источниками
+      ],
+    },
+    accountsByProgram: {
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [
+        { pubkey: ATA, account: { data: { parsed: { info: {
+          mint: SPYx, owner: OWNER, tokenAmount: { amount: "160" },
+        } } } } },
+      ] },
+    },
+    txs: {
+      "self-buy": txOf("self-buy", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "100" } }], { slot: 2, blockTime: 200 }),
+      "incoming-recv": txOf("incoming-recv", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "60" } }], { slot: 1, blockTime: 100 }),
+    },
+  });
+  const scan = await scanWallet(client, OWNER, registry);
+  assert.equal(scan.signatures, 2); // дедуб: self-buy под двумя источниками — один
+  assert.deepEqual(scan.txs.map((t) => t.signature), ["incoming-recv", "self-buy"]);
+  assert.equal(scan.accounts.get(SPYx).address, ATA);
+  assert.equal(scan.accounts.get(SPYx).currentRaw, 160n);
+});
+
+test("fetchOwnerTokenAccounts: оба токен-программа, только реестровые минты", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const mk = (pubkey, mint, amt) => ({ pubkey, account: { data: { parsed: { info: {
+    mint, owner: OWNER, tokenAmount: { amount: amt },
+  } } } } });
+  const client = fakeClient({
+    accountsByProgram: {
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": { value: [
+        mk("AtaA", SPYx, "7"), // xStocks живёт в Token-2022, тут для теста — обе программы
+        mk("AtaJ", "Junk111111111111111111111111111111111111", "9"), // не наш минт
+      ] },
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [ mk("AtaB", AAPLx, "5") ] },
+    },
+  });
+  const accts = await (await import("../src/wallet/scan.mjs")).fetchOwnerTokenAccounts(client, OWNER, registry);
+  assert.equal(accts.size, 2);
+  assert.equal(accts.get(SPYx).currentRaw, 7n);
+  assert.equal(accts.get(AAPLx).address, "AtaB");
+});
+
+test("buildWalletReport: токен есть на цепи, дельт нет — виден с reconciles: false, не спрятан", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const rep = buildWalletReport(scanOf([], { accounts: { [SPYx]: { address: "At5", currentRaw: 500n } } }), { registry });
+  const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
+  assert.ok(spyx, "токен показан, а не потерян");
+  assert.equal(spyx.rawBalance, "0");
+  assert.equal(spyx.onchainNow, "500");
+  assert.equal(spyx.reconciles, false);
+  assert.equal(rep.complete, false);
+});
+
+test("buildWalletReport: дельты не сходятся с цепью — reconciles: false, complete: false", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const txs = [
+    { signature: "a", slot: 1, blockTime: 100, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 60n, deltaRaw: 60n }] },
+  ];
+  const rep = buildWalletReport(scanOf(txs, { accounts: { [SPYx]: { address: "At6", currentRaw: 70n } } }), { registry });
+  const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
+  assert.equal(spyx.rawBalance, "60");
+  assert.equal(spyx.onchainNow, "70");
+  assert.equal(spyx.reconciles, false); // 10 базовых юнитов истории вне окна скана
+  assert.equal(rep.complete, false);
+});
+
 // --- чистый отчёт ---
 
 const scanOf = (txs, extra = {}) => ({
-  owner: OWNER, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, ...extra,
+  owner: OWNER, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, accounts: {}, ...extra,
 });
 
 test("buildWalletReport: FIFO — покупка, частичное покрытие, второй лот, остаток", async () => {
@@ -140,12 +214,14 @@ test("buildWalletReport: FIFO — покупка, частичное покры�
     { signature: "b", slot: 2, blockTime: 200, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 100n, postRaw: 130n, deltaRaw: 30n }] },
     { signature: "c", slot: 3, blockTime: 300, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 130n, postRaw: 60n, deltaRaw: -70n }] },
   ];
-  const rep = buildWalletReport(scanOf(txs), { registry });
+  const rep = buildWalletReport(scanOf(txs, { accounts: { [SPYx]: { address: "At1", currentRaw: 60n } } }), { registry });
   assert.equal(rep.owner, OWNER);
   assert.equal(rep.method, "fifo");
   assert.equal(rep.complete, true);
   const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
   assert.equal(spyx.rawBalance, "60");
+  assert.equal(spyx.onchainNow, "60");
+  assert.equal(spyx.reconciles, true); // дельты сходятся с живым балансом
   assert.equal(spyx.lots.length, 2); // FIFO съел 70 из лота-100: остатки 30 + 30
   assert.equal(spyx.lots[0].qtyRaw, "30");
   assert.equal(spyx.lots[0].acquiredDate, new Date(100 * 1000).toISOString());
@@ -167,6 +243,7 @@ test("buildWalletReport: расход до покупки (окно скана �
   assert.equal(spyx.gaps.length, 1);
   assert.equal(spyx.gaps[0].missingQtyRaw, "300");
   assert.equal(rep.complete, false);
+  assert.equal(spyx.reconciles, false); // баланс окна -240 не сходится с пустым кошельком
 });
 
 test("buildWalletReport: чужие дельты и нерелевантные минты игнорируются; adjusted с пылью через timeline", async () => {
@@ -180,7 +257,7 @@ test("buildWalletReport: чужие дельты и нерелевантные �
       { owner: OTHER, mint: SPYx, preRaw: 0n, postRaw: 999n, deltaRaw: 999n }, // чужой
     ] },
   ];
-  const rep = buildWalletReport(scanOf(txs), { registry, timelines });
+  const rep = buildWalletReport(scanOf(txs, { accounts: { [SPYx]: { address: "At2", currentRaw: 100000000n } } }), { registry, timelines });
   const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
   assert.equal(spyx.rawBalance, "100000000"); // только владелец
   assert.equal(spyx.multiplier.now, "1.005714560286254");
@@ -195,7 +272,7 @@ test("buildWalletReport: токен без событий — множитель
   const txs = [
     { signature: "a", slot: 1, blockTime: 1000, deltas: [{ owner: OWNER, mint: AAPLx, preRaw: 0n, postRaw: 42n, deltaRaw: 42n }] },
   ];
-  const rep = buildWalletReport(scanOf(txs), { registry });
+  const rep = buildWalletReport(scanOf(txs, { accounts: { [AAPLx]: { address: "At3", currentRaw: 42n } } }), { registry });
   const a = rep.tokens.find((t) => t.symbol === "AAPLx");
   assert.equal(a.multiplier.now, "1");
   assert.equal(a.multiplier.events, 0);
@@ -230,6 +307,7 @@ test("/lots: без адреса и мусорный адрес — 400, без 
 test("/lots: отчёт из сканера — FIFO и counts на месте", async () => {
   const fakeScan = {
     owner: OWNER, signatures: 2, fetched: 2, skipped: [], truncated: false,
+    accounts: new Map([[SPYx, { address: "At4", currentRaw: 4n }]]),
     txs: [
       { signature: "a", slot: 1, blockTime: 100, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 10n, deltaRaw: 10n }] },
       { signature: "b", slot: 2, blockTime: 200, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 10n, postRaw: 4n, deltaRaw: -6n }] },

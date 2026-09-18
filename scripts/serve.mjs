@@ -10,6 +10,7 @@ import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 
 const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 8787);
+const host = process.argv.includes("--host") ? process.argv[process.argv.indexOf("--host") + 1] : "127.0.0.1";
 const rpcUrl = process.argv.includes("--rpc") ? process.argv[process.argv.indexOf("--rpc") + 1] : "https://api.mainnet-beta.solana.com";
 const maxTxs = Number(process.argv.includes("--max-txs") ? process.argv[process.argv.indexOf("--max-txs") + 1] : 300);
 
@@ -98,7 +99,7 @@ const priceProvider = {
 
 let server;
 try {
-  server = await createApiServer({ registry, events, port, onchainReader, walletScanner, priceProvider });
+  server = await createApiServer({ registry, events, port, host, onchainReader, walletScanner, priceProvider });
 } catch (err) {
   console.error(`[serve] не поднялся на порту ${port}: ${err.code ?? err.message}`);
   process.exit(1);
