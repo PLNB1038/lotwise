@@ -174,6 +174,7 @@ function loadEvents(t) {
   fetch('/events?symbol=' + encodeURIComponent(t.symbol))
     .then(function (r) { return r.json(); })
     .then(function (list) {
+      if (state.selected !== t) return; // устаревший ответ: пользователь уже переключил токен
       if (!list.length) {
         el('events').innerHTML = '<li><span class="what">No normalized events for this token yet.</span></li>';
         return;
@@ -197,6 +198,7 @@ function loadPlanes(t) {
   fetch('/onchain?symbol=' + encodeURIComponent(t.symbol))
     .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
     .then(function (res) {
+      if (state.selected !== t) return; // устаревший ответ
       if (!res.ok) {
         setVerdict('unavailable', 'unavailable');
         el('planes').innerHTML = '<dt>on-chain source</dt><dd class="err">' +
@@ -244,6 +246,7 @@ function calc() {
   fetch(qs)
     .then(function (r) { return r.json(); })
     .then(function (m) {
+      if (state.selected !== t) return; // устаревший ответ
       var s = m.sampleScaledQty;
       var dust = s.exact ? 'no dust — division is exact' : 'dust shown exactly: remainder ' + s.remainder + '/' + s.den + ' base units';
       el('calc-out').innerHTML =
@@ -252,6 +255,9 @@ function calc() {
         '<dt>adjusted (base units)</dt><dd>' + s.whole + (s.exact ? '' : ' + ' + s.remainder + '/' + s.den) + '</dd>' +
         '<dt>remainder policy</dt><dd>' + dust + '</dd>' +
         (truncated ? '<dt>input precision</dt><dd class="err">amount exceeds ' + t.decimals + ' token decimals — truncated to base units</dd>' : '');
+    })
+    .catch(function (e) {
+      el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
 }
 
@@ -260,12 +266,14 @@ el('date-in').onchange = calc;
 el('raw-in').onchange = calc;
 
 fetch('/health').then(function (r) { return r.json(); }).then(function (h) {
-  fetch('/summary').then(function (r) { return r.json(); }).then(function (list) {
+  return fetch('/summary').then(function (r) { return r.json(); }).then(function (list) {
     state.tokens = list;
     renderStats(h, list);
     renderTokens(list);
-    select('SPYx');
+    if (list.length) select(list[0].symbol); // самый событийный токен, без хардкода
   });
+}).catch(function (e) {
+  el('stats').innerHTML = '<div class="stat"><b class="err">API unavailable</b><i>' + esc(e.message) + ' — retry in a moment</i></div>';
 });
 </script>
 </body>

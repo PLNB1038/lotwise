@@ -26,14 +26,27 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     res.end(payload);
   };
 
-  const resolveMint = (q) => q.get("mint") ?? bySymbol.get(q.get("symbol"))?.mint ?? null;
+  // Резолв только внутри реестра: неизвестный mint/symbol — 400, а не «пустые данные».
+  // До сих пор ?mint=<мусор> проходил насквозь: /events молча отдавал [], /multiplier — "1",
+  // /onchain гонял реальные RPC-запросы с произвольными ключами мимо кэша.
+  const resolveMint = (q) =>
+    byMint.get(q.get("mint") ?? "")?.mint ?? bySymbol.get(q.get("symbol") ?? "")?.mint ?? null;
   let pageHtml = null; // рендерим один раз, страница статична (данные тянет с API)
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
-    const q = url.searchParams;
+    try {
+      let url;
+      try {
+        url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+      } catch {
+        // краш-вектор, пойманный живьём: request-target вроде "http://:80/" бросает
+        // ERR_INVALID_URL и без ловли убивал процесс одним запросом
+        return json(res, 400, { error: "malformed request target" });
+      }
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+      const q = url.searchParams;
 
-    if (url.pathname === "/" && req.method === "GET") {
+    if (url.pathname === "/") {
       pageHtml ??= renderPage();
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Length": Buffer.byteLength(pageHtml) });
       return res.end(pageHtml);
@@ -55,7 +68,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     }
     if (url.pathname === "/onchain") {
       const mint = resolveMint(q);
-      if (!mint) return json(res, 400, { error: "mint or symbol required" });
+      if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       if (!onchainReader) return json(res, 503, { error: "on-chain reader not configured" });
       let parsed;
       try {
@@ -89,14 +102,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     }
     if (url.pathname === "/events") {
       const mint = resolveMint(q);
-      if (!mint) return json(res, 400, { error: "mint or symbol required" });
+      if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       const list = eventsByMint.get(mint) ?? [];
       const type = q.get("type");
       return json(res, 200, type ? list.filter((e) => e.type === type) : list);
     }
     if (url.pathname === "/multiplier") {
       const mint = resolveMint(q);
-      if (!mint) return json(res, 400, { error: "mint or symbol required" });
+      if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       const date = q.get("date") ?? new Date().toISOString();
       const tl = timelines.get(mint);
       if (!tl) return json(res, 200, { mint, date, multiplier: "1", events: 0 }); // событий не было
@@ -119,9 +132,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       }
     }
     return json(res, 404, { error: "not found", endpoints: ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain"] });
+    } catch (err) {
+      // страховка: любое необработанное исключение — 500, процесс живёт
+      return json(res, 500, { error: "internal error" });
+    }
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject); // занятый порт и т.п. — reject вместо сырого краша
     server.listen(port, host, () => resolve(server));
   });
 }

@@ -55,7 +55,13 @@ const onchainReader = async (mint) => {
   return inflight.get(mint);
 };
 
-const server = await createApiServer({ registry, events, port, onchainReader });
+let server;
+try {
+  server = await createApiServer({ registry, events, port, onchainReader });
+} catch (err) {
+  console.error(`[serve] не поднялся на порту ${port}: ${err.code ?? err.message}`);
+  process.exit(1);
+}
 console.log(`\n[serve] Lotwise API: http://127.0.0.1:${server.address().port}`);
 console.log(`[serve] витрина: http://127.0.0.1:${server.address().port}/`);
 console.log(`[serve] токенов: ${registry.length}, событий: ${events.length}, on-chain RPC: ${rpcUrl}`);

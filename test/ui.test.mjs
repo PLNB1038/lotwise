@@ -5,6 +5,8 @@ import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/no
 import { loadRegistry } from "../src/registry/registry.mjs";
 import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { readFileSync } from "node:fs";
+import net from "node:net";
+import vm from "node:vm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -135,4 +137,72 @@ test("/onchain без mint/symbol — понятная 400", async () => {
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /mint or symbol required/);
   });
+});
+
+// --- регрессии раунда ревью 19.09 ---
+
+function rawRequest(port, reqline) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(port, "127.0.0.1");
+    let buf = "";
+    s.on("connect", () => s.write(reqline));
+    s.on("data", (d) => (buf += d.toString("latin1")));
+    s.on("error", reject);
+    s.on("close", () => resolve(buf));
+    setTimeout(() => s.destroy(), 2000);
+  });
+}
+
+test("краш-вектор request-target (http://:80/) — 400, сервер жив (регрессия живого краша)", async () => {
+  await withServer(async (base) => {
+    const { port } = new URL(base);
+    const res = await rawRequest(
+      Number(port),
+      "GET http://:80/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    assert.match(res, /400 Bad Request/); // раньше: ERR_INVALID_URL убивал процесс одним запросом
+    const after = await fetch(`${base}/health`);
+    assert.equal(after.status, 200); // сервер пережил крафтовый запрос
+  });
+});
+
+test("не-GET методы — 405, POST больше не выполняет GET-логику", async () => {
+  await withServer({ onchainReader: async () => parseScaledUiAmount(onchainFixture.result.value) }, async (base) => {
+    for (const path of ["/", "/onchain?symbol=SPYx", "/summary"]) {
+      const res = await fetch(`${base}${path}`, { method: "POST" });
+      assert.equal(res.status, 405, path);
+    }
+  });
+});
+
+test("mint/symbol вне реестра — 400 на всех трёх маршрутах, в цепь не идём", async () => {
+  let readerCalls = 0;
+  await withServer({ onchainReader: async () => { readerCalls++; return parseScaledUiAmount(onchainFixture.result.value); } }, async (base) => {
+    const unknown = "?mint=NotInRegistry1111111111111111111111111111";
+    for (const route of ["/events", "/multiplier", "/onchain"]) {
+      const res = await fetch(`${base}${route}${unknown}`);
+      assert.equal(res.status, 400, route); // раньше /events молча [] и "1", /onchain гонял RPC с мусором
+    }
+    const sym = await fetch(`${base}/events?symbol=NOSUCHx`);
+    assert.equal(sym.status, 400);
+    assert.equal(readerCalls, 0); // ридер не дёргался ни разу
+  });
+});
+
+test("клиентский скрипт страницы компилируется (escape-регрессии шаблона)", async () => {
+  await withServer(async (base) => {
+    const html = await (await fetch(`${base}/`)).text();
+    const m = html.match(/<script>([\s\S]*?)<\/script>/);
+    assert.ok(m, "script block на месте");
+    new vm.Script(m[1]); // синтаксис как есть в браузере, упадёт если \\-эскейпы разъехались
+  });
+});
+
+test("занятый порт — createApiServer reject'ит, а не роняет процесс", async () => {
+  const blocker = net.createServer();
+  await new Promise((r) => blocker.listen(0, "127.0.0.1", r));
+  const busyPort = blocker.address().port;
+  const registry = await loadRegistry("data/tokens.json");
+  await assert.rejects(createApiServer({ registry, events, port: busyPort }));
+  blocker.close();
 });
