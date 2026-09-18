@@ -1,0 +1,13 @@
+{
+  "name": "lotwise",
+  "version": "0.1.0",
+  "description": "Corporate actions engine for tokenized equities on Solana",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
