@@ -104,6 +104,11 @@ export function applyEvents(lots, events) {
         }
         break;
       }
+      case "MULTIPLIER_CHANGE": {
+        // Сознательный no-op на raw-лотах: множитель живёт в слое отображения
+        // (MultiplierTimeline), raw-балансы xStocks при событиях не меняются.
+        break;
+      }
       default:
         throw new LotError(`unhandled event type ${e.type}`, e);
     }

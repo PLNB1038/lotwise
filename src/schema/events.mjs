@@ -8,7 +8,10 @@ export const EVENT_TYPES = [
   "MERGER",
   "TICKER_CHANGE",
   "REDEEM",
+  "MULTIPLIER_CHANGE",
 ];
+
+const DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 // Статус доверия событию: цепочка источников подтверждает друг друга или нет.
 export const EVENT_STATUSES = ["confirmed", "unverified"];
@@ -95,6 +98,22 @@ export function validateEvent(e) {
     case "REDEEM":
       // redemption закрывает токен: обмен на базовый актив/стейбл, доп-полей не требует,
       // но ссылка на условия обязана быть в sources (проверено выше)
+      break;
+    case "MULTIPLIER_CHANGE":
+      // xStocks-модель: raw-баланс не меняется, scaled = raw × multiplier.
+      // Множители — ТОЧНЫЕ десятичные строки («1.005714560286254»), float запрещён.
+      requireFields(e, ["multiplierFrom", "multiplierTo"]);
+      for (const f of ["multiplierFrom", "multiplierTo"]) {
+        if (typeof e[f] !== "string" || !DECIMAL_RE.test(e[f])) {
+          throw new EventValidationError(`${f} must be a decimal string like "1.0057" (no float)`, f);
+        }
+      }
+      if (e.multiplierFrom === e.multiplierTo) {
+        throw new EventValidationError("multiplier change must alter the multiplier", "multiplierTo");
+      }
+      if (e.reason !== undefined && typeof e.reason !== "string") {
+        throw new EventValidationError("reason must be a string (e.g. Dividend, Stock Split, Reverse Split)", "reason");
+      }
       break;
   }
 

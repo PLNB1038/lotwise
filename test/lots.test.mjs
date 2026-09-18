@@ -122,3 +122,12 @@ test("пустой список событий возвращает лоты к�
   assert.deepEqual(lots, [lot()]);
   assert.equal(applied, 0);
 });
+
+test("MULTIPLIER_CHANGE — no-op для raw-лотов (множитель живёт в слое отображения)", () => {
+  const before = lot();
+  const { lots, applied } = applyEvents([before], [ev({
+    type: "MULTIPLIER_CHANGE", multiplierFrom: "1", multiplierTo: "1.005714560286254", reason: "Dividend",
+  })]);
+  assert.deepEqual(lots[0], before);
+  assert.equal(applied, 1);
+});
