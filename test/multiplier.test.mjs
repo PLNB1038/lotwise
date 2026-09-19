@@ -136,3 +136,28 @@ test("интеграция: живая фикстура → клиент → н�
   assert.equal(events[0].multiplierFrom, "1");
   assert.equal(events[3].multiplierTo, "1.005714560286254");
 });
+
+// ---- раунд-2: даты числом, а не лексикографически ----
+
+test("date-only запрос: событие дня Д считается уже эффективным", () => {
+  const e = ev({ effectiveDate: "2026-06-18T00:00:00.000Z", multiplierFrom: "1", multiplierTo: "1.005" });
+  const tl = new MultiplierTimeline([e]);
+  assert.equal(tl.multiplierAt("2026-06-17"), "1");
+  // до фикса: "2026-06-18T00:00:00.000Z" > "2026-06-18" строково → калькулятор витрины
+  // показывал ДО-событийный множитель ровно в день события
+  assert.equal(tl.multiplierAt("2026-06-18"), "1.005");
+  assert.equal(tl.multiplierAt("2026-06-18T00:00:00Z"), "1.005"); // смешанная точность = тот же момент
+});
+
+test("сортировка смешанной точности дат не рвёт непрерывность цепочки", () => {
+  const a = ev({ effectiveDate: "2026-01-01T00:00:00Z", multiplierFrom: "1", multiplierTo: "1.1" });
+  const b = ev({ effectiveDate: "2026-02-01T00:00:00.000Z", multiplierFrom: "1.1", multiplierTo: "1.2" }); // «длиннее» строкой, позже фактом
+  const tl = new MultiplierTimeline([b, a]); // подаем не по порядку
+  assert.equal(tl.multiplierAt("2026-01-15"), "1.1");
+  assert.equal(tl.multiplierAt("2026-02-01"), "1.2");
+});
+
+test("мусорная дата в multiplierAt — TimelineError, не молчаливая неправда", () => {
+  const tl = new MultiplierTimeline([ev({ multiplierFrom: "1" })]);
+  assert.throws(() => tl.multiplierAt("не-дата"), TimelineError);
+});

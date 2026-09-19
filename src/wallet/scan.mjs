@@ -27,7 +27,10 @@ export function isValidAddress(addr) {
 
 /**
  * Текущие token-аккаунты владельца по минтам реестра.
- * @returns {Promise<Map<string, {address: string, currentRaw: bigint}>>} mint -> аккаунт
+ * @returns {Promise<Map<string, {addresses: string[], currentRaw: bigint}>>}
+ *   mint -> ВСЕ аккаунты (ATA + legacy): баланс = сумма, сканируется каждый адрес.
+ *   Один аккаунт на минт — норма, но legacy-кошельки держат по два: молча выкинуть
+ *   один = потерять его историю (тихая ложь), уронить скан = отказать честному кошельку.
  */
 export async function fetchOwnerTokenAccounts(client, owner, registry) {
   // programId — тоже pubkey: кривая константа даёт далёкий от очевидного -32602
@@ -36,6 +39,15 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
   }
   const mintSet = new Set(registry.map((t) => t.mint));
   const out = new Map();
+  const add = (mint, address, amount) => {
+    let cur = out.get(mint);
+    if (!cur) {
+      cur = { addresses: [], currentRaw: 0n };
+      out.set(mint, cur);
+    }
+    if (address && !cur.addresses.includes(address)) cur.addresses.push(address);
+    cur.currentRaw += amount;
+  };
   for (const programId of TOKEN_PROGRAMS) {
     const res = await client.call("getTokenAccountsByOwner", [
       owner,
@@ -45,12 +57,7 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
     for (const entry of res?.value ?? []) {
       const info = entry?.account?.data?.parsed?.info;
       if (!info || !mintSet.has(info.mint)) continue;
-      const cur = out.get(info.mint); // параллельных программ на одном минте не бывает — но не молчим
-      const amount = BigInt(info.tokenAmount?.amount ?? "0");
-      if (cur && cur.currentRaw !== amount) {
-        throw new WalletScanError(`two accounts for mint ${info.mint} with different balances`, "ambiguous-accounts");
-      }
-      out.set(info.mint, { address: entry.pubkey ?? null, currentRaw: amount });
+      add(info.mint, entry.pubkey ?? null, BigInt(info.tokenAmount?.amount ?? "0"));
     }
   }
   return out;
@@ -73,8 +80,8 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   const mintSet = new Set(registry.map((t) => t.mint));
   const accounts = await fetchOwnerTokenAccounts(client, owner, registry);
 
-  // 1) сигнатуры по каждому источнику: адрес кошелька + токен-аккаунты реестровых минтов
-  const sources = [owner, ...[...accounts.values()].map((a) => a.address).filter(Boolean)];
+  // 1) сигнатуры по каждому источнику: адрес кошелька + ВСЕ токен-аккаунты реестровых минтов
+  const sources = [owner, ...[...accounts.values()].flatMap((a) => a.addresses).filter(Boolean)];
   const sigs = new Map(); // signature -> {slot, blockTime, err} (дедуп по источникам)
   let truncated = false;
   for (const source of sources) {
@@ -106,8 +113,10 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     else toFetch.push({ signature, ...s });
   }
 
-  // 3) обрабатываем хронологически: сборка шла новейшими-первыми
-  const ordered = toFetch.sort((a, b) => (b.blockTime ?? b.slot) - (a.blockTime ?? a.slot)).reverse();
+  // 3) обрабатываем хронологически: сборка шла новейшими-первыми.
+  // Сорт по slot: он есть всегда и монотонен; blockTime бывает null, а смешение
+  // секунд и слотов в одном компараторе — единицы разных порядков.
+  const ordered = toFetch.sort((a, b) => a.slot - b.slot);
   const txs = [];
   let fetched = 0;
   for (const s of ordered) {

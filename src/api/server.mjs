@@ -8,7 +8,7 @@ import { buildWalletReport } from "../wallet/report.mjs";
 import { crossCheckEvents } from "../events/crosscheck.mjs";
 import { renderPage } from "../ui/page.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null }) {
   // индексы собираются один раз; при изменении данных сервер пересоздаётся (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -81,6 +81,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
       const date = q.get("date") ?? new Date().toISOString();
+      if (Number.isNaN(Date.parse(date))) return json(res, 400, { error: "date must be ISO-8601" });
       const api = timelines.get(mint)?.multiplierAt(date) ?? "1";
       const rec = reconcileMultiplier(api, parsed, date);
       return json(res, 200, {
@@ -127,7 +128,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const { verdicts, coverage } = crossCheckEvents(eventsByMint.get(mint) ?? [], candles);
       return json(res, 200, { mint, symbol: byMint.get(mint)?.symbol ?? null, pool, coverage, verdicts });
     }
-    if (url.pathname === "/health") return json(res, 200, { ok: true, tokens: registry.length, events: events.length });
+    if (url.pathname === "/health") {
+      // journal: сколько событий реплеено из кэша и сколько токенов не прочитано из цепи —
+      // «29 событий» без этой строки неотличимо от «RPC лежал на старте»
+      return json(res, 200, { ok: true, tokens: registry.length, events: events.length, journal: journalStats });
+    }
     if (url.pathname === "/tokens") {
       const issuer = q.get("issuer");
       return json(res, 200, issuer ? registry.filter((t) => t.issuer === issuer) : registry);
@@ -143,10 +148,15 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       const date = q.get("date") ?? new Date().toISOString();
+      // даты и количества — валидный ввод или честный 400: multiplierAt бросает
+      // на непарсируемой дате, а BigInt молча принимает "0x10" (=16) и "-5" — тихая ложь
+      const raw = q.get("raw") ?? "100000000";
+      if (!/^\d+$/.test(raw)) return json(res, 400, { error: "raw must be a non-negative integer in base units (digits only)" });
+      if (Number.isNaN(Date.parse(date))) return json(res, 400, { error: "date must be ISO-8601" });
       const tl = timelines.get(mint);
       if (!tl) return json(res, 200, { mint, date, multiplier: "1", events: 0 }); // событий не было
       try {
-        const s = tl.scaledQty(BigInt(q.get("raw") ?? "100000000"), date);
+        const s = tl.scaledQty(BigInt(raw), date);
         return json(res, 200, {
           mint, date,
           multiplier: tl.multiplierAt(date),

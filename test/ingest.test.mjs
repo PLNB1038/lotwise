@@ -153,3 +153,52 @@ test("чужой минт в балансах игнорируется", async (
   const r = await fetchTokenDeltas(c, "sig-x", MINT);
   assert.ok(r.deltas.every((d) => d.mint === MINT));
 });
+
+// ---- раунд-2: несколько аккаунтов одного минта у одного владельца ----
+
+const OWNER2 = "Owner11111111111111111111111111111111111111111";
+
+test("самоперенос между двумя аккаунтами одного минта = дельта 0, не фантомная сделка", async () => {
+  const tx = {
+    slot: 1, blockTime: 1750000000,
+    meta: {
+      err: null,
+      preTokenBalances: [
+        { accountIndex: 3, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "100" } },
+        { accountIndex: 5, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "0" } },
+      ],
+      postTokenBalances: [
+        { accountIndex: 3, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "0" } },
+        { accountIndex: 5, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "100" } },
+      ],
+    },
+  };
+  const c = makeClient([jsonRes(tx)]);
+  const r = await fetchTokenDeltas(c, "sig-consolidate", MINT);
+  // консолидация legacy -> ATA: экономики нет; до фикса ключ owner|mint мерджил
+  // аккаунты и рисовал ±100 фантомом
+  assert.equal(r.deltas.length, 0);
+});
+
+test("два аккаунта с реальными покупками: дельта владельца = сумма аккаунтов", async () => {
+  const tx = {
+    slot: 1, blockTime: 1750000000,
+    meta: {
+      err: null,
+      preTokenBalances: [
+        { accountIndex: 3, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "0" } },
+        { accountIndex: 5, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "10" } },
+      ],
+      postTokenBalances: [
+        { accountIndex: 3, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "100" } },
+        { accountIndex: 5, owner: OWNER2, mint: MINT, uiTokenAmount: { amount: "40" } },
+      ],
+    },
+  };
+  const c = makeClient([jsonRes(tx)]);
+  const r = await fetchTokenDeltas(c, "sig-two-buys", MINT);
+  assert.equal(r.deltas.length, 1);
+  assert.equal(r.deltas[0].deltaRaw, 130n);
+  assert.equal(r.deltas[0].preRaw, 10n);
+  assert.equal(r.deltas[0].postRaw, 140n);
+});

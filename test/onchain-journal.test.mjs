@@ -140,3 +140,79 @@ test("битая дата в pending отклоняется валидацией
   };
   assert.throws(() => backfillMultiplierEvent(t, bad, NOW), OnchainNormalizeError);
 });
+
+// ---- раунд-2 (P0): события журнала переживают рестарт процесса ----
+
+import { planJournalStep } from "../src/events/journal.mjs";
+
+test("P0-рестарт: реплей entry.events вместо потери (множитель не откатывается к 1)", async () => {
+  const t = await tokenOf("SPACEX");
+  const parsed = fixture("onchain-spacex-mint.json");
+  const boot1 = planJournalStep(t, null, parsed, NOW);
+  assert.ok(boot1.event); // 1 -> 5
+  assert.equal(boot1.entry.events.length, 1);
+  // рестарт: тот же план цепи — нового события нет, старое обязано реплеиться
+  const boot2 = planJournalStep(t, boot1.entry, parsed, NOW + 60_000);
+  assert.equal(boot2.event, null);
+  assert.deepEqual(boot2.replay, boot1.entry.events);
+  const tl = new MultiplierTimeline(boot2.replay);
+  assert.equal(tl.multiplierAt(new Date(NOW).toISOString()), "5");
+});
+
+test("P0-деградация: цепь недоступна при старте — реплей кэша, запись не трогаем", async () => {
+  const t = await tokenOf("SPACEX");
+  const parsed = fixture("onchain-spacex-mint.json");
+  const boot1 = planJournalStep(t, null, parsed, NOW);
+  const boot2 = planJournalStep(t, boot1.entry, null, NOW + 60_000);
+  assert.equal(boot2.chain, "unavailable");
+  assert.equal(boot2.replay.length, 1);
+  assert.equal(boot2.entry, boot1.entry); // та же ссылка: observedAt не врёт «наблюдали сейчас»
+});
+
+test("P0-миграция: запись v1 (без events) самовосстанавливается бэкфиллом", async () => {
+  const t = await tokenOf("SPACEX");
+  const parsed = fixture("onchain-spacex-mint.json");
+  const v1 = { lastEffective: "5", observedAt: "2026-09-19T03:50:00Z" }; // старый формат файла на диске
+  const step = planJournalStep(t, v1, parsed, NOW);
+  assert.ok(step.event); // pending всё ещё виден в минте — бэкфилл переизлучает 1 -> 5
+  assert.equal(step.entry.events.length, 1);
+});
+
+test("ротация поверх реплея: непрерывность 1 -> 5 -> 7 после рестарта", async () => {
+  const t = await tokenOf("SPACEX");
+  const parsed = fixture("onchain-spacex-mint.json");
+  const boot1 = planJournalStep(t, null, parsed, NOW);
+  const rotated = {
+    hasExtension: true, decimals: 8,
+    activeMultiplier: "5", pendingMultiplier: "7",
+    pendingEffectiveDate: "2026-09-15T00:00:00.000Z", authority: null,
+  };
+  const boot2 = planJournalStep(t, boot1.entry, rotated, NOW);
+  assert.ok(boot2.event);
+  assert.equal(boot2.event.multiplierFrom, "5");
+  const tl = new MultiplierTimeline([...boot2.replay, boot2.event]);
+  assert.equal(tl.multiplierAt("2026-09-20"), "7");
+  assert.equal(tl.multiplierAt("2026-06-15"), "5");
+});
+
+test("P0-интеграция: /summary после рестарта видит SPACEX=5, /health отдаёт journal-статистику", async () => {
+  const registry = await registryOf();
+  const t = await tokenOf("SPACEX");
+  const parsed = fixture("onchain-spacex-mint.json");
+  const boot1 = planJournalStep(t, null, parsed, NOW);
+  const boot2 = planJournalStep(t, boot1.entry, parsed, NOW + 60_000);
+  const events = [...boot2.replay, ...(boot2.event ? [boot2.event] : [])]; // как пушит serve.mjs
+  const server = await createApiServer({
+    registry, events,
+    journalStats: { replayed: boot2.replay.length, unavailable: 0 },
+  });
+  const { port } = server.address();
+  try {
+    const rows = await (await fetch(`http://127.0.0.1:${port}/summary`)).json();
+    assert.equal(rows.find((r) => r.symbol === "SPACEX").currentMultiplier, "5");
+    const h = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.deepEqual(h.journal, { replayed: 1, unavailable: 0 });
+  } finally {
+    server.close();
+  }
+});

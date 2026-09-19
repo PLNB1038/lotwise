@@ -151,9 +151,9 @@ test("scanWallet v2: входящий перевод через token-аккау
     },
   });
   const scan = await scanWallet(client, OWNER, registry);
-  assert.equal(scan.signatures, 2); // дедуб: self-buy под двумя источниками — один
+  assert.equal(scan.signatures, 2); // дедуп: self-buy под двумя источниками — один
   assert.deepEqual(scan.txs.map((t) => t.signature), ["incoming-recv", "self-buy"]);
-  assert.equal(scan.accounts.get(SPYx).address, ATA);
+  assert.deepEqual(scan.accounts.get(SPYx).addresses, [ATA]);
   assert.equal(scan.accounts.get(SPYx).currentRaw, 160n);
 });
 
@@ -174,7 +174,7 @@ test("fetchOwnerTokenAccounts: оба токен-программа, тольк�
   const accts = await (await import("../src/wallet/scan.mjs")).fetchOwnerTokenAccounts(client, OWNER, registry);
   assert.equal(accts.size, 2);
   assert.equal(accts.get(SPYx).currentRaw, 7n);
-  assert.equal(accts.get(AAPLx).address, "AtaB");
+  assert.deepEqual(accts.get(AAPLx).addresses, ["AtaB"]);
 });
 
 test("buildWalletReport: токен есть на цепи, дельт нет — виден с reconciles: false, не спрятан", async () => {
@@ -332,4 +332,57 @@ test("/lots: сканер бросил RpcError-подобное — 503 с kind
     assert.equal(res.status, 503);
     assert.equal((await res.json()).kind, "rate-limit");
   });
+});
+
+// ---- раунд-2: мультиаккаунтность одного минта ----
+
+test("два аккаунта одного минта (ATA + legacy): скан обоих, баланс = сумме, отчёт сходится", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const ATA = "AtaSPYx" + "c".repeat(34);
+  const LEG = "LegSPYx" + "d".repeat(34);
+  const mk = (pubkey, amount) => ({ pubkey, account: { data: { parsed: { info: {
+    mint: SPYx, owner: OWNER, tokenAmount: { amount },
+  } } } } });
+  const client = fakeClient({
+    sigPages: {
+      [OWNER]: [],
+      [ATA]: [{ signature: "ata-buy", slot: 2, blockTime: 200, err: null }],
+      [LEG]: [{ signature: "leg-buy", slot: 1, blockTime: 100, err: null }],
+    },
+    accountsByProgram: {
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [mk(ATA, "100"), mk(LEG, "60")] },
+    },
+    txs: {
+      "ata-buy": txOf("ata-buy", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "100" } }], { slot: 2, blockTime: 200 }),
+      "leg-buy": txOf("leg-buy", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "60" } }], { slot: 1, blockTime: 100 }),
+    },
+  });
+  // до фикса: разные балансы = throw ambiguous-accounts (отказ честному кошельку),
+  // равные = молчаливая перезапись и потеря истории одного из аккаунтов
+  const scan = await scanWallet(client, OWNER, registry);
+  assert.deepEqual([...scan.accounts.get(SPYx).addresses].sort(), [ATA, LEG].sort());
+  assert.equal(scan.accounts.get(SPYx).currentRaw, 160n);
+  const rep = buildWalletReport(scan, { registry });
+  const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
+  assert.equal(spyx.rawBalance, "160");
+  assert.equal(spyx.reconciles, true);
+});
+
+test("хронология по slot: blockTime=null не ломает порядок FIFO", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const client = fakeClient({
+    sigPages: {
+      [OWNER]: [
+        { signature: "late-null-bt", slot: 30, blockTime: null, err: null },
+        { signature: "early", slot: 2, blockTime: 1750000000, err: null },
+      ],
+    },
+    txs: {
+      "early": txOf("early", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "10" } }], { slot: 2, blockTime: 1750000000 }),
+      "late-null-bt": txOf("late-null-bt", [{ owner: OWNER, mint: SPYx, _pre: 10, uiTokenAmount: { amount: "20" } }], { slot: 30, blockTime: null }),
+    },
+  });
+  // до фикса компаратор смешивал секунды и слоты: null-blockTime съезжал в «древние»
+  const scan = await scanWallet(client, OWNER, registry);
+  assert.deepEqual(scan.txs.map((t) => t.signature), ["early", "late-null-bt"]);
 });

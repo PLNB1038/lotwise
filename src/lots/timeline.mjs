@@ -28,11 +28,20 @@ export function decimalToRatio(dec) {
  * (любой порядок), проверяет НЕПРЕРЫВНОСТЬ ЦЕПОЧКИ (from[i+1] === to[i])
  * и её отправную точку от 1 — fail-closed: разрыв = ошибка, не догадка.
  */
+// Сравнение дат — только через Date.parse, никогда лексикографически:
+// "2026-06-18T00:00:00.000Z" > "2026-06-18" строково, хотя это тот же момент —
+// калькулятор витрины шлёт date-only, и событие дня Д обязано считаться эффективным.
+const tsOf = (iso) => {
+  const t = Date.parse(String(iso));
+  if (Number.isNaN(t)) {
+    throw new TimelineError(`not a parseable ISO date: ${JSON.stringify(iso)}`);
+  }
+  return t;
+};
+
 export class MultiplierTimeline {
   constructor(events = []) {
-    const sorted = [...events].sort((a, b) =>
-      String(a.effectiveDate).localeCompare(String(b.effectiveDate)),
-    );
+    const sorted = [...events].sort((a, b) => tsOf(a.effectiveDate) - tsOf(b.effectiveDate));
     let expected = "1";
     this.steps = [{ at: null, multiplier: "1" }]; // базовая линия до первого события
     for (const e of sorted) {
@@ -49,12 +58,13 @@ export class MultiplierTimeline {
     }
   }
 
-  /** Множитель, действующий на момент date (ISO). До первого события = "1". */
+  /** Множитель, действующий на момент date (ISO; date-only = полночь UTC того дня). */
   multiplierAt(date) {
+    const ts = tsOf(date); // мусорная дата — ошибка, а не молчаливая неправда
     let current = this.steps[0].multiplier;
     for (const s of this.steps) {
       if (s.at === null) continue; // базовая линия
-      if (String(s.at) <= String(date)) current = s.multiplier;
+      if (tsOf(s.at) <= ts) current = s.multiplier; // событие ровно в этот момент — уже действует
       else break; // steps отсортированы — дальше только будущее
     }
     return current;

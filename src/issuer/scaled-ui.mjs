@@ -48,9 +48,16 @@ export function parseScaledUiAmount(accountInfoValue) {
 
 /** Сверка планов: множитель эмитента (API) против on-chain на момент date. */
 export function reconcileMultiplier(apiMultiplier, onChain, date = new Date().toISOString()) {
+  // Даты — числом через Date.parse: строковое сравнение путает "Z"/".000Z"/date-only
+  // и теряло pending ровно в день его активации (ложное planes-disagree на витрине).
+  const ts = Date.parse(String(date));
+  if (Number.isNaN(ts)) {
+    throw new ScaledUiError(`not a parseable date: ${JSON.stringify(date)}`);
+  }
+  const pendingTs = onChain.pendingEffectiveDate !== null ? Date.parse(onChain.pendingEffectiveDate) : null;
   // On-chain "эффективный" множитель: pending активируется после своего таймстампа
   const effectiveOnChain =
-    onChain.pendingEffectiveDate !== null && onChain.pendingEffectiveDate <= date
+    pendingTs !== null && !Number.isNaN(pendingTs) && pendingTs <= ts && onChain.pendingMultiplier !== null
       ? onChain.pendingMultiplier
       : onChain.activeMultiplier;
   return {

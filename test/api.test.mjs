@@ -84,3 +84,51 @@ test("неизвестный маршрут — 404 со списком эндп
     assert.ok(Array.isArray(body.endpoints));
   });
 });
+
+// ---- раунд-2: валидация ввода API ----
+
+test("/multiplier: raw только цифры — hex/отрицательные/мусор = 400", async () => {
+  await withServer(async (base) => {
+    // BigInt молча принимает "0x10" (=16) и "-5" — это тихая ложь, не удобство
+    assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=0x10`)).status, 400);
+    assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=-5`)).status, 400);
+    assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1.5`)).status, 400);
+    assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=abc`)).status, 400);
+    assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1000&date=not-a-date`)).status, 400);
+    assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1000`)).status, 200);
+  });
+});
+
+test("/onchain: мусорная дата = 400, date-only в день активации pending не врёт", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const server = await createApiServer({
+    registry, events,
+    onchainReader: async () => ({
+      activeMultiplier: "1.003909240011759",
+      pendingMultiplier: "1.005714560286254",
+      pendingEffectiveDate: "2026-06-18T00:00:00.000Z",
+      hasExtension: true,
+    }),
+  });
+  const { port } = server.address();
+  try {
+    const base = `http://127.0.0.1:${port}`;
+    assert.equal((await fetch(`${base}/onchain?symbol=SPYx&date=garbage`)).status, 400);
+    const r = await (await fetch(`${base}/onchain?symbol=SPYx&date=2026-06-18`)).json();
+    assert.equal(r.onChainEffective, "1.005714560286254"); // pending активен в свой день
+  } finally {
+    server.close();
+  }
+});
+
+test("/health: journal-статистика присутствует, когда передана", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const server = await createApiServer({ registry, events, journalStats: { replayed: 2, unavailable: 1 } });
+  const { port } = server.address();
+  try {
+    const h = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.deepEqual(h.journal, { replayed: 2, unavailable: 1 });
+  } finally {
+    server.close();
+  }
+});

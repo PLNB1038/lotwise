@@ -52,23 +52,28 @@ export function backfillMultiplierEvent(token, parsed, nowMs = Date.now()) {
 
 /**
  * Дифф журнала: сравнить прошлую эффективную величину с текущим состоянием цепи.
- * @param {{lastEffective: string, observedAt: string}|null} entry — запись журнала (null = первое наблюдение)
- * @returns {{event: object|null, entry: {lastEffective: string, observedAt: string}}}
+ * @param {{lastEffective: string, observedAt: string, events?: Array}|null} entry — запись журнала
+ *   (null = первое наблюдение). events — ПОЛНАЯ история выданных событий: entry без
+ *   них (v1) мигрируется бэкфиллом вызывающим слоем.
+ * @returns {{event: object|null, entry: {lastEffective: string, observedAt: string, events: Array}}}
+ *   event — только НОВОЕ событие этого шага; вся история живёт в entry.events —
+ *   иначе рестарт процесса терял уже выданные события (множитель молча откатывался к 1).
  */
 export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   const nowIso = new Date(nowMs).toISOString();
   const effective = effectiveOf(parsed, nowMs);
+  const priorEvents = Array.isArray(entry?.events) ? entry.events : [];
 
   if (entry === null) {
     const event = parsed.hasExtension && effective !== "1"
       ? backfillMultiplierEvent(token, parsed, nowMs)
       : null;
     // entry фиксирует ЭФФЕКТИВНУЮ величину — будущие ротации диффом от неё
-    return { event, entry: { lastEffective: effective, observedAt: nowIso } };
+    return { event, entry: { lastEffective: effective, observedAt: nowIso, events: event ? [event] : [] } };
   }
 
   if (effective === entry.lastEffective) {
-    return { event: null, entry: { lastEffective: entry.lastEffective, observedAt: nowIso } };
+    return { event: null, entry: { lastEffective: entry.lastEffective, observedAt: nowIso, events: priorEvents } };
   }
   const event = {
     type: "MULTIPLIER_CHANGE",
@@ -85,5 +90,5 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   } catch (err) {
     throw new OnchainNormalizeError(`journal transition failed validation: ${err.message}`);
   }
-  return { event, entry: { lastEffective: effective, observedAt: nowIso } };
+  return { event, entry: { lastEffective: effective, observedAt: nowIso, events: [...priorEvents, event] } };
 }

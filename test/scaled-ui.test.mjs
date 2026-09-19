@@ -51,3 +51,25 @@ test("до активации pending: эффективный = active; расх
   const matched = reconcileMultiplier("1.003909240011759", onChain, "2026-06-01T00:00:00.000Z");
   assert.equal(matched.verdict, "ok");
 });
+
+// ---- раунд-2: свертка планов на границе дат ----
+
+test("pending активируется В ДЕНЬ своей даты даже date-only запросом", () => {
+  const onChain = {
+    activeMultiplier: "1.003909240011759",
+    pendingMultiplier: "1.005714560286254",
+    pendingEffectiveDate: "2026-06-18T00:00:00.000Z",
+    pendingTs: null, authority: null, hasExtension: true,
+  };
+  // до фикса строковое сравнение считало pending неактивным ровно в день активации
+  const r = reconcileMultiplier("1.005714560286254", onChain, "2026-06-18");
+  assert.equal(r.onChainEffective, "1.005714560286254");
+  assert.equal(r.verdict, "ok");
+});
+
+test("мусорная дата свертки — ScaledUiError, а не тихое сравнение строк", () => {
+  assert.throws(
+    () => reconcileMultiplier("1", { activeMultiplier: "1", pendingMultiplier: null, pendingEffectiveDate: null }, "not-a-date"),
+    ScaledUiError,
+  );
+});

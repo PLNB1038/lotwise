@@ -8,7 +8,7 @@ import { RpcClient } from "../src/ingest/rpc.mjs";
 import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
-import { journalTransition } from "../src/events/normalize-onchain.mjs";
+import { planJournalStep } from "../src/events/journal.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 8787);
@@ -32,21 +32,34 @@ try {
 } catch {
   // первый запуск — пустой журнал, бэкфилл из цепи
 }
+let journalReplayed = 0;
+let journalUnavailable = 0;
 for (const t of registry.filter((x) => x.issuer !== "backed")) {
+  const priorEntry = journal[t.mint] ?? null;
+  let parsed = null;
   try {
     const raw = await rpcForJournal.call("getAccountInfo", [t.mint, { encoding: "jsonParsed", commitment: "confirmed" }]);
-    const parsed = parseScaledUiAmount(raw.value);
-    const { event, entry } = journalTransition(t, parsed, journal[t.mint] ?? null);
-    journal[t.mint] = entry;
-    if (entry.lastEffective !== "1" && event === null) {
-      console.warn(`[serve] ${t.symbol}: множитель ${entry.lastEffective} без истории журнала — from-value честно не восстановить, событие не выдумываем`);
-    }
-    if (event) {
-      events.push(...bindMintAndValidate([event], t.mint));
-      console.log(`[serve] ${t.symbol}: on-chain событие ${event.multiplierFrom} -> ${event.multiplierTo} @ ${event.effectiveDate.slice(0, 10)}`);
-    }
+    parsed = parseScaledUiAmount(raw.value);
   } catch (err) {
-    console.warn(`[serve] ${t.symbol}: on-chain журнал недоступен (${err.message}) — пропускаем, fail-closed`);
+    console.warn(`[serve] ${t.symbol}: on-chain журнал недоступен (${err.message}) — fail-closed`);
+  }
+  const { replay, event, entry, chain } = planJournalStep(t, priorEntry, parsed);
+  if (chain === "unavailable") journalUnavailable++;
+  if (entry !== null) journal[t.mint] = entry;
+  // рестарт процесса НЕ должен терять уже выданные события: реплей из журнала
+  if (replay.length > 0) {
+    events.push(...bindMintAndValidate(replay, t.mint));
+    journalReplayed += replay.length;
+    if (chain === "unavailable") {
+      console.log(`[serve] ${t.symbol}: реплей ${replay.length} событий из кэша журнала (цепь недоступна — план протух, observedAt честный)`);
+    }
+  }
+  if (entry && entry.lastEffective !== "1" && entry.events.length === 0) {
+    console.warn(`[serve] ${t.symbol}: множитель ${entry.lastEffective} без истории журнала — from-value честно не восстановить, событие не выдумываем`);
+  }
+  if (event) {
+    events.push(...bindMintAndValidate([event], t.mint));
+    console.log(`[serve] ${t.symbol}: on-chain событие ${event.multiplierFrom} -> ${event.multiplierTo} @ ${event.effectiveDate.slice(0, 10)}`);
   }
   await sleep(200);
 }
@@ -137,7 +150,10 @@ const priceProvider = {
 
 let server;
 try {
-  server = await createApiServer({ registry, events, port, host, onchainReader, walletScanner, priceProvider });
+  server = await createApiServer({
+    registry, events, port, host, onchainReader, walletScanner, priceProvider,
+    journalStats: { replayed: journalReplayed, unavailable: journalUnavailable },
+  });
 } catch (err) {
   console.error(`[serve] не поднялся на порту ${port}: ${err.code ?? err.message}`);
   process.exit(1);
