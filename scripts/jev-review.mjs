@@ -95,7 +95,7 @@ export async function askJev(sections, { apiKey, fetcher = fetch } = {}) {
 }
 
 async function main(argv) {
-  const files = argv.length ? argv : ["README.en.md", "docs/SUBMISSION_DRAFT.md"];
+  const files = argv.length ? argv : ["README.md", "docs/SUBMISSION_DRAFT.md"];
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey) {
     console.error("нет TYPESAFE_API_KEY — Jev-ревью недоступно");
