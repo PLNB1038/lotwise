@@ -88,6 +88,7 @@ curl "http://127.0.0.1:8787/crosscheck?symbol=OPENAI"
 - `wallet/` wallet history scan and FIFO lot report. Scan gaps are surfaced honestly (`complete: false`), never hidden.
 - `api/` REST server on `node:http`. Bad timeline data excludes a token from reporting with a recorded reason instead of killing the process.
 - `ui/` the report page.
+- `webhooks/` subscription store and HMAC-SHA256 signed deliveries with retries (`scripts/webhook-deliver.mjs` CLI).
 - `fs/` atomic file writes.
 
 Live on-chain findings observed during development: SPACEX multiplier `1` → `5` effective 2026-06-10, OPENAI `1` → `1.4861347` effective 2026-07-17. Tessera tokens have no rebase mechanism; their multiplier is `1`, and the API says so plainly.
@@ -98,7 +99,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-476 tests, all green (see Testing below) (plain `node:test`, no fixtures or mocks for the core paths).
+522 tests, all green (see Testing below) (plain `node:test`, no fixtures or mocks for the core paths).
 
 ## Status
 
