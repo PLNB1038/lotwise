@@ -56,3 +56,23 @@ test("реальный data/tokens.json валиден и покрывает в�
 test("отсутствующий файл даёт понятную ошибку", async () => {
   await assert.rejects(() => loadRegistry("data/nope.json"), RegistryError);
 });
+
+test("конвенция минтов эмитентов: backed=Xs…, prestocks=Pr… (гипотеза issuerOf реестра)", async () => {
+  const list = await loadRegistry("data/tokens.json");
+  for (const t of list) {
+    if (t.issuer === "backed") {
+      assert.ok(t.mint.startsWith("Xs"), `${t.symbol}: backed-минт обязан начинаться с Xs (${t.mint.slice(0, 6)}…)`);
+    }
+    if (t.issuer === "prestocks") {
+      assert.ok(t.mint.startsWith("Pr"), `${t.symbol}: prestocks-минт обязан начинаться с Pr (${t.mint.slice(0, 6)}…)`);
+    }
+  }
+});
+
+test("план недели 1: реестр >=30 токенов, decimals обогащены у всех (null = не довели)", async () => {
+  const list = await loadRegistry("data/tokens.json");
+  assert.ok(list.length >= 30, `план недели 1 требует >=30 токенов, сейчас ${list.length}`);
+  for (const t of list) {
+    assert.ok(Number.isInteger(t.decimals), `${t.symbol}: decimals=${t.decimals}, ожидаем integer после enrich`);
+  }
+});
