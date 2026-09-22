@@ -48,6 +48,13 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
     if (address && !cur.addresses.includes(address)) cur.addresses.push(address);
     cur.currentRaw += amount;
   };
+  // Аккаунт принадлежит РОВНО ОДНОЙ токен-программе, но кривой/проксирующий эндпоинт
+  // может отдать один pubkey в обеих выдачах. Дедуп глобальный (по всем программам,
+  // первое вхождение выигрывает — порядок TOKEN_PROGRAMS детерминирован): раньше
+  // currentRaw суммировался по выдачам без учёта pubkey — 7+7=14, фантомный двойной
+  // баланс давал ложный reconciles:false. Конфликт не тихий: warn оператору
+  // (паттерн round 6 — наблюдаемость вместо молчаливой потери).
+  const seenPubkeys = new Set();
   for (const programId of TOKEN_PROGRAMS) {
     const res = await client.call("getTokenAccountsByOwner", [
       owner,
@@ -57,7 +64,15 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
     for (const entry of res?.value ?? []) {
       const info = entry?.account?.data?.parsed?.info;
       if (!info || !mintSet.has(info.mint)) continue;
-      add(info.mint, entry.pubkey ?? null, BigInt(info.tokenAmount?.amount ?? "0"));
+      const address = entry.pubkey ?? null;
+      if (address !== null) {
+        if (seenPubkeys.has(address)) {
+          console.error(`[wallet-scan] ${owner}: аккаунт ${address} встречен в выдаче токен-программ повторно — аккаунт принадлежит ровно одной программе; первое вхождение выигрывает, дубль в сумму не пошёл (иначе баланс задваивается и reconcile ложно падает)`);
+          continue;
+        }
+        seenPubkeys.add(address);
+      }
+      add(info.mint, address, BigInt(info.tokenAmount?.amount ?? "0"));
     }
   }
   return out;
@@ -87,6 +102,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   for (const source of sources) {
     let before;
     let taken = 0;
+    let srcTruncated = false; // флаг НА ИСТОЧНИК: упёрся один — остальные сканируются своим потолком целиком
     for (;;) {
       const batch = await client.call("getSignaturesForAddress", [
         source,
@@ -94,15 +110,21 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       ]);
       if (!Array.isArray(batch) || batch.length === 0) break;
       for (const s of batch) {
-        if (taken >= maxTxs) { truncated = true; break; }
-        taken++;
+        if (taken >= maxTxs) { srcTruncated = true; break; }
         if (!sigs.has(s.signature)) {
           sigs.set(s.signature, { slot: s.slot, blockTime: s.blockTime ?? null, err: s.err ?? null });
+          // taken ПОСЛЕ дедупа: потолок по УНИКАЛЬНЫМ сигнатурам. Раньше taken++ шёл
+          // до проверки — дубль из перекрывшихся батчей съедал слот потолка, и
+          // уникальная tx из выданного эндпоинтом батча не попадала в окно (срез по
+          // «грязным» вхождениям, а не по истории). truncated остаётся честным:
+          // он про «могли не увидеть», а не про объём мусора выдачи.
+          taken++;
         }
       }
-      if (truncated || batch.length < limit) break;
+      if (srcTruncated || batch.length < limit) break;
       before = batch[batch.length - 1].signature;
     }
+    if (srcTruncated) truncated = true;
   }
 
   // 2) err-транзакции не fetch'им — это не история балансов, а мусор с причиной
@@ -125,6 +147,16 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     if (onProgress) onProgress({ fetched, total: ordered.length });
     if (tx === null) {
       skipped.push({ signature: s.signature, reason: "tx unavailable on endpoint" });
+      continue;
+    }
+    if (tx.err !== null) {
+      // meta.err ФАКТА сильнее err из списка сигнатур: списки бывают err:null для
+      // failed-tx, а fetchWalletDeltas честно протащил meta.err в поле err. Раньше
+      // сверка шла только с err сигнатуры — failed-tx с расходящимися pre/post
+      // (кривой эндпоинт, на живой цепи откат даёт pre==post) кормила FIFO
+      // фантомной дельтой. Семантика «failed = не влияет на баланс»: дельты такой
+      // tx в историю не идут.
+      skipped.push({ signature: s.signature, reason: "failed-tx" });
       continue;
     }
     if (tx.deltas.length > 0) {
