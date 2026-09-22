@@ -1,6 +1,24 @@
 // Отчёт по кошельку из скана: FIFO-лоты, реализация, гэпы скана,
 // скорректированная позиция = raw × множитель(now) через MultiplierTimeline.
 // Чистая функция: никакой сети, только данные скана + реестр + таймлайны.
+//
+// Семантика балансов (честные имена): rawBalance/netDeltaRaw — это НЕТТО-ДЕЛЬТА
+// ОКНА СКАНА (Σ дельт tx внутри окна), а не обязательно баланс на цепи: при
+// неполном окне (complete: false) она может быть отрицательной. Баланс на цепи —
+// onchainNow; нетто-дельта равна ему только при reconciles: true. Витрина обязана
+// подписывать поле соответственно, а не «raw balance (on-chain)».
+//
+// adjustedAvailable: поле ставится ТОЛЬКО как false — когда таймлайна для минта
+// не было и adjusted посчитан тождественным fallback (scaled=raw); тогда совпадение
+// с raw НЕ доказывает, что множитель равен 1 (например, исключённый токен — таймлайн
+// кривой). У токенов с таймлайном поле отсутствует (adjusted реально посчитан).
+// Витрина показывает «adjusted not computed» при adjustedAvailable === false || excluded.
+//
+// Лоты с acquiredDate: null (tx без blockTime — легитимная реальность Solana)
+// доезжают до JSON как есть (см. iso()), но НЕПРИГОДНЫ для applyEvents: движок
+// событий на таком лоте бросает LotError «refusing to guess» и за счёт атомарности
+// роняет применение ВСЕЙ истории. Потребитель /lots обязан отфильтровать такие
+// лоты или обработать LotError; датная семантика — см. шапку src/lots/lots.mjs.
 export class ReportError extends Error {
   constructor(msg) {
     super(msg);
@@ -41,7 +59,10 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       const s = stateOf(d.mint);
       s.rawBalance += d.deltaRaw;
       if (d.deltaRaw > 0n) {
-        s.queue.push({ id: `${d.mint.slice(0, 6)}-${++s.lotSeq}`, qtyRaw: d.deltaRaw, acquiredDate: date });
+        // id = весь минт +_seq: 6-символьный префикс коллизирует у разных минтов
+        // (фаззер ловил одинаковые id), а mint уникален по построению. Техническое
+        // поле — длина не критична, зато коллизий нет по построению.
+        s.queue.push({ id: `${d.mint}-${++s.lotSeq}`, qtyRaw: d.deltaRaw, acquiredDate: date });
       } else {
         let due = -d.deltaRaw;
         while (due > 0n && s.queue.length > 0) {
@@ -76,13 +97,14 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     const acct = accts[mint];
     const onchainNow = acct ? String(acct.currentRaw) : "0";
     const reconciles = acct ? s.rawBalance === BigInt(acct.currentRaw) : s.rawBalance === 0n;
-    tokens.push({
+    const row = {
       symbol: t.symbol,
       name: t.name,
       mint,
       decimals: t.decimals,
-      rawBalance: String(s.rawBalance),
-      onchainNow,
+      rawBalance: String(s.rawBalance), // легаси-имя; значение — нетто-дельта окна (см. netDeltaRaw)
+      netDeltaRaw: String(s.rawBalance), // честное имя того же числа: Σ дельт окна скана, не баланс
+      onchainNow, // настоящий баланс на цепи сейчас — отдельно от нетто-дельты окна
       reconciles, // дельты скана сходятся с живым балансом цепи — главный знак честности
       multiplier: { now: mult, events: tl ? tl.steps.length - 1 : 0 },
       // BigInt в JSON не сериализуется — наружу строками
@@ -96,7 +118,10 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       realizedCount: s.realized.length,
       realizedQtyRaw: String(s.realized.reduce((acc, r) => acc + r.qtyRaw, 0n)),
       gaps: s.gaps.map((g) => ({ ...g, missingQtyRaw: String(g.missingQtyRaw) })),
-    });
+    };
+    // честная пометка только на fallback-ветке: отсутствие поля = adjusted посчитан
+    if (!tl) row.adjustedAvailable = false; // identity-fallback (см. шапку): adjusted==raw не доказан
+    tokens.push(row);
   };
 
   for (const [mint, s] of st) pushToken(mint, s);

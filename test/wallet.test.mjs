@@ -117,6 +117,37 @@ test("scanWallet: потолок maxTxs режет окно честно — tru
   assert.equal(scan.truncated, true);
 });
 
+test("scanWallet: источник, упёршийся в потолок, не режет страницы остальных источников", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const ATA = "AtaSPYx" + "c".repeat(34);
+  const sig = (s, slot) => ({ signature: s, slot, blockTime: slot, err: null });
+  const PAGES = {
+    [OWNER]: [sig("a1", 1), sig("a2", 2), sig("a3", 3), sig("a4", 4), sig("a5", 5)], // 5 при maxTxs=3 → truncated
+    [ATA]: [sig("t1", 11), sig("t2", 12), sig("t3", 13)], // 3 = своему потолку укладывается целиком
+  };
+  // фейк с настоящей пагинацией по before (общий fakeClient отдаёт одну страницу всегда)
+  const client = {
+    async call(method, params) {
+      if (method === "getTokenAccountsByOwner") {
+        return { value: [
+          { pubkey: ATA, account: { data: { parsed: { info: { mint: SPYx, owner: OWNER, tokenAmount: { amount: "160" } } } } } },
+        ] };
+      }
+      if (method === "getSignaturesForAddress") {
+        const all = PAGES[params[0]] ?? [];
+        const before = params[1]?.before;
+        const start = before ? all.findIndex((x) => x.signature === before) + 1 : 0;
+        return all.slice(start, start + params[1].limit);
+      }
+      return null; // getTransaction
+    },
+  };
+  // limit=1: у ATA три страницы — регрессия ловила обрыв после первой (сигнатур было бы 4, не 6)
+  const scan = await scanWallet(client, OWNER, registry, { maxTxs: 3, limit: 1 });
+  assert.equal(scan.signatures, 6, "a1-a3 от кошелька + все 3 от ATA");
+  assert.equal(scan.truncated, true, "потолок достигнут, но только одним источником");
+});
+
 test("scanWallet: мусорный адрес — ошибка, не скан", async () => {
   const registry = await loadRegistry("data/tokens.json");
   await assert.rejects(
@@ -385,4 +416,98 @@ test("хронология по slot: blockTime=null не ломает поря�
   // до фикса компаратор смешивал секунды и слоты: null-blockTime съезжал в «древние»
   const scan = await scanWallet(client, OWNER, registry);
   assert.deepEqual(scan.txs.map((t) => t.signature), ["early", "late-null-bt"]);
+});
+
+// ---- раунд-4: инварианты и дыры тест-покрытия ----
+
+test("scanWallet: getTransaction вернул null — tx в skipped с честной причиной, fetched посчитан", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const client = fakeClient({
+    sigPages: { [OWNER]: [
+      { signature: "ok", slot: 1, blockTime: 100, err: null },
+      { signature: "gone", slot: 2, blockTime: 200, err: null }, // err:null, но tx недоступен на эндпоинте
+    ] },
+    txs: {
+      "ok": txOf("ok", [{ owner: OWNER, mint: SPYx, _pre: 0, uiTokenAmount: { amount: "10" } }], { slot: 1, blockTime: 100 }),
+      // "gone" в txs нет — fakeClient вернёт null (поведение публичного RPC на ретрошарде)
+    },
+  });
+  // закрепляем ТЕКУЩЕЕ поведение сканера: недоступная tx не теряется молча
+  const scan = await scanWallet(client, OWNER, registry);
+  assert.deepEqual(scan.skipped, [{ signature: "gone", reason: "tx unavailable on endpoint" }]);
+  assert.equal(scan.fetched, 2, "попытка fetch посчитана — работа видна");
+  assert.deepEqual(scan.txs.map((t) => t.signature), ["ok"], "в историю попал только доступный");
+  assert.equal(scan.signatures, 2);
+});
+
+test("buildWalletReport: blockTime null — лот с acquiredDate: null доезжает до JSON (сериализация не ломается)", async () => {
+  const registry = await loadRegistry("data/tokens.json");
+  const txs = [
+    { signature: "a", slot: 1, blockTime: null, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 10n, deltaRaw: 10n }] },
+  ];
+  const rep = buildWalletReport(scanOf(txs, { accounts: { [SPYx]: { address: "At7", currentRaw: 10n } } }), { registry });
+  const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
+  assert.equal(spyx.lots.length, 1);
+  assert.equal(spyx.lots[0].acquiredDate, null); // iso() даёт null — не выдуманная дата
+  const wire = JSON.parse(JSON.stringify(rep)); // тот же путь, что /lots -> res.end
+  assert.equal(wire.tokens[0].lots[0].acquiredDate, null);
+});
+
+test("buildWalletReport: id лотов уникальны у минтов с общим 6-символьным префиксом", () => {
+  const A = "Abcdef" + "1".repeat(38); // base58, общий префикс «Abcdef» — старая схема
+  const B = "Abcdef" + "2".repeat(38); // клала обоим id «Abcdef-1»
+  const registry = [
+    { mint: A, symbol: "PRA", name: "Prefix A", decimals: 8 },
+    { mint: B, symbol: "PRB", name: "Prefix B", decimals: 8 },
+  ];
+  const txs = [
+    { signature: "a", slot: 1, blockTime: 100, deltas: [{ owner: OWNER, mint: A, preRaw: 0n, postRaw: 10n, deltaRaw: 10n }] },
+    { signature: "b", slot: 2, blockTime: 200, deltas: [{ owner: OWNER, mint: B, preRaw: 0n, postRaw: 20n, deltaRaw: 20n }] },
+  ];
+  const rep = buildWalletReport(scanOf(txs), { registry });
+  const ids = rep.tokens.flatMap((t) => t.lots.map((l) => l.id));
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 2, "id лотов различаются");
+  assert.ok(ids.every((id) => id.endsWith("-1")), "seq сохранён в id");
+});
+
+test("FIFO-тождества баланса (инварианты фаззера) на 4 сценариях", () => {
+  const registry = [
+    { mint: SPYx, symbol: "SPYx", name: "S&P 500 xStock", decimals: 8 },
+  ];
+  const d = (sig, slot, deltaRaw) => ({
+    signature: sig, slot, blockTime: slot * 100,
+    deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 0n, deltaRaw }],
+  });
+  const scenarios = [
+    { name: "покупка, покупка, частичная продажа", txs: [d("a", 1, 100n), d("b", 2, 30n), d("c", 3, -70n)],
+      truncated: false, accounts: { [SPYx]: { address: "At8", currentRaw: 60n } } },
+    { name: "продажа до покупки (гэп)", txs: [d("a", 1, -300n), d("b", 2, 60n)],
+      truncated: false, accounts: {} },
+    { name: "перерасход съедает очередь и даёт гэп", txs: [d("a", 1, 100n), d("b", 2, -40n), d("c", 3, -80n)],
+      truncated: false, accounts: {} },
+    { name: "чистое удержание при обрезанном окне", txs: [d("a", 1, 42n)],
+      truncated: true, accounts: { [SPYx]: { address: "At9", currentRaw: 42n } } },
+  ];
+  for (const sc of scenarios) {
+    const rep = buildWalletReport(scanOf(sc.txs, { truncated: sc.truncated, accounts: sc.accounts }), { registry });
+    const t = rep.tokens.find((x) => x.symbol === "SPYx");
+    const sum = (arr, key) => arr.reduce((acc, x) => acc + BigInt(x[key]), 0n);
+    const side = (sign) => sc.txs.reduce((a, x) => {
+      const v = x.deltas[0].deltaRaw;
+      return a + (sign > 0 ? (v > 0n ? v : 0n) : (v < 0n ? -v : 0n));
+    }, 0n);
+    const buys = side(1);
+    const sells = side(-1);
+    const deltas = sc.txs.reduce((a, x) => a + x.deltas[0].deltaRaw, 0n);
+    const queueSum = sum(t.lots, "qtyRaw");
+    const realizedSum = BigInt(t.realizedQtyRaw);
+    const gapsSum = sum(t.gaps, "missingQtyRaw");
+    assert.equal(BigInt(t.rawBalance), deltas, `${sc.name}: rawBalance = Σ дельт`);
+    assert.equal(queueSum + realizedSum, buys, `${sc.name}: очередь + реализация = покупки`);
+    assert.equal(realizedSum + gapsSum, sells, `${sc.name}: реализация + гэпы = продажи`);
+    const allReconcile = rep.tokens.every((x) => x.reconciles);
+    const hasGaps = rep.tokens.some((x) => x.gaps.length > 0);
+    assert.equal(rep.complete, !sc.truncated && !hasGaps && allReconcile, `${sc.name}: complete честен`);
+  }
 });

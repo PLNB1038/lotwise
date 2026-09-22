@@ -1,6 +1,14 @@
 // Каноническая схема корпоративных событий Lotwise.
 // Единый формат для всего пайплайна: источники эмитентов и on-chain дельты
 // нормализуются в эти объекты; движок лотов ест только их.
+//
+// КОНТРАКТ (осознанный, подтверждён фаззером — не «чинить» одну сторону пары):
+// MERGER без exchange-полей ВАЛИДЕН по схеме — это информационное событие
+// (переэмиссия/смена минта, обмен не заявлен); при этом applyEvents (lots.mjs)
+// на MERGER без exchange-полей бросает LotError «refusing to guess».
+// То есть схемный валидатор и движок лотов расходятся НАМЕРЕННО: история может
+// содержать такие события, но применять их к лотам без коэффициента отказываемся.
+import { isValidIsoDate } from "./isodate.mjs";
 
 export const EVENT_TYPES = [
   "SPLIT",
@@ -18,7 +26,15 @@ export const EVENT_STATUSES = ["confirmed", "unverified"];
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+// Нулевой множитель не существует: MULTIPLIER_CHANGE «1»→«0» молча обнулял бы
+// скорректированную позицию, а crosscheck получал expectedRatio=Infinity.
+// «0.5» валиден — проверяем именно строковое равенство нулю, а не малость.
+const ZERO_MULTIPLIER_RE = /^0(\.0+)?$/;
+
+// Кап дробной точности множителя — ПАРА с timeline.mjs (decimalToRatio отвергает >30).
+// Контракт должен совпадать в обеих сторонах; менять только вместе.
+const MAX_MULTIPLIER_FRACTION_DIGITS = 30;
 
 export class EventValidationError extends Error {
   constructor(msg, field) {
@@ -45,8 +61,15 @@ export function validateEvent(e) {
     throw new EventValidationError(`unknown type "${e.type}", expected one of ${EVENT_TYPES.join("|")}`, "type");
   }
   if (!MINT_RE.test(e.mint)) throw new EventValidationError("mint must be a base58 Solana pubkey", "mint");
-  if (!ISO_DATE_RE.test(e.effectiveDate)) {
-    throw new EventValidationError("effectiveDate must be ISO-8601 (YYYY-MM-DD[THH:mm[:ss]][Z])", "effectiveDate");
+  // Дата — не только форма, но семантика: реальный календарь и обязательная
+  // таймзона у datetime (src/schema/isodate.mjs, находки раундов 2–3).
+  // Журнал-реплей и xstocks-история проходят ТОЛЬКО эту проверку — мусорная дата
+  // эмитента иначе доезжала бы до Date.parse как NaN и падала 500-м на /summary.
+  if (!isValidIsoDate(e.effectiveDate)) {
+    throw new EventValidationError(
+      "effectiveDate must be canonical ISO-8601: YYYY-MM-DD or YYYY-MM-DDTHH:mm[:ss[.fff]](Z|±HH:MM)",
+      "effectiveDate",
+    );
   }
   if (!EVENT_STATUSES.includes(e.status)) {
     throw new EventValidationError(`status must be one of ${EVENT_STATUSES.join("|")}`, "status");
@@ -106,6 +129,13 @@ export function validateEvent(e) {
       for (const f of ["multiplierFrom", "multiplierTo"]) {
         if (typeof e[f] !== "string" || !DECIMAL_RE.test(e[f])) {
           throw new EventValidationError(`${f} must be a decimal string like "1.0057" (no float)`, f);
+        }
+        if (ZERO_MULTIPLIER_RE.test(e[f])) {
+          throw new EventValidationError(`${f} must be positive — нулевой множитель не существует (позиция обнулилась бы молча)`, f);
+        }
+        const frac = e[f].split(".")[1] ?? "";
+        if (frac.length > MAX_MULTIPLIER_FRACTION_DIGITS) {
+          throw new EventValidationError(`${f} precision >${MAX_MULTIPLIER_FRACTION_DIGITS} fraction digits unsupported`, f);
         }
       }
       if (e.multiplierFrom === e.multiplierTo) {

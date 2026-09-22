@@ -26,9 +26,23 @@ export async function fetchWalletDeltas(client, signature, mints) {
   for (const b of tx.meta?.postTokenBalances ?? []) {
     if (!match(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
-    const cur = byAccount.get(key) ?? { owner: b.owner, mint: b.mint, preRaw: 0n, postRaw: 0n };
-    cur.postRaw = BigInt(b.uiTokenAmount.amount);
-    byAccount.set(key, cur);
+    const cur = byAccount.get(key);
+    if (cur !== undefined && cur.owner !== b.owner) {
+      // Смена владельца токен-аккаунта ВНУТРИ tx (SetAuthority на аккаунте): pre-запись
+      // принадлежит старому владельцу. Записать post ему — спрятать перевод: его дельта
+      // = 0 и вырезается фильтром нулей, новый владелец вообще не виден (оба лгут в FIFO).
+      // Расщепляем на ДВЕ записи: key отныне у нового владельца, старого переносим под
+      // синтетическим ключом (Map.set по тому же key просто перезаписал бы pre-запись).
+      // "owner|mint"-фолбэк сюда не доходит — ключ фолбэка уже содержит owner, там pre/post
+      // не встречаются и расщепление получается структурно.
+      cur.postRaw = 0n; // старому — весь pre-баланс, его дельта = −preRaw
+      byAccount.set(`${key}~${cur.owner}`, cur);
+      byAccount.set(key, { owner: b.owner, mint: b.mint, preRaw: 0n, postRaw: BigInt(b.uiTokenAmount.amount) });
+      continue;
+    }
+    const entry = cur ?? { owner: b.owner, mint: b.mint, preRaw: 0n, postRaw: 0n };
+    entry.postRaw = BigInt(b.uiTokenAmount.amount);
+    byAccount.set(key, entry);
   }
 
   // Аггрегируем аккаунты до уровня владельца: дельта owner = сумма дельт его аккаунтов.

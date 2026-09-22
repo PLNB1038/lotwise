@@ -34,13 +34,43 @@ export function parseScaledUiAmount(accountInfoValue) {
     };
   }
   const st = ext.state ?? {};
-  const ts = Number(st.newMultiplierEffectiveTimestamp ?? 0);
+  // active обязан быть десятичной строкой: String(undefined) = "undefined" не должен
+  // ехать дальше и падать где-то в валидации с невнятным сообщением. Fail-closed
+  // с ЧЕСТНОЙ ошибкой (тихая ложь хуже падения).
+  const active = String(st.multiplier);
+  if (!/^\d+(\.\d+)?$/.test(active)) {
+    throw new ScaledUiError(
+      `scaledUiAmountConfig: active multiplier is not a decimal string: ${JSON.stringify(st.multiplier)}`,
+    );
+  }
+  // «0» в newMultiplier — это pending СБРОШЕН, а не настоящий нулевой множитель:
+  // конвенция эмитента (xstocks.mjs fetchCurrentMultiplier гвардит Number(pending) !== 0,
+  // живая фикстура xstocks-spyx-current.json несёт newMultiplier: 0) — записать 0 в
+  // new_multiplier и есть естественный способ снять pending. Строка "0" truthy, поэтому
+  // гвардим числом, симметрично эмитентскому клиенту.
+  const pendingRaw = st.newMultiplier;
+  const pending =
+    pendingRaw !== undefined && pendingRaw !== null && Number(pendingRaw) !== 0 ? String(pendingRaw) : null;
+  // Дата активации без живого pending бессмысленна — обнуляем пару АТОМАРНО (а не
+  // «оставляем как есть»): пара (pending, date) — один факт, дата без pending это мусор
+  // в публичном ответе и приманка для будущих потребителей; симметрично xstocks.mjs,
+  // где activationDateTime гвардится вместе с newMultiplier. Форма ответа не меняется.
+  const tsRaw = st.newMultiplierEffectiveTimestamp ?? 0;
+  const ts = Number(tsRaw);
+  if (pending !== null && Number.isNaN(ts)) {
+    // pending жив, а таймстамп — мусор: до фикса NaN тихо давал дату null и pending
+    // молча игнорировался нижележащими слоями. Честная ошибка лучше тихой лжи.
+    // При НЕЖИВОМ pending (null выше) мусорный таймстамп значения не имеет — не бросаем.
+    throw new ScaledUiError(
+      `scaledUiAmountConfig: newMultiplierEffectiveTimestamp is not a number: ${JSON.stringify(tsRaw)} (pending ${pending} without a valid activation date)`,
+    );
+  }
   return {
     program: accountInfoValue.owner,
     decimals: info.decimals,
-    activeMultiplier: String(st.multiplier),
-    pendingMultiplier: st.newMultiplier ? String(st.newMultiplier) : null,
-    pendingEffectiveDate: ts > 0 ? new Date(ts * 1000).toISOString() : null,
+    activeMultiplier: active,
+    pendingMultiplier: pending,
+    pendingEffectiveDate: pending !== null && ts > 0 ? new Date(ts * 1000).toISOString() : null,
     authority: st.authority ?? null,
     hasExtension: true,
   };

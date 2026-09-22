@@ -1,8 +1,13 @@
 // Разовое обогащение data/tokens.json: decimals из Jupiter Price API v3 (батчем).
 // Запуск из корня: node scripts/enrich-decimals.mjs
-import { readFileSync, writeFileSync } from "node:fs";
+// Логика в src/registry/enrich.mjs (тестируемость, раунд 6): запись атомарна
+// (atomicWriteJson), а при filled=0 файл не перезаписывается вовсе — раньше каждая
+// прогулка скрипта повторяла окно обрыва записи без причины.
+import { readFileSync } from "node:fs";
+import { enrichDecimalsFile } from "../src/registry/enrich.mjs";
 
-const list = JSON.parse(readFileSync("data/tokens.json", "utf8"));
+const REGISTRY = "data/tokens.json";
+const list = JSON.parse(readFileSync(REGISTRY, "utf8"));
 const ids = list.map((t) => t.mint).join(",");
 const res = await fetch(`https://lite-api.jup.ag/price/v3?ids=${ids}`, {
   headers: { "User-Agent": "Mozilla/5.0 (compatible; Lotwise/0.1)" },
@@ -13,16 +18,7 @@ if (!res.ok) {
 }
 const prices = await res.json();
 
-let filled = 0, unknown = [];
-for (const t of list) {
-  const p = prices[t.mint];
-  if (p?.decimals !== undefined && t.decimals === null) {
-    t.decimals = p.decimals;
-    t.sourceDecimals = "jupiter";
-    filled++;
-  }
-  if (!p) unknown.push(t.symbol);
-}
-writeFileSync("data/tokens.json", JSON.stringify(list, null, 1) + "\n");
+const { filled, unknown, written } = enrichDecimalsFile(REGISTRY, prices);
+if (!written) console.log("filled=0 — data/tokens.json не перезаписан (нечего писать)");
 console.log(`decimals заполнено: ${filled}/${list.filter((t) => t.decimals !== null).length} всего`);
 console.log(unknown.length ? `НЕ найдены в Jupiter: ${unknown.join(", ")}` : "все минты известны Jupiter");

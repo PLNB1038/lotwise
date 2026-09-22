@@ -54,6 +54,19 @@ test("429 без исчерпания ретраев → RpcError rate-limit", a
   await assert.rejects(() => c.call("getSlot", []), (err) => err instanceof RpcError && err.kind === "rate-limit");
 });
 
+test("404 (прочий 4xx) НЕ ретраится — один запрос", async () => {
+  const c = makeClient([{ ok: false, status: 404, json: async () => ({}) }]);
+  await assert.rejects(() => c.call("getSlot", []), (err) =>
+    err instanceof RpcError && err.kind === "http" && err.status === 404);
+  assert.equal(c.requestCount, 1, "4xx кроме 429 — запрос плох, ретрай бессмыслен");
+});
+
+test("503 ретраится как 5xx — до успеха", async () => {
+  const c = makeClient([{ ok: false, status: 503, json: async () => ({}) }, jsonRes("ok")]);
+  assert.equal(await c.call("getSlot", []), "ok");
+  assert.equal(c.requestCount, 2);
+});
+
 test("jsonrpc-ошибка НЕ ретраится и несёт код (-32015)", async () => {
   const c = makeClient([{
     ok: true, status: 200,
@@ -201,4 +214,68 @@ test("два аккаунта с реальными покупками: дель
   assert.equal(r.deltas[0].deltaRaw, 130n);
   assert.equal(r.deltas[0].preRaw, 10n);
   assert.equal(r.deltas[0].postRaw, 140n);
+});
+
+// ---- раунд-4: смена владельца токен-аккаунта внутри tx (SetAuthority) ----
+
+const W1 = "Wallet1111111111111111111111111111111111111111";
+const W2 = "Wallet2222222222222222222222222222222222222222";
+
+test("SetAuthority: смена владельца аккаунта в одной tx расщепляется на −100 W1 / +100 W2", async () => {
+  // до фикса post-запись переиспользовала cur с owner из PRE: вся дельта уходила W1,
+  // у которого она = 0, и вырезалась фильтром нулей → deltas = [] (перевод исчезал,
+  // оба владельца лгали в FIFO)
+  const tx = {
+    slot: 1, blockTime: 1750000000,
+    meta: {
+      err: null,
+      preTokenBalances: [{ accountIndex: 0, owner: W1, mint: MINT, uiTokenAmount: { amount: "100" } }],
+      postTokenBalances: [{ accountIndex: 0, owner: W2, mint: MINT, uiTokenAmount: { amount: "100" } }],
+    },
+  };
+  const c = makeClient([jsonRes(tx)]);
+  const r = await fetchTokenDeltas(c, "sig-set-authority", MINT);
+  assert.equal(r.deltas.length, 2, "перевод не должен исчезать");
+  const w1 = r.deltas.find((d) => d.owner === W1);
+  const w2 = r.deltas.find((d) => d.owner === W2);
+  assert.ok(w1 && w2);
+  assert.equal(w1.preRaw, 100n);
+  assert.equal(w1.postRaw, 0n);
+  assert.equal(w1.deltaRaw, -100n);
+  assert.equal(w2.preRaw, 0n);
+  assert.equal(w2.postRaw, 100n);
+  assert.equal(w2.deltaRaw, 100n);
+});
+
+test("legacy-фолбэк (ключ owner|mint): смена владельца расщепляется структурно", async () => {
+  // разные owner дают разные ключи фолбэка — pre/post уже не встречаются, фиксируем контракт
+  const tx = {
+    slot: 1, blockTime: 1750000000,
+    meta: {
+      err: null,
+      preTokenBalances: [{ owner: W1, mint: MINT, uiTokenAmount: { amount: "50" } }],
+      postTokenBalances: [{ owner: W2, mint: MINT, uiTokenAmount: { amount: "50" } }],
+    },
+  };
+  const c = makeClient([jsonRes(tx)]);
+  const r = await fetchTokenDeltas(c, "sig-legacy-owner-change", MINT);
+  assert.equal(r.deltas.length, 2);
+  assert.equal(r.deltas.find((d) => d.owner === W1).deltaRaw, -50n);
+  assert.equal(r.deltas.find((d) => d.owner === W2).deltaRaw, 50n);
+});
+
+test("создание (pre нет) и закрытие (post нет) аккаунта при чужом ключе — как раньше", async () => {
+  const tx = {
+    slot: 1, blockTime: 1750000000,
+    meta: {
+      err: null,
+      preTokenBalances: [{ accountIndex: 7, owner: W1, mint: MINT, uiTokenAmount: { amount: "30" } }],
+      postTokenBalances: [{ accountIndex: 8, owner: W2, mint: MINT, uiTokenAmount: { amount: "77" } }],
+    },
+  };
+  const c = makeClient([jsonRes(tx)]);
+  const r = await fetchTokenDeltas(c, "sig-open-close", MINT);
+  assert.equal(r.deltas.length, 2);
+  assert.equal(r.deltas.find((d) => d.owner === W1).deltaRaw, -30n); // закрытие
+  assert.equal(r.deltas.find((d) => d.owner === W2).deltaRaw, 77n); // создание
 });

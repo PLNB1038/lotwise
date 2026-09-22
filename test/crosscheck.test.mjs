@@ -121,6 +121,104 @@ test("crossCheckEvents: только MULTIPLIER_CHANGE + покрытие ист
   assert.equal(coverage.candlesTo, "2026-06-18");
 });
 
+// --- раунд 4: строгие даты + инварианты фаззера (seed 20260919) ---
+
+const VERDICTS = ["consistent", "mismatch", "suspicious", "inconclusive", "no-price-data"];
+
+test("мусорная effectiveDate — CrossCheckError (батарея дат, включая перекаты Date.parse)", () => {
+  const badDates = [
+    "2026-13-01", "2026-00-10", "2026-06-18T23:59:60Z", "2026-06-18T12:00:00+99:99",
+    "2026-02-30", "2026-06-31", "2027-02-29", "2026-06-18T24:00:00Z",
+    "2026-06-18T12:00:00", "2026-1-1", "", null,
+  ];
+  for (const bad of badDates) {
+    assert.throws(
+      () => crossCheckMultiplierChange(ev(bad, "1", "2"), [{ ts: 0, c: 100 }]),
+      CrossCheckError,
+      `должна отвергаться: ${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+test("канонические форматы дат проходят кросс-чек (анти-перегиб строгого валидатора)", () => {
+  const candles = [
+    { ts: d("2026", "06", "08"), c: 100 },
+    { ts: d("2026", "06", "09"), c: 100 },
+    { ts: d("2026", "06", "10"), c: 50 },
+  ];
+  for (const date of ["2026-06-10", "2026-06-10T00:00:00Z", "2026-06-10T00:00:00.000Z", "2026-06-10T02:00:00+02:00"]) {
+    const r = crossCheckMultiplierChange(ev(date, "1", "2"), candles);
+    assert.equal(r.verdict, "consistent", date); // все записи — один момент: полдень... полночь 06-10 UTC
+  }
+});
+
+test("инвариант: вердикт всегда из {consistent,mismatch,suspicious,inconclusive,no-price-data}", () => {
+  const scenarios = [
+    // consistent: большой ребейз, рынок переоценил
+    [ev("2026-06-10T00:00:00Z", "1", "2"), [
+      { ts: d("2026", "06", "08"), c: 100 }, { ts: d("2026", "06", "09"), c: 100 },
+      { ts: d("2026", "06", "10"), c: 50 }, { ts: d("2026", "06", "11"), c: 51 },
+    ]],
+    // mismatch: рынок не переоценил
+    [ev("2026-06-10T00:00:00Z", "1", "2"), [
+      { ts: d("2026", "06", "08"), c: 100 }, { ts: d("2026", "06", "09"), c: 100 },
+      { ts: d("2026", "06", "10"), c: 95 }, { ts: d("2026", "06", "11"), c: 96 },
+    ]],
+    // suspicious: мелкий дивиденд + грубая аномалия цены
+    [ev("2026-06-18T04:00:00Z", "1.003909240011759", "1.005714560286254"), [
+      { ts: d("2026", "06", "16"), c: 100 }, { ts: d("2026", "06", "17"), c: 100 },
+      { ts: d("2026", "06", "18"), c: 105 }, { ts: d("2026", "06", "19"), c: 105 },
+    ]],
+    // inconclusive: дыра в свечах
+    [ev("2026-05-01T00:15:00Z", "1.0026", "1.0040"), [
+      { ts: d("2026", "04", "14"), c: 100 }, { ts: d("2026", "06", "14"), c: 108.5 },
+    ]],
+    // no-price-data: история не достаёт до события
+    [ev("2025-10-31T23:55:00Z", "1", "1.001"), [
+      { ts: d("2026", "03", "18"), c: 100 }, { ts: d("2026", "03", "19"), c: 100 },
+    ]],
+    // no-price-data: свечей нет вообще
+    [ev("2026-06-10T00:00:00Z", "1", "2"), []],
+  ];
+  const seen = new Set();
+  for (const [e, cs] of scenarios) {
+    const r = crossCheckMultiplierChange(e, cs);
+    assert.ok(VERDICTS.includes(r.verdict), `неизвестный вердикт: ${r.verdict}`);
+    seen.add(r.verdict);
+  }
+  assert.equal(seen.size, VERDICTS.length, "все 5 вердиктов достижимы и покрыты");
+});
+
+test("инвариант: inconclusive ⟺ окно > 3 дней (3 дня — ещё решаемо, 4 — уже нет)", () => {
+  const event = ev("2026-06-11T12:00:00Z", "1", "2"); // полдень 06-11
+  const base = d("2026", "06", "10"); // полночь 06-10
+  const candles = (w) => [
+    { ts: base, c: 100 },             // закрылась 06-11T00:00 — до события
+    { ts: base + w * DAY, c: 50 },    // закрылась через w суток после базы
+  ];
+  const w3 = crossCheckMultiplierChange(event, candles(3));
+  assert.equal(w3.observed.windowDays, 3);
+  assert.notEqual(w3.verdict, "inconclusive");
+  assert.equal(w3.verdict, "consistent");
+  const w4 = crossCheckMultiplierChange(event, candles(4));
+  assert.equal(w4.observed.windowDays, 4);
+  assert.equal(w4.verdict, "inconclusive");
+});
+
+test("инвариант: свеча, закрывшаяся РОВНО в момент события (ts = evTs − DAY), считается before", () => {
+  const evTs = Date.parse("2026-06-12T00:00:00Z") / 1000; // полночь 06-12
+  const event = ev("2026-06-12T00:00:00Z", "1", "2");
+  const candles = [
+    { ts: evTs - DAY, c: 100 }, // close ровно в момент события: цена ещё без ребейза
+    { ts: evTs, c: 50 },        // закрылась 06-13 — первая после
+  ];
+  const r = crossCheckMultiplierChange(event, candles);
+  assert.equal(r.verdict, "consistent"); // 100→50 = ожидаемый ребейз: close до события использован как before
+  assert.equal(r.observed.beforeDate, "2026-06-11");
+  assert.equal(r.observed.afterDate, "2026-06-12");
+  assert.equal(r.observedRatio, 0.5);
+});
+
 // --- клиент GeckoTerminal на фейке ---
 
 function fakeFetch(routes) {
@@ -180,6 +278,14 @@ test("GT: сплошной 429 — PriceError rate-limit после ретрае
   const fetcher = async () => ({ ok: false, status: 429, json: async () => ({}) });
   const gt = new GeckoTerminalClient({ fetcher, sleep: async () => {}, minIntervalMs: 0, maxRetries: 1 });
   await assert.rejects(gt.dailyCandles("X"), (e) => e instanceof PriceError && e.kind === "rate-limit");
+});
+
+test("GT: 404 — сразу PriceError http, без ретраев", async () => {
+  let calls = 0;
+  const fetcher = async () => { calls++; return { ok: false, status: 404, json: async () => ({}) }; };
+  const gt = new GeckoTerminalClient({ fetcher, sleep: async () => {}, minIntervalMs: 0, maxRetries: 2 });
+  await assert.rejects(gt.dailyCandles("X"), (e) => e instanceof PriceError && e.kind === "http" && e.status === 404);
+  assert.equal(calls, 1, "404 пула не транзиентен — ретраить нечего");
 });
 
 // --- маршрут /crosscheck ---

@@ -29,12 +29,20 @@ export class RpcClient {
     this._id = 0;
     this._lastCall = 0;
     this.requestCount = 0;
+    this._queue = Promise.resolve();
   }
 
+  // Выдержка интервала работает только внутри очереди: конкурентные вызовы
+  // (GET /lots из двух вкладок) встают в хвост, иначе все считают wait от
+  // одного _lastCall и уходят залпом. Провал слота не должен отравить хвост.
   async _throttle() {
-    const wait = this._lastCall + this.minIntervalMs - Date.now();
-    if (wait > 0) await this.sleep(wait);
-    this._lastCall = Date.now();
+    const turn = this._queue.then(async () => {
+      const wait = this._lastCall + this.minIntervalMs - Date.now();
+      if (wait > 0) await this.sleep(wait);
+      this._lastCall = Date.now();
+    });
+    this._queue = turn.then(() => {}, () => {});
+    await turn;
   }
 
   async call(method, params) {
@@ -56,7 +64,12 @@ export class RpcClient {
         continue;
       }
       if (res.status === 429) { lastErr = new RpcError("rate-limit", "HTTP 429", { status: 429 }); continue; }
-      if (!res.ok) { lastErr = new RpcError("http", `HTTP ${res.status}`, { status: res.status }); continue; }
+      if (!res.ok) {
+        // прочие 4xx — запрос плох: ретрай бессмыслен и умножает расход квоты впустую
+        if (res.status < 500) throw new RpcError("http", `HTTP ${res.status}`, { status: res.status });
+        lastErr = new RpcError("http", `HTTP ${res.status}`, { status: res.status });
+        continue;
+      }
       let body;
       try {
         body = await res.json();

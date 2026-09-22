@@ -4,6 +4,13 @@
 // On-chain — первичный источник: статус confirmed; «from» при бэкфилле = поле active
 // (лучшая правда цепи о предыдущем значении; промежуточные шаги между наблюдениями
 // из состояния минта невосстановимы — это задокументированное ограничение, не догадка).
+//
+// Инвариант цепочки (раунд 4): событие эмитится ТОЛЬКО если продолжает цепочку от "1".
+// MultiplierTimeline требует базу "1" и непрерывность, иначе createApiServer падает с
+// TimelineError на старте, а запись с ядом уже персистится в журнале → рестарт реплеит
+// → краш снова: вечный boot-loop. Токен, впервые увиденный в середине истории
+// (active="5"), не получает выдуманного 5→X: lastEffective фиксируется, events остаются
+// пустыми, warn на старте serve честно говорит о неполноте. Событие не выдумываем.
 import { validateEvent } from "../schema/events.mjs";
 
 export class OnchainNormalizeError extends Error {
@@ -15,10 +22,19 @@ export class OnchainNormalizeError extends Error {
 
 const DAY = 86400;
 
+// pending "0" — способ эмитента «сбросить» pending (живая фикстура xstocks-spyx-current):
+// трактуем как отсутствующий, иначе журнал эмитит X→0, таймлайн формально валиден,
+// а витрина молча показывает нули. Defense in depth: парсер цепи чинится отдельно.
+const pendingOf = (parsed) =>
+  parsed.pendingMultiplier == null || Number(parsed.pendingMultiplier) === 0
+    ? null
+    : parsed.pendingMultiplier;
+
 const effectiveOf = (parsed, nowMs) => {
   const pendingTs = parsed.pendingEffectiveDate ? Date.parse(parsed.pendingEffectiveDate) : null;
-  return pendingTs !== null && pendingTs <= nowMs && parsed.pendingMultiplier !== null
-    ? parsed.pendingMultiplier
+  const pending = pendingOf(parsed);
+  return pendingTs !== null && pendingTs <= nowMs && pending !== null
+    ? pending
     : parsed.activeMultiplier;
 };
 
@@ -28,9 +44,10 @@ const effectiveOf = (parsed, nowMs) => {
  */
 export function backfillMultiplierEvent(token, parsed, nowMs = Date.now()) {
   if (!parsed.hasExtension) return null; // токен без механизма ребейза — фактов нет, и это факт
-  if (parsed.pendingMultiplier === null || parsed.pendingEffectiveDate === null) return null;
+  const pending = pendingOf(parsed);
+  if (pending === null || parsed.pendingEffectiveDate === null) return null;
   const from = parsed.activeMultiplier;
-  const to = parsed.pendingMultiplier;
+  const to = pending;
   if (from === to) return null; // pending уже равен active — ротация завершена, нового не видно
   const event = {
     type: "MULTIPLIER_CHANGE",
@@ -65,9 +82,14 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   const priorEvents = Array.isArray(entry?.events) ? entry.events : [];
 
   if (entry === null) {
-    const event = parsed.hasExtension && effective !== "1"
+    // Первое наблюдение: бэкфилл имеет смысл, только если СТАРТУЕТ цепочку от "1".
+    // Токен, впервые увиденный mid-history (active="5", pending="6"), раньше эмитил 5→6 —
+    // TimelineError при построении таймлайнов и вечный boot-loop (ядо персистится в
+    // журнале). Не выдумываем: фиксируем lastEffective, events остаются пустыми.
+    const candidate = parsed.hasExtension && effective !== "1"
       ? backfillMultiplierEvent(token, parsed, nowMs)
       : null;
+    const event = candidate !== null && candidate.multiplierFrom === "1" ? candidate : null;
     // entry фиксирует ЭФФЕКТИВНУЮ величину — будущие ротации диффом от неё
     return { event, entry: { lastEffective: effective, observedAt: nowIso, events: event ? [event] : [] } };
   }
@@ -75,6 +97,19 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   if (effective === entry.lastEffective) {
     return { event: null, entry: { lastEffective: entry.lastEffective, observedAt: nowIso, events: priorEvents } };
   }
+
+  // Дифф-событие эмитится, только если ПРОДОЛЖАЕТ записанную цепочку: она пуста и
+  // from === "1", либо последнее событие кончается ровно в from. Иначе — например,
+  // токен впервые увиден после завершённой ротации (lastEffective="5", events=[]):
+  // событие 5→X порвало бы таймлайн при следующем ребейзе. Честно обновляем
+  // lastEffective без события — warn в serve подхватит запись без истории.
+  const chainOk = priorEvents.length === 0
+    ? entry.lastEffective === "1"
+    : priorEvents[priorEvents.length - 1].multiplierTo === entry.lastEffective;
+  if (!chainOk) {
+    return { event: null, entry: { lastEffective: effective, observedAt: nowIso, events: priorEvents } };
+  }
+
   const event = {
     type: "MULTIPLIER_CHANGE",
     mint: token.mint,

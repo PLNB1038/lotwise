@@ -1,6 +1,8 @@
 // Временная шкала множителя: точная целочисленная арифметика поверх
 // канонических MULTIPLIER_CHANGE. Float запрещён: десятичная строка
 // множителя превращается в точную BigInt-дробь.
+import { parseIsoDateMs } from "../schema/isodate.mjs";
+
 export class TimelineError extends Error {
   constructor(msg) {
     super(msg);
@@ -16,6 +18,7 @@ export function decimalToRatio(dec) {
     throw new TimelineError(`not a decimal string: ${JSON.stringify(dec)}`);
   }
   const [intPart, fracPart = ""] = dec.split(".");
+  // кап 30 дробных знаков — ПАРА с schema/events.mjs (MAX_MULTIPLIER_FRACTION_DIGITS)
   if (fracPart.length > 30) throw new TimelineError(`multiplier precision >30 digits unsupported: ${dec}`);
   return {
     num: BigInt(intPart + fracPart),
@@ -28,12 +31,15 @@ export function decimalToRatio(dec) {
  * (любой порядок), проверяет НЕПРЕРЫВНОСТЬ ЦЕПОЧКИ (from[i+1] === to[i])
  * и её отправную точку от 1 — fail-closed: разрыв = ошибка, не догадка.
  */
-// Сравнение дат — только через Date.parse, никогда лексикографически:
+// Сравнение дат — только числом (unix-ms), никогда лексикографически:
 // "2026-06-18T00:00:00.000Z" > "2026-06-18" строково, хотя это тот же момент —
 // калькулятор витрины шлёт date-only, и событие дня Д обязано считаться эффективным.
+// Парсинг — через строгий schema/isodate.mjs, не Date.parse: тот «перекатывает»
+// "2026-02-30" на март и парсит наивное время как локаль хоста — мусорная дата
+// здесь ошибка (TimelineError), а не тихое сравнение с чужого дня.
 const tsOf = (iso) => {
-  const t = Date.parse(String(iso));
-  if (Number.isNaN(t)) {
+  const t = parseIsoDateMs(String(iso));
+  if (t === null) {
     throw new TimelineError(`not a parseable ISO date: ${JSON.stringify(iso)}`);
   }
   return t;
@@ -41,6 +47,10 @@ const tsOf = (iso) => {
 
 export class MultiplierTimeline {
   constructor(events = []) {
+    // Валидация дат ДО сортировки: при одном событии компаратор не вызывается ни разу,
+    // и effectiveDate:null/мусор протекал в steps с at:null — multiplierAt молча
+    // пропускал такой шаг как «базовую линию» и отдавал чужой множитель.
+    for (const e of events) tsOf(e?.effectiveDate);
     const sorted = [...events].sort((a, b) => tsOf(a.effectiveDate) - tsOf(b.effectiveDate));
     let expected = "1";
     this.steps = [{ at: null, multiplier: "1" }]; // базовая линия до первого события

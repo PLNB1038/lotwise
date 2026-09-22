@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isValidEvent } from "../src/schema/events.mjs";
-import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
+import { multiplierHistoryToEvents, bindMintAndValidate, NormalizeError } from "../src/events/normalize-xstocks.mjs";
 import { decimalToRatio, MultiplierTimeline, TimelineError } from "../src/lots/timeline.mjs";
 import { fetchMultiplierHistory } from "../src/issuer/xstocks.mjs";
 
@@ -160,4 +160,178 @@ test("сортировка смешанной точности дат не рв�
 test("мусорная дата в multiplierAt — TimelineError, не молчаливая неправда", () => {
   const tl = new MultiplierTimeline([ev({ multiplierFrom: "1" })]);
   assert.throws(() => tl.multiplierAt("не-дата"), TimelineError);
+});
+
+// ---- раунд 4: строгие даты (schema/isodate.mjs) ----
+
+// Та же батарея мусора, что в test/events.test.mjs (схема), — здесь второй барьер:
+// timeline нельзя строить из мусора даже мимо схемы.
+const garbageDates = [
+  "2026-13-01",                // NaN уже после схемной формы
+  "2026-00-10",
+  "2026-06-18T23:59:60Z",      // leap second
+  "2026-06-18T12:00:00+99:99", // оффсет 99:99
+  "2026-02-30",                // Date.parse перекатывает на 02.03 — множитель с чужого дня
+  "2026-06-31",                // перекат на 01.07
+  "2027-02-29",                // перекат на 01.03
+  "2026-06-18T24:00:00Z",      // перекат на следующий день
+  "2026-06-18T12:00:00",       // наивное время = локаль хоста
+  "2026-06-18T12:00:00.500",   // наивное с долями
+  "2026-1-1",                  // форма
+  "2026-02-29",                // не високосный
+  "2026-06-18T12:60:00Z",
+  "",
+  null,
+];
+
+test("мусорная effectiveDate в событии — TimelineError при построении шкалы (батарея)", () => {
+  for (const bad of garbageDates) {
+    assert.throws(
+      () => new MultiplierTimeline([ev({ effectiveDate: bad, multiplierFrom: "1" })]),
+      TimelineError,
+      `должна отвергаться: ${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+test("мусорная дата в multiplierAt — TimelineError (батарея)", () => {
+  const tl = spyxTimeline();
+  for (const bad of garbageDates) {
+    assert.throws(() => tl.multiplierAt(bad), TimelineError, `должна отвергаться: ${JSON.stringify(bad)}`);
+  }
+});
+
+// АНТИ-регрессия: канонические форматы проходят, эквивалентность моментов сохранена.
+test("канонические форматы дат работают в шкале (анти-перегиб строгого валидатора)", () => {
+  for (const date of ["2026-01-30T23:55:00.000Z", "2026-01-30T23:55:00Z", "2026-01-31T01:55:00+02:00", "2026-01-30T19:55:00-04:00"]) {
+    const tl = new MultiplierTimeline([ev({ effectiveDate: date, multiplierFrom: "1", multiplierTo: "1.2" })]);
+    assert.equal(tl.multiplierAt("2026-01-31"), "1.2", date);
+  }
+});
+
+// ---- раунд 4 (P4): одиночное событие с битой датой — громко, как и при 2+ ----
+
+test("ОДИНОЧНОЕ событие с effectiveDate null — TimelineError, а не тихая «базовая линия»", () => {
+  // до фикса: для 1 элемента компаратор не вызывался → шаг с at:null попадал в steps,
+  // multiplierAt пропускал его как базовую линию — ребейз ×5 терялся молча
+  const e = ev({ effectiveDate: null, multiplierFrom: "1", multiplierTo: "5" });
+  assert.throws(() => new MultiplierTimeline([e]), TimelineError);
+  // а до этого падало громко только при 2+ событиях — несимметрично
+  assert.throws(
+    () => new MultiplierTimeline([e, ev({ effectiveDate: "2026-07-01T00:00:00Z", multiplierFrom: "5", multiplierTo: "6" })]),
+    TimelineError,
+  );
+});
+
+test("ОДИНОЧНОЕ событие с effectiveDate-перекатом («2026-02-30») тоже громкая ошибка", () => {
+  assert.throws(
+    () => new MultiplierTimeline([ev({ effectiveDate: "2026-02-30", multiplierFrom: "1", multiplierTo: "5" })]),
+    TimelineError,
+  );
+});
+
+// ---- раунд 4: инварианты, подтверждённые фаззером (seed 20260919) ----
+
+function permutations(arr) {
+  if (arr.length <= 1) return [arr];
+  const out = [];
+  for (let i = 0; i < arr.length; i++) {
+    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    for (const p of permutations(rest)) out.push([arr[i], ...p]);
+  }
+  return out;
+}
+
+test("инвариант: перемешанная подача событий = та же шкала (все 24 перестановки живой истории)", () => {
+  const base = bindMintAndValidate(multiplierHistoryToEvents(history.nodes, { symbol: "SPYx" }), MINT);
+  const queries = ["2025-10-30", "2025-10-31T23:55:00.000Z", "2026-02-01", "2026-05-01T00:15:00.000Z", "2026-07-01"];
+  const expected = queries.map((q) => new MultiplierTimeline(base).multiplierAt(q));
+  const perms = permutations(base);
+  assert.equal(perms.length, 24); // 4! — покрыты ВСЕ порядки входа, не пара примеров
+  for (const perm of perms) {
+    const tl = new MultiplierTimeline(perm);
+    assert.deepEqual(queries.map((q) => tl.multiplierAt(q)), expected, perm.map((e) => e.effectiveDate).join(" | "));
+  }
+});
+
+test("инвариант: до первого события множитель = 1 (в любом порядке подачи)", () => {
+  const events = bindMintAndValidate(multiplierHistoryToEvents(history.nodes, { symbol: "SPYx" }), MINT);
+  for (const order of [events, [...events].reverse()]) {
+    const tl = new MultiplierTimeline(order);
+    assert.equal(tl.multiplierAt("2025-10-30"), "1");
+    assert.equal(tl.multiplierAt("2025-01-01T00:00:00Z"), "1");
+    assert.equal(tl.multiplierAt("1970-01-01"), "1");
+  }
+});
+
+test("инвариант: эквивалентность форматов — date-only = Z = .000Z = ±HH:MM (один момент, один множитель)", () => {
+  const tl = new MultiplierTimeline([
+    ev({ effectiveDate: "2026-06-18T00:00:00.000Z", multiplierFrom: "1", multiplierTo: "1.5" }),
+  ]);
+  // все запросы — ОДИН и тот же момент: событие уже действует (<=)
+  const sameMoment = [
+    "2026-06-18",
+    "2026-06-18T00:00:00Z",
+    "2026-06-18T00:00:00.000Z",
+    "2026-06-18T05:00:00+05:00",
+    "2026-06-17T21:00:00-03:00",
+  ];
+  for (const q of sameMoment) {
+    assert.equal(tl.multiplierAt(q), "1.5", q);
+  }
+});
+
+test("инвариант реконструкции: whole·den + remainder = qty·num, 0 ≤ remainder < den", () => {
+  const tl = spyxTimeline();
+  for (const qty of [1n, 7n, 999n, 10n ** 9n, 10n ** 15n, 12345678901234567890n]) {
+    for (const date of ["2025-10-30", "2026-02-01", "2026-07-01"]) {
+      const { num, den } = tl.factorAt(date);
+      const { whole, remainder, exact } = tl.scaledQty(qty, date);
+      assert.ok(remainder >= 0n && remainder < den, `remainder вне диапазона: ${qty} @ ${date}`);
+      assert.equal(whole * den + remainder, qty * num, `${qty} @ ${date}`);
+      assert.equal(exact, remainder === 0n);
+    }
+  }
+});
+
+// ---- раунд 4 (P3): нормализатор — сорт по моменту времени, не по строке ----
+
+test("сорт по моменту: смешанная точность внутри секунды больше не переворачивает хронологию", () => {
+  // как отдаёт API — новые сверху. localeCompare ставил ".500Z" ПЕРЕД "Z"
+  // (".", 0x2E, < "Z", 0x5A) → ПОЗЖЕ шёл раньше, хронология перевёрнута
+  const nodes = [
+    { id: "new", multiplier: 1.3, previousMultiplier: 1.1, activationDateTime: "2026-01-01T00:00:00.500Z" }, // момент ПОЗЖЕ
+    { id: "old", multiplier: 1.1, previousMultiplier: 1, activationDateTime: "2026-01-01T00:00:00Z" },        // момент РАНЬШЕ
+  ];
+  const events = multiplierHistoryToEvents(nodes, { symbol: "SPYx" });
+  assert.deepEqual(events.map((e) => e.effectiveDate), [
+    "2026-01-01T00:00:00Z",
+    "2026-01-01T00:00:00.500Z",
+  ]);
+  // цепочка после честного сорта собирается, момент события = момент действия
+  const tl = new MultiplierTimeline(bindMintAndValidate(events, MINT));
+  assert.equal(tl.multiplierAt("2026-01-01T00:00:00Z"), "1.1");
+  assert.equal(tl.multiplierAt("2026-01-01T00:00:00.250Z"), "1.1"); // между событиями
+  assert.equal(tl.multiplierAt("2026-01-01T00:00:00.500Z"), "1.3");
+});
+
+test("непарсируемая activationDateTime — NormalizeError (fail-closed), не тихий порядок", () => {
+  assert.throws(
+    () => multiplierHistoryToEvents([
+      { id: "x", multiplier: 1.2, previousMultiplier: 1.1, activationDateTime: "2026-02-30" }, // перекат-дата
+    ], { symbol: "SPYx" }),
+    NormalizeError,
+  );
+  assert.throws(
+    () => multiplierHistoryToEvents([
+      { id: "y", multiplier: 1.2, previousMultiplier: 1.1, activationDateTime: 0 }, // как в xstocks-spyx-current.json
+    ], { symbol: "SPYx" }),
+    NormalizeError,
+  );
+});
+
+test("кап дробной точности един на уровне схемы и шкалы: 31 знак валит и схему, и decimalToRatio", () => {
+  const m31 = "1." + "1".repeat(31);
+  assert.equal(isValidEvent(ev({ multiplierTo: m31 })), false);
+  assert.throws(() => decimalToRatio(m31), TimelineError);
 });

@@ -83,7 +83,16 @@ test("journal: ротация 5 -> 7 по новому pending ловится д
     pendingEffectiveDate: "2026-09-15T00:00:00.000Z",
     authority: null,
   };
-  const { event, entry } = journalTransition(t, rotated, { lastEffective: "5", observedAt: "2026-09-01T00:00:00Z" }, NOW);
+  // запись с НАСТОЯЩЕЙ цепочкой 1 -> 5: дифф 5 -> 7 продолжает её — эмитится
+  const prior = {
+    lastEffective: "5", observedAt: "2026-09-01T00:00:00Z",
+    events: [{
+      type: "MULTIPLIER_CHANGE", mint: t.mint, effectiveDate: "2026-06-10T04:30:00.000Z",
+      status: "confirmed", sources: ["solana:getAccountInfo"],
+      multiplierFrom: "1", multiplierTo: "5", reason: "On-chain rebase",
+    }],
+  };
+  const { event, entry } = journalTransition(t, rotated, prior, NOW);
   assert.ok(event);
   assert.equal(event.multiplierFrom, "5");
   assert.equal(event.multiplierTo, "7");
@@ -143,7 +152,7 @@ test("битая дата в pending отклоняется валидацией
 
 // ---- раунд-2 (P0): события журнала переживают рестарт процесса ----
 
-import { planJournalStep } from "../src/events/journal.mjs";
+import { planJournalStep, issuerChainComplete } from "../src/events/journal.mjs";
 
 test("P0-рестарт: реплей entry.events вместо потери (множитель не откатывается к 1)", async () => {
   const t = await tokenOf("SPACEX");
@@ -215,4 +224,172 @@ test("P0-интеграция: /summary после рестарта видит S
   } finally {
     server.close();
   }
+});
+
+// ---- раунд-4 (P1): вечный boot-loop — события только в продолжение цепочки от "1" ----
+
+// триггер A: токен впервые наблюдается в середине истории (active "5" запечён, pending в будущем)
+const midHistoryMint = {
+  hasExtension: true, decimals: 8,
+  activeMultiplier: "5", pendingMultiplier: "6",
+  pendingEffectiveDate: "2026-12-01T00:00:00.000Z",
+  authority: null,
+};
+
+test("триггер A: первое наблюдение mid-history — событие не выдумывается (event=null, events=[])", async () => {
+  const t = await tokenOf("SPACEX");
+  // раньше здесь эмитился 5->6: TimelineError в createApiServer, ядо персистился — вечный boot-loop
+  const { event, entry } = journalTransition(t, midHistoryMint, null, NOW);
+  assert.equal(event, null);
+  assert.equal(entry.lastEffective, "5"); // lastEffective обновлён
+  assert.deepEqual(entry.events, []);
+});
+
+test("триггер A, день активации: дифф при пустой истории не эмитится — второй 5->6 не появляется", async () => {
+  const t = await tokenOf("SPACEX");
+  const boot = journalTransition(t, midHistoryMint, null, NOW); // наблюдение до активации
+  const activated = { ...midHistoryMint, pendingEffectiveDate: "2026-09-10T00:00:00.000Z" }; // pending уже в силе
+  const { event, entry } = journalTransition(t, activated, boot.entry, NOW);
+  assert.equal(event, null); // from="5" при events=[] — тот же класс разрыва цепочки
+  assert.equal(entry.lastEffective, "6");
+  assert.deepEqual(entry.events, []); // дубля старого 5->6 нет — событий ноль вообще
+  // warn-условие serve.mjs честно стреляет на такой записи
+  assert.ok(entry.lastEffective !== "1" && entry.events.length === 0);
+});
+
+test("триггер B: увидели после завершённой ротации — следующая ротация не эмитит from='5'", async () => {
+  const t = await tokenOf("SPACEX");
+  const completed = {
+    hasExtension: true, decimals: 8,
+    activeMultiplier: "5", pendingMultiplier: null,
+    pendingEffectiveDate: null, authority: null,
+  };
+  const boot = journalTransition(t, completed, null, NOW);
+  assert.equal(boot.event, null);
+  assert.equal(boot.entry.lastEffective, "5");
+  assert.deepEqual(boot.entry.events, []);
+  // следующий корп-акт: раньше дифф 5->6 рвал таймлайн; теперь только lastEffective
+  const rotated = { ...completed, pendingMultiplier: "6", pendingEffectiveDate: "2026-09-10T00:00:00.000Z" };
+  const step = journalTransition(t, rotated, boot.entry, NOW);
+  assert.equal(step.event, null);
+  assert.equal(step.entry.lastEffective, "6");
+  assert.deepEqual(step.entry.events, []);
+  assert.ok(step.entry.lastEffective !== "1" && step.entry.events.length === 0); // warn-условие
+});
+
+test("несогласованный журнал (последнее событие не кончается в lastEffective) — дифф не эмитится", async () => {
+  const t = await tokenOf("SPACEX");
+  const prior = {
+    lastEffective: "5", observedAt: "2026-09-01T00:00:00Z",
+    events: [{
+      type: "MULTIPLIER_CHANGE", mint: t.mint, effectiveDate: "2026-06-10T04:30:00.000Z",
+      status: "confirmed", sources: ["journal:hand-edited"],
+      multiplierFrom: "1", multiplierTo: "7", reason: "On-chain rebase",
+    }],
+  };
+  const rotated = {
+    hasExtension: true, decimals: 8,
+    activeMultiplier: "5", pendingMultiplier: "6",
+    pendingEffectiveDate: "2026-09-15T00:00:00.000Z", authority: null,
+  };
+  const { event, entry } = journalTransition(t, rotated, prior, NOW);
+  assert.equal(event, null); // from="5", а цепочка кончается в "7" — пушить нельзя
+  assert.equal(entry.lastEffective, "6");
+  assert.equal(entry.events.length, 1); // история не тронута
+});
+
+test("полный бут на кривом минте: события пусты, таймлайн строится — boot-loop исключён", async () => {
+  const t = await tokenOf("SPACEX");
+  const boot1 = planJournalStep(t, null, midHistoryMint, NOW);
+  assert.equal(boot1.event, null);
+  const activated = { ...midHistoryMint, pendingEffectiveDate: "2026-09-10T00:00:00.000Z" };
+  const boot2 = planJournalStep(t, boot1.entry, activated, NOW + 60_000);
+  assert.equal(boot2.event, null);
+  const fed = [...boot2.replay, ...(boot2.event ? [boot2.event] : [])]; // как пушит serve.mjs
+  const tl = new MultiplierTimeline(fed); // раньше бросал TimelineError: chain discontinuity
+  assert.equal(tl.multiplierAt(new Date(NOW).toISOString()), "1");
+});
+
+test("нормальное продолжение цепочки эмитится как раньше (позитивный контроль гейта)", async () => {
+  const t = await tokenOf("SPACEX");
+  const boot1 = planJournalStep(t, null, fixture("onchain-spacex-mint.json"), NOW); // 1 -> 5
+  const rotated = {
+    hasExtension: true, decimals: 8,
+    activeMultiplier: "5", pendingMultiplier: "7",
+    pendingEffectiveDate: "2026-09-15T00:00:00.000Z", authority: null,
+  };
+  const boot2 = planJournalStep(t, boot1.entry, rotated, NOW);
+  assert.ok(boot2.event); // priorEvents кончаются в "5" === from — продолжение
+  assert.equal(boot2.event.multiplierTo, "7");
+});
+
+// ---- раунд-4 (P1): pending "0" из цепи — способ эмитента «сбросить» pending ----
+
+const zeroPendingMint = {
+  hasExtension: true, decimals: 8,
+  activeMultiplier: "5", pendingMultiplier: "0",
+  pendingEffectiveDate: "2026-01-01T00:00:00.000Z", // дата прошедшая — раньше "0" считался бы эффективным
+  authority: null,
+};
+
+test("pending '0' трактуется как отсутствующий: effective = active, не '0'", async () => {
+  const t = await tokenOf("SPACEX");
+  const { event, entry } = journalTransition(t, zeroPendingMint, null, NOW);
+  assert.equal(entry.lastEffective, "5"); // не "0": журнал не эмитит 5->0, витрина не показывает нули
+  assert.equal(event, null);
+  assert.deepEqual(entry.events, []);
+});
+
+test("pending '0': бэкфилл-событие не строится (5->0 не попадёт в журнал)", async () => {
+  const t = await tokenOf("SPACEX");
+  assert.equal(backfillMultiplierEvent(t, zeroPendingMint, NOW), null);
+});
+
+// ---- раунд-4 (P1): v1-запись + недоступная цепь — честный warn, не тихий множитель 1 ----
+
+test("v1-запись + недоступная цепь: unavailableV1=true — витрина не молчит про множитель 1", async () => {
+  const t = await tokenOf("SPACEX");
+  const step = planJournalStep(t, { lastEffective: "5", observedAt: "2026-09-19T03:50:00Z" }, null, NOW);
+  assert.equal(step.chain, "unavailable");
+  assert.equal(step.entry, null);
+  assert.deepEqual(step.replay, []);
+  assert.equal(step.unavailableV1, true); // сигнал для warn в serve.mjs
+  // v1 с множителем "1" — лжи нет, warn не нужен
+  const trivial = planJournalStep(t, { lastEffective: "1", observedAt: "2026-09-19T03:50:00Z" }, null, NOW);
+  assert.equal(trivial.unavailableV1, false);
+  // v2-запись реплеится из кэша — флаг не стреляет
+  const boot1 = planJournalStep(t, null, fixture("onchain-spacex-mint.json"), NOW);
+  const down = planJournalStep(t, boot1.entry, null, NOW + 60_000);
+  assert.equal(down.unavailableV1, false);
+  assert.equal(down.replay.length, 1);
+  // и на живой цепи флаг не стреляет
+  const ok = planJournalStep(t, boot1.entry, fixture("onchain-spacex-mint.json"), NOW + 60_000);
+  assert.equal(ok.unavailableV1, false);
+});
+
+// ---- раунд-4 (P2): полнота цепочки истории эмитента (пагинация serve) ----
+
+test("issuerChainComplete: цепочка от '1' полна, порядок узлов не важен", () => {
+  const nodes = [
+    { previousMultiplier: "1.005", multiplier: "1.01", activationDateTime: "2026-06-01T00:00:00Z" },
+    { previousMultiplier: "1", multiplier: "1.005", activationDateTime: "2026-01-01T00:00:00Z" },
+  ];
+  assert.deepEqual(issuerChainComplete(nodes), { complete: true, reason: null });
+});
+
+test("issuerChainComplete: старейший узел не от '1' — история неполна (обрезанная пагинация)", () => {
+  const nodes = [
+    { previousMultiplier: "1.005", multiplier: "1.01", activationDateTime: "2026-06-01T00:00:00Z" },
+    { previousMultiplier: "1.002", multiplier: "1.005", activationDateTime: "2026-01-01T00:00:00Z" },
+  ];
+  const r = issuerChainComplete(nodes);
+  assert.equal(r.complete, false);
+  assert.match(r.reason, /не от "1"/);
+});
+
+test("issuerChainComplete: пустая история полна, дата-мусор — неполна (fail-closed)", () => {
+  assert.deepEqual(issuerChainComplete([]), { complete: true, reason: null });
+  const bad = issuerChainComplete([{ previousMultiplier: "1", multiplier: "2", activationDateTime: "not-a-date" }]);
+  assert.equal(bad.complete, false);
+  assert.match(bad.reason, /непарсируемая дата/);
 });

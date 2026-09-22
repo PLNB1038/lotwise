@@ -26,12 +26,22 @@ export class GeckoTerminalClient {
     this.maxRetries = maxRetries;
     this._lastCall = 0;
     this.requestCount = 0;
+    this._queue = Promise.resolve();
   }
 
+  // Выдержка интервала работает только внутри очереди (порт из RpcClient,
+  // раунд 5): конкурентные вызовы (параллельные GET /crosscheck по разным
+  // символам) встают в хвост, иначе все считают wait от одного _lastCall
+  // и уходят залпом → 429 → ретраи усиливают шторм. Провал слота не должен
+  // отравить хвост.
   async _throttle() {
-    const wait = this._lastCall + this.minIntervalMs - Date.now();
-    if (wait > 0) await this.sleep(wait);
-    this._lastCall = Date.now();
+    const turn = this._queue.then(async () => {
+      const wait = this._lastCall + this.minIntervalMs - Date.now();
+      if (wait > 0) await this.sleep(wait);
+      this._lastCall = Date.now();
+    });
+    this._queue = turn.then(() => {}, () => {});
+    await turn;
   }
 
   async _get(path) {
@@ -50,7 +60,12 @@ export class GeckoTerminalClient {
         continue;
       }
       if (res.status === 429) { lastErr = new PriceError("rate-limit", "HTTP 429", { status: 429 }); continue; }
-      if (!res.ok) { lastErr = new PriceError("http", `HTTP ${res.status}`, { status: res.status }); continue; }
+      if (!res.ok) {
+        // прочие 4xx (404 пула, 403) — не транзиентность: сразу ошибка, без ретраев
+        if (res.status < 500) throw new PriceError("http", `HTTP ${res.status}`, { status: res.status });
+        lastErr = new PriceError("http", `HTTP ${res.status}`, { status: res.status });
+        continue;
+      }
       try {
         return await res.json();
       } catch (err) {

@@ -1,8 +1,9 @@
 // Пересборка data/tokens.json из верифицированного реестра StockBasis.
 // Фактические данные (публичные адреса минтов) переносим, код — нет.
 // Запуск из корня репо: node scripts/build-registry.mjs
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { atomicWriteJson } from "../src/fs/atomic.mjs";
 
 const SRC = path.resolve("../stocklana-pnl/data/stocks.json");
 const DST = path.resolve("data/tokens.json");
@@ -33,6 +34,9 @@ tokens.sort((a, b) =>
 );
 
 mkdirSync(path.dirname(DST), { recursive: true });
-writeFileSync(DST, JSON.stringify(tokens, null, 1) + "\n");
+// Атомарная запись (раунд 6, LW2_tokens_json_write_non_atomic): усечённый tokens.json
+// после обрыва записи ронял сервис ЦЕЛИКОМ на старте — tmp+fsync+rename оставляет на
+// диске всегда целую версию (старую или новую), пустого окна нет.
+atomicWriteJson(DST, tokens);
 const byIssuer = tokens.reduce((acc, t) => ((acc[t.issuer] = (acc[t.issuer] ?? 0) + 1), acc), {});
 console.log(`tokens.json: ${tokens.length} токенов`, byIssuer);
