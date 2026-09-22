@@ -20,7 +20,7 @@ if (!Number.isInteger(maxTxs) || maxTxs <= 0) {
   process.exit(1);
 }
 
-// Реестр: усечённый data/tokens.json (обрыв в окне записи build-registry/enrich-decimals)
+// Реестр: усечённый data/tokens.json (обрыв в окне записи enrich-decimals)
 // раньше ронял процесс ЦЕЛИКОМ — RegistryError на top-level без catch → unhandled
 // rejection, ни деградированного режима, ни диагностики класса «повреждён» (раунд 6,
 // LW2_tokens_json_write_non_atomic). Паттерн журнала: повреждение — явное состояние,

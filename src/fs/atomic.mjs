@@ -1,7 +1,7 @@
 // Общие гарантии файлов данных: атомарная запись и сохранение улики повреждённого
 // файла (раунд 6). Выделено из журнала (saveJournalAtomic раунда 5) после находки
 // LW2_tokens_json_write_non_atomic: тот же класс обрыва записи, что у журнала, у
-// data/tokens.json ронял сервис ЦЕЛИКОМ — а оба его писателя (build-registry,
+// data/tokens.json ронял сервис ЦЕЛИКОМ — а писатели реестра (
 // enrich-decimals) писали прямым writeFileSync поверх живого файла.
 import {
   openSync, writeSync, closeSync, fsyncSync, renameSync, unlinkSync, copyFileSync,

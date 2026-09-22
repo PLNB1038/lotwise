@@ -34,7 +34,7 @@ export async function loadRegistry(path = "data/tokens.json") {
 }
 
 // Бут с деградацией вместо смерти процесса (раунд 6, LW2_tokens_json_write_non_atomic).
-// Усечённый data/tokens.json (обрыв в окне записи build-registry/enrich-decimals, диск)
+// Усечённый data/tokens.json (обрыв в окне записи enrich-decimals, диск)
 // вылетал RegistryError на top-level serve.mjs → unhandled rejection: процесс не
 // поднимался вообще, деградированного режима не существовало, класс «повреждён» не
 // различался (в отличие от журнала, где тот же класс чинился в раунде 5).
