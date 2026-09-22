@@ -98,7 +98,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-411+ tests, all green (see Testing below) as of 2026-09-22 (plain `node:test`, no fixtures or mocks for the core paths).
+476 tests, all green (see Testing below) (plain `node:test`, no fixtures or mocks for the core paths).
 
 ## Status
 
