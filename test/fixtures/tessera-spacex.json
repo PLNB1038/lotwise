@@ -1,0 +1,45 @@
+{
+  "name": "T-SpaceX",
+  "symbol": "tSpaceX",
+  "description": "T-SpaceX represents a loan participation right which provides economic exposure to SpaceX and is redeemable following divestment of the underlying exposure. This is a loan product, not a security - token holders have no ownership, voting, or dividend rights in SpaceX. By owning and using this token, you accept and agree to be bound by the Terms and Conditions available at https://terms.tessera.pe",
+  "image": "https://cdn.tesseralab.co/tessera/tokenicon_T-SpaceX.svg",
+  "external_url": "https://www.tessera.pe",
+  "attributes": [
+    {
+      "trait_type": "Product Type",
+      "value": "Stablecoin Loan Token"
+    },
+    {
+      "trait_type": "Underlying Exposure",
+      "value": "SpaceX"
+    },
+    {
+      "trait_type": "Asset Class",
+      "value": "Private Equity Exposure"
+    },
+    {
+      "trait_type": "Sector",
+      "value": "Aerospace & Space Technology"
+    },
+    {
+      "trait_type": "Loan Recipient",
+      "value": "Tessera Issuer Inc or Subsidiaries"
+    },
+    {
+      "trait_type": "Exposure Holder",
+      "value": "Cayman SPC Segregated Portfolio"
+    },
+    {
+      "trait_type": "Proof of Reserve",
+      "value": "Chainlink PoR"
+    },
+    {
+      "trait_type": "Redemption Trigger",
+      "value": "Divestment of Underlying Exposure"
+    },
+    {
+      "trait_type": "Terms and Conditions",
+      "value": "https://terms.tessera.pe"
+    }
+  ]
+}

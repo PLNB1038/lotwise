@@ -17,8 +17,10 @@
 //                      (как в fetchCurrentMultiplier, сеть Solana);
 //   prestocks        — метаданные /metadata/<symbol>.json: symbol в payload совпадает с
 //                      реестровым регистронезависимо (проверку делает сам fetchTokenMetadata);
-//   tessera          — cdn-метаданные cdn.tesseralab.co/tessera/<символ-в-нижнем>.json
-//                      существуют и парсятся (клиента в src/issuer нет — GET в том же стиле);
+//   tessera          — cdn-метаданные cdn.tesseralab.co/tessera/<символ-в-нижнем>.json:
+//                      symbol в payload сверяется с реестровым регистронезависимо по
+//                      буквенно-цифровому остову (T-SpaceX vs tSpaceX — сверку делает
+//                      сам fetchTokenMetadata из src/issuer/tessera.mjs);
 //   backpack         — публичного API нет: статус skipped/no-source, клиент НЕ выдумывается.
 //
 // Осознанные решения:
@@ -35,14 +37,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { fetchCurrentMultiplier, IssuerError } from "../src/issuer/xstocks.mjs";
-import { fetchTokenMetadata } from "../src/issuer/prestocks.mjs";
+import { fetchTokenMetadata as fetchPrestocksMetadata } from "../src/issuer/prestocks.mjs";
+import { fetchTokenMetadata as fetchTesseraMetadata } from "../src/issuer/tessera.mjs";
 
 const XSTOCKS_BASE = "https://api.xstocks.fi/api/v2/public/assets";
 const PRESTOCKS_BASE = "https://prestocks.com/metadata";
 const TESSERA_BASE = "https://cdn.tesseralab.co/tessera";
-// Как в prestocks-клиенте: URL строится из символа — пускаем только «безопасные»
-// символы, без ../ и прочего мусора.
-const SYMBOL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const DEFAULT_THROTTLE_MS = 1500;
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,21 +56,8 @@ const USAGE = `использование: node scripts/check-issuers.mjs [фл�
   -h, --help            эта справка
 Коды выхода: 0 — подтверждённых расхождений нет, 1 — есть fail, 2 — ошибка запуска/чтения.`;
 
-// GET+JSON в стиле клиентов src/issuer/* (tessera-клиента нет, ошибки — те же классы).
-async function getJson(url, fetcher) {
-  let res;
-  try {
-    res = await fetcher(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; Lotwise/0.1)" } });
-  } catch (err) {
-    throw new IssuerError(`network: ${err.message}`);
-  }
-  if (!res.ok) throw new IssuerError(`HTTP ${res.status} for ${url}`, { status: res.status });
-  try {
-    return await res.json();
-  } catch (err) {
-    throw new IssuerError(`bad JSON from ${url}: ${err.message}`);
-  }
-}
+// GET+JSON удалён: tessera теперь проверяется клиентом src/issuer/tessera.mjs,
+// у всех трёх источников — свои клиенты с одинаковыми классами ошибок.
 
 // URL-строители зеркалят клиентов — для отчёта (какой эндпоинт проверялся).
 const xstocksMultiplierUrl = (symbol, network) =>
@@ -98,15 +85,12 @@ export async function checkToken(token, { fetcher = fetch, network = "Solana" } 
       }
       case "prestocks": {
         const url = prestocksMetadataUrl(token.symbol);
-        await fetchTokenMetadata(token.symbol, { fetcher }); // сверку symbol делает клиент
+        await fetchPrestocksMetadata(token.symbol, { fetcher }); // сверку symbol делает клиент
         return { ...base, status: "ok", reason: null, url };
       }
       case "tessera": {
-        if (typeof token.symbol !== "string" || !SYMBOL_RE.test(token.symbol)) {
-          throw new IssuerError(`bad symbol: ${JSON.stringify(token.symbol)}`);
-        }
         const url = tesseraMetadataUrl(token.symbol);
-        await getJson(url, fetcher); // файл существует и парсится — этого контракт и требует
+        await fetchTesseraMetadata(token.symbol, { fetcher }); // сверку symbol делает клиент
         return { ...base, status: "ok", reason: null, url };
       }
       case "backpack":
