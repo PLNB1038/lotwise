@@ -9,8 +9,9 @@ import { buildWalletReport } from "../wallet/report.mjs";
 import { crossCheckEvents } from "../events/crosscheck.mjs";
 import { isValidIsoDate, parseIsoDateMs } from "../schema/isodate.mjs";
 import { renderPage } from "../ui/page.mjs";
+import { createRateLimiter } from "./ratelimit.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false }) {
   // индексы собираются один раз; при изменении данных сервер пересоздаётся (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -50,6 +51,29 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     const payload = JSON.stringify(body);
     res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), ...extra });
     res.end(payload);
+  };
+
+  // Дорогие эндпоинты (/lots, /accruals — скан кошелька; /onchain, /crosscheck —
+  // RPC/цены) ограничены на клиентский ключ. rateLimits: null|false — лимиты
+  // выключены (локальные эксперименты); дефолт включён: демка публична, а квота
+  // RPC конечна. Ключ = первый X-Forwarded-For ТОЛЬКО при trustProxy (за funnel,
+  // который и ставит заголовок; прямое подключение с поддельным XFF не должно
+  // плодить себе корзины) — иначе адрес сокета.
+  const scanLimiter = rateLimits ? createRateLimiter(rateLimits.scan) : null;
+  const rpcLimiter = rateLimits ? createRateLimiter(rateLimits.rpc) : null;
+  const clientKey = (req) => {
+    const xff = req.headers["x-forwarded-for"];
+    if (trustProxy && typeof xff === "string" && xff.trim() !== "") return xff.split(",")[0].trim();
+    return req.socket?.remoteAddress ?? "unknown";
+  };
+  // возвращает true, если запросу разрешён дорогой I/O; иначе сам отвечает 429
+  const allow = (limiter, req, res) => {
+    if (!limiter) return true;
+    const { allowed, retryAfterMs } = limiter.check(clientKey(req));
+    if (allowed) return true;
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    json(res, 429, { error: `rate limit exceeded, retry after ${retryAfterSec}s` }, { "Retry-After": String(retryAfterSec) });
+    return false;
   };
 
   // Список маршрутов для честного 404: одна константа, два потребителя (гвард «//x»
@@ -127,6 +151,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // и давать 503 вместо 400 при бросающем ридере
       if (!validQueryDate(date)) return json(res, 400, { error: "date must be ISO-8601 (YYYY-MM-DD, or with time + timezone)" });
       if (!onchainReader) return json(res, 503, { error: "on-chain reader not configured" });
+      if (!allow(rpcLimiter, req, res)) return;
       let parsed;
       try {
         parsed = await onchainReader(mint);
@@ -156,6 +181,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
+      if (!allow(scanLimiter, req, res)) return;
       let scan;
       try {
         scan = await walletScanner(address);
@@ -199,6 +225,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
+      if (!allow(scanLimiter, req, res)) return;
       let scan;
       try {
         scan = await walletScanner(address);
@@ -244,6 +271,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       if (!priceProvider) return json(res, 503, { error: "price provider not configured" });
+      if (!allow(rpcLimiter, req, res)) return;
       let pool = null;
       let candles = [];
       try {

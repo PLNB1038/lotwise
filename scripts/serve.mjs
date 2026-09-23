@@ -235,10 +235,22 @@ const priceProvider = {
   candles: (poolAddress) => candlesCached(poolAddress, () => gt.dailyCandles(poolAddress)),
 };
 
+// Rate limits дорогих эндпоинтов на клиентский IP (см. src/api/ratelimit.mjs):
+// демка публична через funnel, квота RPC конечна; XFF доверяем — единственный
+// публичный путь к порту это funnel, прямые коннекты бывают только из tailnet
+const envPositiveInt = (name, fallback) => {
+  const v = Number(process.env[name]);
+  return Number.isInteger(v) && v > 0 ? v : fallback;
+};
+const rateLimits = {
+  scan: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12) }, // /lots, /accruals
+  rpc: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_RPC_PER_MIN", 60) }, // /onchain, /crosscheck
+};
+
 let server;
 try {
   server = await createApiServer({
-    registry, events, port, host, onchainReader, walletScanner, priceProvider,
+    registry, events, port, host, onchainReader, walletScanner, priceProvider, rateLimits, trustProxy: true,
     journalStats: {
       replayed: journalReplayed,
       unavailable: journalUnavailable,
@@ -254,4 +266,5 @@ try {
 console.log(`\n[serve] Lotwise API: http://127.0.0.1:${server.address().port}`);
 console.log(`[serve] витрина: http://127.0.0.1:${server.address().port}/`);
 console.log(`[serve] токенов: ${registry.length}, событий: ${events.length}, on-chain RPC: ${rpcUrl}`);
+console.log(`[serve] rate limits (на IP): ${rateLimits.scan.max}/мин сканов кошелька, ${rateLimits.rpc.max}/мин on-chain/цен (env: RATE_LIMIT_SCAN_PER_MIN, RATE_LIMIT_RPC_PER_MIN)`);
 console.log(`[serve] попробуй: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);
