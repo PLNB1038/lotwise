@@ -191,8 +191,8 @@ function renderStats(h, tokens) {
   var issuers = {};
   tokens.forEach(function (t) { issuers[t.issuer] = true; });
   el('stats').innerHTML =
-    '<div class="stat"><b>' + h.tokens + '</b><i>tokens tracked</i></div>' +
-    '<div class="stat"><b>' + h.events + '</b><i>events normalized</i></div>' +
+    '<div class="stat"><b>' + esc(h.tokens) + '</b><i>tokens tracked</i></div>' +
+    '<div class="stat"><b>' + esc(h.events) + '</b><i>events normalized</i></div>' +
     '<div class="stat"><b>' + Object.keys(issuers).length + '</b><i>issuers</i></div>' +
     '<div class="stat"><b>fail-closed</b><i>reconcile policy</i></div>';
   // RPC мог лежать на старте: journal.unavailable — токены, не прочитанные из цепи,
@@ -449,7 +449,9 @@ function calc() {
       el('calc-out').innerHTML =
         '<dt>raw (base units)</dt><dd>' + raw.toString() + '</dd>' +
         '<dt>multiplier at ' + esc(m.date.slice(0, 10)) + '</dt><dd>' + esc(m.multiplier) + '</dd>' +
-        '<dt>adjusted (base units)</dt><dd>' + s.whole + (s.exact ? '' : ' + ' + s.remainder + '/' + s.den) + '</dd>' +
+        // числовые-по-контракту поля тоже эскейпим (ROUND7 №9): строка в них —
+        // мимо контракта, но silent stored-XSS дороже одного вызова esc()
+        '<dt>adjusted (base units)</dt><dd>' + esc(s.whole) + (s.exact ? '' : ' + ' + esc(s.remainder) + '/' + esc(s.den)) + '</dd>' +
         '<dt>remainder policy</dt><dd>' + dust + '</dd>' +
         (truncated ? '<dt>input precision</dt><dd class="err">amount exceeds ' + t.decimals + ' token decimals — truncated to base units</dd>' : '');
     })
@@ -509,7 +511,7 @@ function renderWallet(rep) {
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
-    '<dt>signatures scanned</dt><dd>' + c.signatures + ' (' + c.fetched + ' fetched, ' + c.skipped + ' skipped)</dd>' +
+    '<dt>signatures scanned</dt><dd>' + esc(c.signatures) + ' (' + esc(c.fetched) + ' fetched, ' + esc(c.skipped) + ' skipped)</dd>' +
     '<dt>scan window</dt><dd>' + (rep.truncated ? 'truncated at cap — older history not scanned' : 'full history') + '</dd>' +
     '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' +
       (rep.complete ? 'complete' : 'has gaps — lots may miss an opening balance') +
@@ -537,7 +539,7 @@ function renderWallet(rep) {
           '<dt>multiplier now</dt><dd>' + (t.excluded
             ? '<span class="err">excluded — ' + esc(t.excludedReason || 'timeline error') +
               ' (raw shown as stored; adjusted not computed)</span>'
-            : esc(t.multiplier.now) + ' <span class="note">(' + t.multiplier.events + ' events)</span>') + '</dd>' +
+            : esc(t.multiplier.now) + ' <span class="note">(' + esc(t.multiplier.events) + ' events)</span>') + '</dd>' +
           (noAdjusted
             ? '<dt>adjusted</dt><dd><span class="err">adjusted — not computed' +
               (t.excludedReason ? ' (' + esc(t.excludedReason) + ')' : '') + '</span></dd>'

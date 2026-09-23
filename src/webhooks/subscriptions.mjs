@@ -24,7 +24,7 @@
 // — попытка не удалась. Тело и подпись считаются ОДИН РАЗ до попыток: все ретраи
 // несут байт-в-байт тот же payload (иначе получатель не смог бы сверить подпись
 // повторно, а идемпотентность по deliveryId потеряла бы смысл).
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import { atomicWriteJson } from "../fs/atomic.mjs";
@@ -233,12 +233,33 @@ function eventContext(event) {
   return { symbol: event.symbol ?? event.newSymbol ?? event.oldSymbol, mint: event.mint };
 }
 
+// Детерминированный id доставки (ROUND7 №7): sha256(подписка × канонический JSON
+// события). Прогон доставки по тому же файлу событий mint'ит ТОТ ЖЕ
+// X-Lotwise-Delivery — получатель дедупит между прогонами, а не только внутри
+// ретраев одной доставки (раньше каждый прогон = randomUUID = «новое» событие).
+// sentAt в id НЕ входит (оно меняется между прогонами); идентичность = пара
+// (подписка, событие) с канонизацией ключей — порядок полей JSON не влияет.
+function canonicalJson(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(v[k])}`).join(",")}}`;
+}
+
+function deterministicDeliveryId(sub, event) {
+  const key = `${String(sub.id ?? sub.url)}|${canonicalJson(event)}`;
+  return `whd_${createHash("sha256").update(key).digest("hex").slice(0, 32)}`;
+}
+
 /**
  * Доставить одно событие в одну подписку. POST JSON-конверта
  * {deliveryId, sentAt, event}; подпись HMAC-SHA256(secret, body) — точь-в-точь
  * по байтам отправленного тела. До MAX_ATTEMPTS попыток с backoff BACKOFF_MS;
- * успех = 2xx, остальное (не-2xx, сетевой отказ, таймаут) — попытка не удалась.
- * Сеть и таймеры инжектируемые: тесты ходят мок-fetcher'ом и mock-sleep без пауз.
+ * успех = 2xx, остальное (не-2xx, сетевой отказ, таймаут, 3xx — redirect:error)
+ * — попытка не удалась. Сеть и таймеры инжектируемые: тесты ходят мок-fetcher'ом
+ * и mock-sleep без пауз.
+ * Идемпотентность: deliveryId по умолчанию ДЕТЕРМИНИРОВАН парой (подписка,
+ * событие) — повторный прогон доставки даёт получателю уже знакомый id; явный
+ * opts.deliveryId побеждает (единичные доставки с наружным идентификатором).
  * @param {object} sub — валидная подписка (url, secret)
  * @param {object} event — валидное каноническое событие (schema/events.mjs)
  * @param {{fetcher?: Function, sleep?: Function, timeoutMs?: number, deliveryId?: string, nowMs?: number}} [opts]
@@ -248,16 +269,17 @@ function eventContext(event) {
 export async function deliverWebhook(
   sub,
   event,
-  { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, deliveryId = randomUUID(), nowMs = Date.now() } = {},
+  { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, deliveryId, nowMs = Date.now() } = {},
 ) {
+  const id = deliveryId ?? deterministicDeliveryId(sub, event);
   // Конверт и подпись фиксируются ДО попыток: все ретраи несут тот же payload
   // и ту же подпись (получатель сверяет подпись на каждый повтор).
-  const body = JSON.stringify({ deliveryId, sentAt: new Date(nowMs).toISOString(), event });
+  const body = JSON.stringify({ deliveryId: id, sentAt: new Date(nowMs).toISOString(), event });
   const signature = `sha256=${createHmac("sha256", sub.secret).update(body).digest("hex")}`;
   const headers = {
     "content-type": "application/json",
     "x-lotwise-event": String(event.type),
-    "x-lotwise-delivery": deliveryId,
+    "x-lotwise-delivery": id,
     "x-lotwise-signature": signature,
   };
 
@@ -266,8 +288,11 @@ export async function deliverWebhook(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       // AbortSignal.timeout — один таймаут на попытку (не на серию): зависший
-      // приёмник не съедает оставшиеся попытки.
-      const res = await fetcher(sub.url, { method: "POST", headers, body, signal: AbortSignal.timeout(timeoutMs) });
+      // приёмник не съедает оставшиеся попытки. redirect:"error" (ROUND7 №5):
+      // дефолтное "follow" превращало 302 в пустой GET на чужой хост, 2xx там
+      // засчитывался как доставка, а заголовки с HMAC-подписью утекали получателю
+      // редиректа. 3xx — провал попытки, как сетевой отказ.
+      const res = await fetcher(sub.url, { method: "POST", headers, body, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
       statuses.push(res.status);
       if (res.status >= 200 && res.status < 300) {
         return { ok: true, attempts: attempt, statuses, error: null };

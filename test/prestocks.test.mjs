@@ -141,6 +141,11 @@ test("мусор вместо метаданных — NormalizeError", () => {
 test("metadataSources: external_url и terms — легитимные ссылки-источники", () => {
   const m = FIX("prestocks-openai.json");
   assert.deepEqual(metadataSources(m), ["https://prestocks.com/openai", "https://url.prestocks.com/terms-of-service"]);
+  // клиентская форма (camelCase externalUrl — как отдаёт наш клиент) тоже доезжает (ROUND7 №6)
+  assert.deepEqual(
+    metadataSources({ externalUrl: "https://prestocks.com/openai", terms: "https://url.prestocks.com/terms-of-service" }),
+    ["https://prestocks.com/openai", "https://url.prestocks.com/terms-of-service"],
+  );
   assert.deepEqual(metadataSources({ symbol: "X" }), []); // без ссылок — пусто, не падаем
   assert.throws(() => metadataSources(null), NormalizeError);
 });

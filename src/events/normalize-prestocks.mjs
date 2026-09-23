@@ -69,7 +69,10 @@ export function metadataSources(metadata) {
   if (metadata === null || typeof metadata !== "object") {
     throw new NormalizeError("metadata must be an object", metadata);
   }
-  return [metadata.external_url, metadata.terms].filter((s) => typeof s === "string" && s.length >= 4);
+  // externalUrl — camelCase-вывод нашего же клиента (src/issuer/prestocks.mjs),
+  // external_url — сырой identity-JSON: оба легитимные входы (KNOWN_KEYS bless'ит
+  // клиентскую форму), терять ссылку страницы токена из sources нельзя (ROUND7 №6)
+  return [metadata.external_url ?? metadata.externalUrl, metadata.terms].filter((s) => typeof s === "string" && s.length >= 4);
 }
 
 /** Дополняет события минтом из реестра и прогоняет валидацию схемы; атомарно.

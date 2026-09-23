@@ -161,7 +161,11 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
       amountPerUnitRaw,
       decimals,
     };
-    const key = JSON.stringify([decl.symbol.toUpperCase(), decl.exDate, amountPerUnitRaw, decimals, decl.sourceUrl]);
+    // Ключ дедупа — МОМЕНТ даты, не строка (ROUND7 №12): «2026-06-18» и
+    // «2026-06-18T00:00:00Z» — один и тот же экс-день; строковый ключ давал два
+    // DIVIDEND_ACCRUAL и двойное начисление движком. parseIsoDateMs не даст null:
+    // exDate уже прошёл isValidIsoDate выше.
+    const key = JSON.stringify([decl.symbol.toUpperCase(), parseIsoDateMs(decl.exDate), amountPerUnitRaw, decimals, decl.sourceUrl]);
     if (seen.has(key)) continue;
     seen.set(key, e);
     events.push(e);

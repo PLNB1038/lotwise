@@ -72,8 +72,14 @@ export function crossCheckMultiplierChange(event, candles) {
   const evTs = tsOf(event.effectiveDate);
   const { before, after } = selectAroundEvent(candles, evTs);
 
+  // Гварды входа — зеркало crossCheckDividendAccrual (ROUND7 №11): нечисловой/
+  // неположительный множитель — явная ошибка, а не «mismatch» с NaN-отношением
+  // (JSON молча сериализует NaN/Infinity как null — вердикт выглядел бы обоснованным).
   const from = Number(event.multiplierFrom);
   const to = Number(event.multiplierTo);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) {
+    throw new CrossCheckError(`bad multiplier: from=${JSON.stringify(event.multiplierFrom)} to=${JSON.stringify(event.multiplierTo)}`);
+  }
   const expectedRatio = from / to; // цена raw-единицы: было NAV/from, стало NAV/to
   const delta = Math.abs(1 - expectedRatio);
 
@@ -94,6 +100,16 @@ export function crossCheckMultiplierChange(event, candles) {
       note: !before
         ? "candles do not reach back to the event date"
         : "no candle starts at/after the event date",
+    };
+  }
+
+  if (before.c <= 0 || after.c <= 0) {
+    // вырожденный пул (close 0/отрицательный): observedRatio = ∞/− — сильный
+    // вердикт на мусоре; честное «не видно», как у дивидендного сиблинга (ROUND7 №11)
+    return {
+      ...base, observedRatio: null, observed: null,
+      verdict: "inconclusive",
+      note: `non-positive close around the event (${before.c} → ${after.c}) — rebase signature cannot be resolved`,
     };
   }
 

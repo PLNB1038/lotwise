@@ -108,5 +108,9 @@ export function metadataSources(metadata) {
     .filter((a) => a.trait_type === "Terms and Conditions" || a.traitType === "Terms and Conditions")
     .map((a) => a.value)
     .filter((s) => typeof s === "string");
-  return [metadata.external_url, ...terms].filter((s) => typeof s === "string" && s.length >= 4);
+  // externalUrl — camelCase-вывод нашего же fetchTokenMetadata, external_url — сырой
+  // JSON метаданных: composition двух экспортов не должен терять ссылку проекта
+  // из провенанс-списка (ROUND7 №6); атрибуты уже принимаются в обоих написаниях
+  return [metadata.external_url ?? metadata.externalUrl, ...terms]
+    .filter((s) => typeof s === "string" && s.length >= 4);
 }

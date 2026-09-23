@@ -34,6 +34,16 @@ export function parseScaledUiAmount(accountInfoValue) {
     };
   }
   const st = ext.state ?? {};
+  // Каноническая запись десятичной строки: «05»→«5», «5.0»→«5», «1.10»→«1.1» —
+  // репрезентация зависит от формата RPC, а дифф журнала строковый: «5» vs «5.0»
+  // эмитил фантомное MULTIPLIER_CHANGE той же величины (ROUND7 №16). Значащие
+  // цифры не трогаются. Вызов после regex-гварда — форма уже гарантирована.
+  const canonicalDecimal = (s) => {
+    const [int = "0", frac = ""] = s.split(".");
+    const canonInt = int.replace(/^0+(?=\d)/, "");
+    const canonFrac = frac.replace(/0+$/, "");
+    return canonFrac ? `${canonInt}.${canonFrac}` : canonInt;
+  };
   // active обязан быть десятичной строкой: String(undefined) = "undefined" не должен
   // ехать дальше и падать где-то в валидации с невнятным сообщением. Fail-closed
   // с ЧЕСТНОЙ ошибкой (тихая ложь хуже падения).
@@ -43,14 +53,25 @@ export function parseScaledUiAmount(accountInfoValue) {
       `scaledUiAmountConfig: active multiplier is not a decimal string: ${JSON.stringify(st.multiplier)}`,
     );
   }
+  const activeCanonical = canonicalDecimal(active);
   // «0» в newMultiplier — это pending СБРОШЕН, а не настоящий нулевой множитель:
   // конвенция эмитента (xstocks.mjs fetchCurrentMultiplier гвардит Number(pending) !== 0,
   // живая фикстура xstocks-spyx-current.json несёт newMultiplier: 0) — записать 0 в
   // new_multiplier и есть естественный способ снять pending. Строка "0" truthy, поэтому
   // гвардим числом, симметрично эмитентскому клиенту.
   const pendingRaw = st.newMultiplier;
-  const pending =
-    pendingRaw !== undefined && pendingRaw !== null && Number(pendingRaw) !== 0 ? String(pendingRaw) : null;
+  const pendingReset = pendingRaw === undefined || pendingRaw === null || Number(pendingRaw) === 0;
+  // pending валидируется СИММЕТРИЧНО active (ROUND7 №15): раньше любой не-нулевой
+  // мусор («abc») ехал в публичный /onchain payload и в будущий фантомный
+  // planes-disagree; журнал ниже по потоку падает валидацией, но мусор в ответе
+  // ридера — это шум диагностики, которого быть не должно.
+  const pendingStr = pendingReset ? null : String(pendingRaw);
+  if (pendingStr !== null && !/^\d+(\.\d+)?$/.test(pendingStr)) {
+    throw new ScaledUiError(
+      `scaledUiAmountConfig: newMultiplier is not a decimal string: ${JSON.stringify(pendingRaw)}`,
+    );
+  }
+  const pending = pendingStr !== null ? canonicalDecimal(pendingStr) : null;
   // Дата активации без живого pending бессмысленна — обнуляем пару АТОМАРНО (а не
   // «оставляем как есть»): пара (pending, date) — один факт, дата без pending это мусор
   // в публичном ответе и приманка для будущих потребителей; симметрично xstocks.mjs,
@@ -68,7 +89,7 @@ export function parseScaledUiAmount(accountInfoValue) {
   return {
     program: accountInfoValue.owner,
     decimals: info.decimals,
-    activeMultiplier: active,
+    activeMultiplier: activeCanonical,
     pendingMultiplier: pending,
     pendingEffectiveDate: pending !== null && ts > 0 ? new Date(ts * 1000).toISOString() : null,
     authority: st.authority ?? null,

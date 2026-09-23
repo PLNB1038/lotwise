@@ -43,10 +43,17 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
   //   (4) при недоступной цепи entry: null — битая запись на диске не трогается,
   //       восстановление возможно только по факту цепи (улика переживает шаг).
   const priorIsObject = priorEntry !== null && priorEntry !== undefined && typeof priorEntry === "object";
-  if (priorIsObject && priorEntry.events !== undefined && !Array.isArray(priorEntry.events)) {
+  // ROUND7 №4: запись-ПРИМИТИВ (строка/число/бул) — та же порча, что events-не-массив.
+  // Раньше гвард `priorIsObject` пропускал её в «нет истории» (base=null): бэкфилл
+  // переизлучал дубль события, corrupted:false, финальный персист затирал мусор
+  // без .corrupt-* — асимметрия с events-не-массивом внутри той же функции.
+  const priorIsCorrupted = priorEntry !== null && priorEntry !== undefined
+    && (typeof priorEntry !== "object" || (priorEntry.events !== undefined && !Array.isArray(priorEntry.events)));
+  if (priorIsCorrupted) {
     console.error(
-      `[journal] ${token.symbol ?? token.mint}: запись журнала ПОВРЕЖДЕНА — events не массив ` +
-      `(тип ${priorEntry.events === null ? "null" : typeof priorEntry.events}), история недоверена. Улика: ${JSON.stringify(priorEntry)}. ` +
+      `[journal] ${token.symbol ?? token.mint}: запись журнала ПОВРЕЖДЕНА — ${
+        priorIsObject ? `events не массив (тип ${priorEntry.events === null ? "null" : typeof priorEntry.events})` : `не объект (${typeof priorEntry})`
+      }, история недоверена. Улика: ${JSON.stringify(priorEntry)}. ` +
       `Реплей и бэкфилл по ней НЕ выполняются — дубль события не переизлучается; ` +
       `при живой цепи запись восстановится с нуля (без событий, витрина предупредит о множителе без истории).`,
     );

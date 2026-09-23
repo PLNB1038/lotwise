@@ -1,5 +1,5 @@
 // Запуск Lotwise API с живыми данными: реестр + история множителей xStocks + on-chain план.
-// Использование: node scripts/serve.mjs [--port 8787] [--rpc https://api.mainnet-beta.solana.com]
+// Использование: node scripts/serve.mjs [--port 8787] [--host 127.0.0.1] [--rpc URL] [--max-txs 300]
 import { loadRegistrySafe } from "../src/registry/registry.mjs";
 import { fetchMultiplierHistory } from "../src/issuer/xstocks.mjs";
 import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
@@ -9,15 +9,25 @@ import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot } from "../src/events/journal.mjs";
+import { parseServeArgs, ServeArgsError } from "../src/cli/flags.mjs";
 
-const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 8787);
-const host = process.argv.includes("--host") ? process.argv[process.argv.indexOf("--host") + 1] : "127.0.0.1";
+// Гварды флагов ДО любого I/O (ROUND7 №10): раньше --port abc проживал весь бут
+// (минуты квот RPC) и падал только на listen, а --rpc последним аргументом молча
+// убивал env-фолбэк. Парсер — src/cli/flags.mjs, под тестами.
+let args;
+try {
+  args = parseServeArgs(process.argv.slice(2));
+} catch (err) {
+  if (err instanceof ServeArgsError) {
+    console.error(`[serve] ${err.message}`);
+    process.exit(1);
+  }
+  throw err;
+}
+const { port, host, maxTxs } = args;
 // RPC: флаг --rpc (квоты разработки) → env LOTWISE_RPC_URL (прод: ключ НЕ должен
 // торчать в cmdline процесса — он виден в ps всему контейнеру — и в баннере лога).
-const rpcUrl =
-  process.argv.includes("--rpc")
-    ? process.argv[process.argv.indexOf("--rpc") + 1]
-    : process.env.LOTWISE_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+const rpcUrl = args.rpcUrl;
 // маска для баннера: только origin — api-key из query не утекает в serve.log/journal
 const rpcDisplay = (() => {
   try {
@@ -26,12 +36,6 @@ const rpcDisplay = (() => {
     return "(malformed rpc url)";
   }
 })();
-const maxTxs = Number(process.argv.includes("--max-txs") ? process.argv[process.argv.indexOf("--max-txs") + 1] : 300);
-if (!Number.isInteger(maxTxs) || maxTxs <= 0) {
-  // без гварда "--max-txs abc" даёт NaN: `taken >= NaN` всегда false — скан молча без потолка
-  console.error("[serve] --max-txs должен быть целым числом > 0");
-  process.exit(1);
-}
 
 // Реестр: усечённый data/tokens.json (обрыв в окне записи enrich-decimals)
 // раньше ронял процесс ЦЕЛИКОМ — RegistryError на top-level без catch → unhandled

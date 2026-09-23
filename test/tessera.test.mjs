@@ -186,8 +186,10 @@ test("честность: форма результата — только ident
 test("metadataSources: external_url и атрибут Terms and Conditions — в стабильном порядке", () => {
   const raw = FIX("tessera-spacex.json"); // сырой JSON (snake_case trait_type)
   assert.deepEqual(metadataSources(raw), ["https://www.tessera.pe", "https://terms.tessera.pe"]);
-  // Тот же документ в написании нашего клиента (camelCase traitType) — тот же результат.
-  const client = { name: "T-SpaceX", symbol: "tSpaceX", external_url: "https://www.tessera.pe", attributes: [{ traitType: "Terms and Conditions", value: "https://terms.tessera.pe" }] };
+  // Тот же документ в написании нашего клиента (camelCase traitType И externalUrl —
+  // ROUND7 №6: раньше фейк носил snake_case external_url, которого реальный клиент
+  // не отдаёт, и тест «покрывал» клиентскую форму, закрепляя баг потери ссылки)
+  const client = { name: "T-SpaceX", symbol: "tSpaceX", externalUrl: "https://www.tessera.pe", attributes: [{ traitType: "Terms and Conditions", value: "https://terms.tessera.pe" }] };
   assert.deepEqual(metadataSources(client), ["https://www.tessera.pe", "https://terms.tessera.pe"]);
 });
 

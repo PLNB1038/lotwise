@@ -12,7 +12,10 @@ export async function fetchWalletDeltas(client, signature, mints) {
     signature,
     { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 },
   ]);
-  if (tx === null) return null; // транзакция недоступна на этом эндпоинте — честный null
+  // null — транзакция недоступна на эндпоинте; undefined — RPC ответил без result
+  // и без error (лежащий/троттлящий шлюз): оба — честный skip одной транзакции,
+  // а не TypeError, валящий весь скан кошелька (ROUND7 №14)
+  if (tx == null) return null;
 
   // Ключ — accountIndex, НЕ owner|mint: у одного владельца бывает несколько
   // токен-аккаунтов одного минта (legacy + ATA), и самоперенос между ними —

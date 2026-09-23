@@ -16,7 +16,23 @@ export class NormalizeError extends Error {
 // (наш клиент). Число → строка точно (JSON-число парсится в double,
 // shortest-round-trip сохраняет все значащие цифры); мусор — ошибка.
 function toDecimalString(v, field, node) {
-  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const s = String(v);
+    if (!/e/i.test(s)) return s;
+    // Экспоненциальная запись не проходит DECIMAL_RE и роняла ВСЮ историю токена
+    // NormalizeError'ом «not a decimal» (ROUND7 №13). Значащие цифры те же —
+    // сдвигаем точку: 1e-7 → "0.0000001", 5e21 → "5000000000000000000000".
+    const m = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/i.exec(s);
+    if (!m) throw new NormalizeError(`field ${field} is not a decimal: ${JSON.stringify(v)}`, node);
+    const [, sign, int, frac = "", exp] = m;
+    const digits = int + frac;
+    const point = int.length + Number(exp);
+    const positional =
+      point <= 0 ? `0.${"0".repeat(-point)}${digits}`
+      : point >= digits.length ? `${digits}${"0".repeat(point - digits.length)}`
+      : `${digits.slice(0, point)}.${digits.slice(point)}`;
+    return sign ? `-${positional}` : positional; // отрицательное отвергнет схема, с её сообщением
+  }
   if (typeof v === "string" && /^\d+(\.\d+)?$/.test(v)) return v;
   throw new NormalizeError(`field ${field} is not a decimal: ${JSON.stringify(v)}`, node);
 }

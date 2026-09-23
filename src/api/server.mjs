@@ -56,14 +56,19 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // Дорогие эндпоинты (/lots, /accruals — скан кошелька; /onchain, /crosscheck —
   // RPC/цены) ограничены на клиентский ключ. rateLimits: null|false — лимиты
   // выключены (локальные эксперименты); дефолт включён: демка публична, а квота
-  // RPC конечна. Ключ = первый X-Forwarded-For ТОЛЬКО при trustProxy (за funnel,
-  // который и ставит заголовок; прямое подключение с поддельным XFF не должно
-  // плодить себе корзины) — иначе адрес сокета.
+  // RPC конечна. Ключ = ПОСЛЕДНИЙ элемент X-Forwarded-For при trustProxy — тот,
+  // что дописал наш доверенный прокси (funnel). ПЕРВЫЙ элемент в appending-цепочке
+  // контролирует клиент: ключевание по нему позволяло ротацией заголовка плодить
+  // себе безлимитные корзины (ROUND7 №8). Прямое подключение с поддельным XFF
+  // здесь не бывает (единственный публичный путь — funnel), иначе — адрес сокета.
   const scanLimiter = rateLimits ? createRateLimiter(rateLimits.scan) : null;
   const rpcLimiter = rateLimits ? createRateLimiter(rateLimits.rpc) : null;
   const clientKey = (req) => {
     const xff = req.headers["x-forwarded-for"];
-    if (trustProxy && typeof xff === "string" && xff.trim() !== "") return xff.split(",")[0].trim();
+    if (trustProxy && typeof xff === "string" && xff.trim() !== "") {
+      const parts = xff.split(",");
+      return parts[parts.length - 1].trim();
+    }
     return req.socket?.remoteAddress ?? "unknown";
   };
   // возвращает true, если запросу разрешён дорогой I/O; иначе сам отвечает 429
@@ -150,6 +155,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // дата валидируется ДО ридера: мусорная дата не должна греть кэш реальным RPC
       // и давать 503 вместо 400 при бросающем ридере
       if (!validQueryDate(date)) return json(res, 400, { error: "date must be ISO-8601 (YYYY-MM-DD, or with time + timezone)" });
+      // Исключённый токен (TimelineError на старте): план эмитента неизвестен, «?? "1"»
+      // фабриковал бы api:1 и вердикт без сверки двух реальных планов — честный отказ
+      // ДО ридера и лимитёра (квота RPC не горит), по конвенции /events.
+      const onchainExcludedReason = excludedByMint.get(mint);
+      if (onchainExcludedReason) {
+        return json(res, 400, {
+          error: `token excluded from multiplier reporting: ${onchainExcludedReason}`,
+          excluded: true,
+          excludedReason: onchainExcludedReason,
+        });
+      }
       if (!onchainReader) return json(res, 503, { error: "on-chain reader not configured" });
       if (!allow(rpcLimiter, req, res)) return;
       let parsed;
@@ -270,6 +286,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     if (url.pathname === "/crosscheck") {
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
+      // Исключённый токен: события скрыты целиком — тихий verdicts:[] был бы неотличим
+      // от «событий не было», а pool+candles жгли бы квоту провайдера впустую. Отказ с
+      // причиной ДО провайдера и лимитёра — конвенция /events.
+      const crosscheckExcludedReason = excludedByMint.get(mint);
+      if (crosscheckExcludedReason) {
+        return json(res, 400, {
+          error: `token excluded from multiplier reporting: ${crosscheckExcludedReason}`,
+          excluded: true,
+          excludedReason: crosscheckExcludedReason,
+        });
+      }
       if (!priceProvider) return json(res, 503, { error: "price provider not configured" });
       if (!allow(rpcLimiter, req, res)) return;
       let pool = null;

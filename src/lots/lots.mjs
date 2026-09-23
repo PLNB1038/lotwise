@@ -40,7 +40,10 @@ const heldBefore = (lot, effectiveTs, e) => {
 };
 
 /**
- * @param {Array<{id:string, mint:string, owner:string, qtyRaw:bigint|int, acquiredDate:string, basisRaw:bigint|int}>} lots
+ * @param {Array<{id:string, mint:string, owner:string, qtyRaw:bigint, acquiredDate:string, basisRaw:bigint}>} lots
+ *   qtyRaw/basisRaw — ТОЛЬКО BigInt (ROUND7 №18: JSDoc прежде обещал int — number
+ *   умирает голым «Cannot mix BigInt», а не LotError; движок точной арифметики,
+ *   конверсию типов на входе не делаем)
  * @param {Array<object>} events — события канонической схемы
  * @returns {{lots: Array, accruals: Array, realized: Array, symbolMap: object, applied: number}}
  *
