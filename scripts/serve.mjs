@@ -12,7 +12,20 @@ import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJourna
 
 const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : 8787);
 const host = process.argv.includes("--host") ? process.argv[process.argv.indexOf("--host") + 1] : "127.0.0.1";
-const rpcUrl = process.argv.includes("--rpc") ? process.argv[process.argv.indexOf("--rpc") + 1] : "https://api.mainnet-beta.solana.com";
+// RPC: флаг --rpc (квоты разработки) → env LOTWISE_RPC_URL (прод: ключ НЕ должен
+// торчать в cmdline процесса — он виден в ps всему контейнеру — и в баннере лога).
+const rpcUrl =
+  process.argv.includes("--rpc")
+    ? process.argv[process.argv.indexOf("--rpc") + 1]
+    : process.env.LOTWISE_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+// маска для баннера: только origin — api-key из query не утекает в serve.log/journal
+const rpcDisplay = (() => {
+  try {
+    return new URL(rpcUrl).origin;
+  } catch {
+    return "(malformed rpc url)";
+  }
+})();
 const maxTxs = Number(process.argv.includes("--max-txs") ? process.argv[process.argv.indexOf("--max-txs") + 1] : 300);
 if (!Number.isInteger(maxTxs) || maxTxs <= 0) {
   // без гварда "--max-txs abc" даёт NaN: `taken >= NaN` всегда false — скан молча без потолка
@@ -265,6 +278,6 @@ try {
 }
 console.log(`\n[serve] Lotwise API: http://127.0.0.1:${server.address().port}`);
 console.log(`[serve] витрина: http://127.0.0.1:${server.address().port}/`);
-console.log(`[serve] токенов: ${registry.length}, событий: ${events.length}, on-chain RPC: ${rpcUrl}`);
+console.log(`[serve] токенов: ${registry.length}, событий: ${events.length}, on-chain RPC: ${rpcDisplay}`);
 console.log(`[serve] rate limits (на IP): ${rateLimits.scan.max}/мин сканов кошелька, ${rateLimits.rpc.max}/мин on-chain/цен (env: RATE_LIMIT_SCAN_PER_MIN, RATE_LIMIT_RPC_PER_MIN)`);
 console.log(`[serve] попробуй: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);
