@@ -11,6 +11,13 @@ export class RpcError extends Error {
   }
 }
 
+// Транзиентные JSON-RPC ошибки (раунд 8): публичные/перегруженные ноды отдают их
+// с HTTP 200 в теле — раньше такой ответ был ФАТАЛЕН для всего скана кошелька,
+// хотя через секунду нод догоняет. Коды: -32005 (node behind / лимит слота);
+// сообщения — консервативный шаблон (behind by / rate limit / too many requests).
+const TRANSIENT_RPC_CODES = new Set([-32005]);
+const TRANSIENT_RPC_MESSAGE = /node is behind|behind by|rate limit|too many requests/i;
+
 export class RpcClient {
   /**
    * @param {object} opts
@@ -78,8 +85,15 @@ export class RpcClient {
         continue;
       }
       if (body.error) {
-        // RPC-ошибки (напр. -32015) не ретраим — это не транзиентность, а наш запрос плох.
-        throw new RpcError("rpc", `${body.error.code}: ${body.error.message}`, { code: body.error.code });
+        const rpcErr = new RpcError("rpc", `${body.error.code}: ${body.error.message}`, { code: body.error.code });
+        // Транзиентные (-32005 «node is behind» и т.п., раунд 8) — ретрай с тем же
+        // бэкоффом, исчерпание — честный бросок. Остальные RPC-ошибки (напр. -32015)
+        // детерминированы: наш запрос плох, ретрай лишь жёг бы квоту.
+        if (TRANSIENT_RPC_CODES.has(body.error.code) || TRANSIENT_RPC_MESSAGE.test(String(body.error.message))) {
+          lastErr = rpcErr;
+          continue;
+        }
+        throw rpcErr;
       }
       return body.result;
     }

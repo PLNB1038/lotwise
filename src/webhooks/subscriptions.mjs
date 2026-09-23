@@ -25,7 +25,7 @@
 // несут байт-в-байт тот же payload (иначе получатель не смог бы сверить подпись
 // повторно, а идемпотентность по deliveryId потеряла бы смысл).
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, openSync, closeSync, unlinkSync, statSync } from "node:fs";
 
 import { atomicWriteJson } from "../fs/atomic.mjs";
 import { validateEvent } from "../schema/events.mjs";
@@ -74,6 +74,14 @@ export function validateSubscription(sub) {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new SubscriptionError("url must be http(s)", "url");
+  }
+  // SSRF-данлист (раунд 8): доставка — исходящие POST из прода; URL с приватным/
+  // loopback/link-local/metadata-адресом — стучаться в собственную инфраструктуру
+  // (funnel, RPC с ключом, метаданные облака). Вход операторский, DNS-rebinding
+  // за скобками (имя резолвится в момент доставки), но литеральные приватные
+  // адреса и localhost отбиваем на записи.
+  if (isPrivateDeliveryHost(parsed.hostname)) {
+    throw new SubscriptionError("url host must be public (private, loopback, link-local and metadata addresses are not delivered to)", "url");
   }
   if (sub.symbols !== "*") {
     if (!Array.isArray(sub.symbols) || sub.symbols.length === 0) {
@@ -135,11 +143,77 @@ function writeStore(filePath, subs) {
   atomicWriteJson(filePath, subs);
 }
 
+// SSRF-данлист для validateSubscription (раунд 8). Литеральные адреса и
+// localhost; DNS-резолв в момент доставки — за скобками (см. комментарий выше).
+function isPrivateDeliveryHost(hostname) {
+  const host = String(hostname).toLowerCase().replace(/^\[|\]$/g, ""); // v6 в скобках
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // IPv4-литерал: 0/8, 10/8, 127/8, 169.254/16 (вкл. 169.254.169.254 metadata), 172.16/12, 192.168/16
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if ([0, 10, 127].includes(a)) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    return false;
+  }
+  // IPv6-литерал (без разворота :: — по первому хекстету, зоны %eth0 отброшены):
+  // ::1, fc00::/7 (fc/fd), fe80::/10 (fe80-febf)
+  const v6 = host.split("%")[0];
+  if (v6 === "::1" || v6 === "::") return true;
+  const first = /^([0-9a-f]{1,4}):/.exec(v6);
+  if (first) {
+    const x = parseInt(first[1], 16);
+    if ((x & 0xfe00) === 0xfc00) return true; // fc00::/7
+    if ((x & 0xffc0) === 0xfe80) return true; // fe80::/10
+  }
+  return false;
+}
+
+/**
+ * Кросс-процессный лок файлового стора (раунд 8): read-modify-write без лока терял
+ * запись при двух конкурентных CLI-вызовах (последний rename выигрывал). Лок =
+ * exclusive-create `<store>.lock`; чужой СВЕЖИЙ лок — короткие ретраи с sync-паузой
+ * (Atomics.wait: updateStore синхронный); ПРОТАХШИЙ (mtime старше staleMs —
+ * владелец умер) ломается. Не взяли за attempts — честная ошибка, не тишина.
+ */
+export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts = 200, retryPauseMs = 5, nowMs = Date.now } = {}) {
+  const lockPath = `${filePath}.lock`;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  let fd = null;
+  for (let i = 0; i < attempts && fd === null; i++) {
+    if (i > 0) Atomics.wait(sleeper, 0, 0, retryPauseMs);
+    try {
+      fd = openSync(lockPath, "wx");
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      try {
+        const age = nowMs() - statSync(lockPath).mtimeMs;
+        if (age > staleMs) {
+          unlinkSync(lockPath); // улика мёртвого владельца — ломаем, следующая попытка возьмёт
+        }
+      } catch { /* лок исчез между create и stat — следующая попытка возьмёт */ }
+    }
+  }
+  if (fd === null) {
+    throw new SubscriptionError(`subscription store is locked by another process (${lockPath} persists)`);
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try { unlinkSync(lockPath); } catch { /* уже удалён — не важно */ }
+  }
+}
+
 function updateStore(filePath, mutate) {
-  const subs = readStore(filePath);
-  const result = mutate(subs);
-  writeStore(filePath, subs);
-  return result;
+  return withStoreLock(filePath, () => {
+    const subs = readStore(filePath);
+    const result = mutate(subs);
+    writeStore(filePath, subs);
+    return result;
+  });
 }
 
 function makeId() {

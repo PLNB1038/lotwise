@@ -172,7 +172,7 @@ test("scanWallet: дубликаты до потолка — уникалы до
   assert.equal(scan.fetched, 2);
 });
 
-test("scanWallet: пагинация по before — полные страницы идут до короткой, before = последняя сигнатура страницы", async () => {
+test("scanWallet: пагинация по before — курсор = последняя сигнатура страницы; короткая допрашивается до подтверждения концом (раунд 8)", async () => {
   const pages = { [OWNER]: [sig("s0", 1), sig("s1", 2), sig("s2", 3), sig("s3", 4), sig("s4", 5)] };
   const txs = {};
   for (const s of ["s0", "s1", "s2", "s3", "s4"]) {
@@ -182,8 +182,9 @@ test("scanWallet: пагинация по before — полные страниц
   const scan = await scanWallet(client, OWNER, REG, { limit: 2, maxTxs: 10 });
   assert.equal(scan.signatures, 5, "все пять сигнатур со всех страниц");
   assert.equal(scan.truncated, false);
-  assert.deepEqual(client.sigCalls, [undefined, "s1", "s3"], "курсор — последняя сигнатура предыдущей полной страницы");
-  assert.equal(client.sigCalls.length, 3, "третья страница короткая (1 < 2) — стоп без четвёртого запроса");
+  // третья страница короткая (1 < 2) — больше НЕ конец: четвёртый запрос подтверждает
+  // (повтор страницы = нет прогресса/новых уникальных) и только тогда стоп
+  assert.deepEqual(client.sigCalls, [undefined, "s1", "s3", "s4"], "курсор — последняя сигнатура каждой прочитанной страницы");
 });
 
 test("scanWallet: maxTxs:0 — окно пустое, но truncated:true (пустота не маскируется под полноту)", async () => {

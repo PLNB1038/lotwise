@@ -108,13 +108,15 @@ test("пагинация: две полные страницы + пустая т
   assert.equal(bodies, 3);
 });
 
-test("короткая последняя страница завершает стрим досрочно", async () => {
+test("короткая последняя страница НЕ конец — стрим допрашивает до пустой/без-прогресса (раунд 8)", async () => {
   const page1 = Array.from({ length: 3 }, (_, i) => ({ signature: `a${i}`, slot: i, blockTime: 1, err: null }));
+  // makeClient повторяет последний ответ: после «tail» (< limit) стрим обязан спросить
+  // ещё раз; повторная страница tail — без прогресса (и без новых уникальных) → стоп
   const c = makeClient([jsonRes(page1), jsonRes([{ signature: "tail", slot: 1, blockTime: 1, err: null }])]);
   const seen = [];
   for await (const s of streamSignatures(c, MINT, { limit: 3 })) seen.push(s);
-  assert.equal(seen.length, 4); // 3 + 1, второй запрос вернул < limit → конец
-  assert.equal(c.requestCount, 2);
+  assert.equal(seen.length, 4); // 3 + 1 уникальная; дубль tail не выдаётся (контракт уникальности)
+  assert.equal(c.requestCount, 3); // короткая страница потребовала подтверждения концом
 });
 
 test("err-транзакции приходят с флагом err", async () => {

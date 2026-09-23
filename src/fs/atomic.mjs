@@ -5,8 +5,50 @@
 // enrich-decimals) писали прямым writeFileSync поверх живого файла.
 import {
   openSync, writeSync, closeSync, fsyncSync, renameSync, unlinkSync, copyFileSync,
+  statSync, chmodSync,
 } from "node:fs";
 import { dirname, join, basename } from "node:path";
+
+const defaultFs = { statSync, chmodSync, openSync, fsyncSync, closeSync };
+
+/**
+ * Перенести mode СУЩЕСТВУЮЩЕЙ цели на tmp перед rename (раунд 8): rename заменяет
+ * inode, и операторский chmod 600 (в webhooks.json лежат plaintext-секреты HMAC)
+ * молча слетал до дефолтных 0644 на каждой записи. Цели нет — нечего сохранять;
+ * chmod — best-effort (платформы без полноценного chmod не роняют запись).
+ */
+export function copyModeIfExists(targetPath, tmpPath, { fsTools = defaultFs } = {}) {
+  let mode;
+  try {
+    mode = fsTools.statSync(targetPath).mode;
+  } catch {
+    return; // цели ещё нет: режим задаст создатель файла (umask), не наша забота
+  }
+  try {
+    fsTools.chmodSync(tmpPath, mode);
+  } catch { /* best-effort: запись важнее режима */ }
+}
+
+/**
+ * fsync каталога после rename (раунд 8, Linux-прод): без него power-loss может
+ * уронить само переименование при уцелевших данных. На платформах/ФС без fsync
+ * каталогов (Windows) — тихо best-effort. kill -9 не страшен и без него: данные
+ * fsync'ятся ДО rename.
+ */
+export function fsyncDir(dirPath, { fsTools = defaultFs } = {}) {
+  let fd;
+  try {
+    fd = fsTools.openSync(dirPath, "r");
+  } catch {
+    return; // платформа не даёт открыть каталог как файл — best-effort
+  }
+  try {
+    fsTools.fsyncSync(fd);
+  } catch { /* win/фс без fsync каталога — best-effort */ }
+  finally {
+    try { fsTools.closeSync(fd); } catch { /* уже закрыт */ }
+  }
+}
 
 /**
  * Атомарная запись JSON: payload целиком уходит во временный файл в ТОЙ ЖЕ
@@ -35,7 +77,9 @@ export function atomicWriteJson(filePath, value) {
     } finally {
       closeSync(fd); // close до возможного unlink: на Windows открытый файл не удалить
     }
+    copyModeIfExists(filePath, tmp); // mode цели (напр. 0600 секретов) переживает rename (раунд 8)
     renameSync(tmp, filePath);
+    fsyncDir(dirname(filePath)); // каталог после rename: power-loss не роняет переименование (раунд 8)
   } catch (err) {
     // отказ write/fsync/rename ПОСЛЕ открытия temp: подчищаем, цель не тронута —
     // на диске не остаётся ни tmp, ни изменений (лучшее усилие: не затираем исходную ошибку)

@@ -108,6 +108,9 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
         source,
         { limit, ...(before !== undefined ? { before } : {}) },
       ]);
+      // Конец истории — ТОЛЬКО пустая страница (раунд 8): «короткая» страница у
+      // эндпоинтов с soft caps/лагающим индексером не значит «дальше пусто» —
+      // молчаливый обрезанный хвост выдавал себя за complete:true.
       if (!Array.isArray(batch) || batch.length === 0) break;
       for (const s of batch) {
         if (taken >= maxTxs) { srcTruncated = true; break; }
@@ -121,8 +124,10 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
           taken++;
         }
       }
-      if (srcTruncated || batch.length < limit) break;
-      before = batch[batch.length - 1].signature;
+      if (srcTruncated) break;
+      const last = batch[batch.length - 1].signature;
+      if (last === before) break; // залипший эндпоинт: страница не меняется — прогресса нет, не крутиться вечно
+      before = last;
     }
     if (srcTruncated) truncated = true;
   }
