@@ -183,7 +183,7 @@ function esc(s) {
 // truthy — тот же стиль честного warn, что у unavailable/excluded.
 function corruptionStat(value, label) {
   if (!value) return '';
-  return '<div class="stat"><b class="err">' + value + '</b><i>' + label +
+  return '<div class="stat"><b class="err">' + esc(value) + '</b><i>' + esc(label) +
     ' — multipliers may be incomplete, restored by backfill</i></div>';
 }
 
@@ -224,7 +224,7 @@ function renderTokens(list) {
       '<td>' + esc(t.symbol) + '</td>' +
       '<td>' + esc(t.name) + '</td>' +
       '<td><span class="badge">' + esc(t.issuer) + '</span></td>' +
-      '<td class="num">' + t.events + '</td>' +
+      '<td class="num">' + esc(t.events) + '</td>' +
       '<td class="num">' + (t.excluded
         ? '<span class="err" title="' + esc(t.excludedReason || 'timeline error') + '">excluded</span>'
         : esc(fmtMul(t.currentMultiplier))) + '</td></tr>';
@@ -445,7 +445,7 @@ function calc() {
           '<dt>multiplier</dt><dd class="err">multiplier unavailable for this token — no timeline, adjusted not computed</dd>';
         return;
       }
-      var dust = s.exact ? 'no dust — division is exact' : 'dust shown exactly: remainder ' + s.remainder + '/' + s.den + ' base units';
+      var dust = s.exact ? 'no dust — division is exact' : 'dust shown exactly: remainder ' + esc(s.remainder) + '/' + esc(s.den) + ' base units';
       el('calc-out').innerHTML =
         '<dt>raw (base units)</dt><dd>' + raw.toString() + '</dd>' +
         '<dt>multiplier at ' + esc(m.date.slice(0, 10)) + '</dt><dd>' + esc(m.multiplier) + '</dd>' +

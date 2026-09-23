@@ -163,7 +163,8 @@ test("нулевая pre-ex цена — inconclusive, а не деление н
     { ts: d("2026", "06", "10"), c: 0 },
   ]);
   assert.equal(r.verdict, "inconclusive");
-  assert.match(r.note, /non-positive pre-ex close/);
+  // ROUND9 №5: гвард обеих сторон — нота про close ВОКРУГ экс-даты (было «pre-ex»)
+  assert.match(r.note, /non-positive close around the ex-date/);
 });
 
 test("кривое событие — отказ, а не догадка: тип, дата, amount, decimals", () => {

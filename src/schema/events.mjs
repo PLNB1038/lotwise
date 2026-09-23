@@ -21,6 +21,17 @@ export const EVENT_TYPES = [
 
 const DECIMAL_RE = /^\d+(\.\d+)?$/;
 
+// Каноническая запись десятичной строки множителя: «05»→«5», «5.0»→«5», «1.10»→«1.1».
+// Единая точка для журнала, scaled-ui-парсера и reconcile (ROUND7 №16, ROUND9 №15):
+// репрезентация зависит от источника, а все сравнения ниже — строковые. Вызывать
+// ПОСЛЕ regex-гварда: форма уже гарантирована. Значащие цифры не трогаются.
+export function canonicalDecimalString(s) {
+  const [int = "0", frac = ""] = s.split(".");
+  const canonInt = int.replace(/^0+(?=\d)/, "");
+  const canonFrac = frac.replace(/0+$/, "");
+  return canonFrac ? `${canonInt}.${canonFrac}` : canonInt;
+}
+
 // Статус доверия событию: цепочка источников подтверждает друг друга или нет.
 export const EVENT_STATUSES = ["confirmed", "unverified"];
 
@@ -96,6 +107,11 @@ export function validateEvent(e) {
       requireFields(e, ["amountPerUnitRaw", "decimals"]);
       if (!Number.isInteger(e.amountPerUnitRaw) || e.amountPerUnitRaw <= 0) {
         throw new EventValidationError("amountPerUnitRaw must be a positive integer in raw units", "amountPerUnitRaw");
+      }
+      // Потолок safe-integer (ROUND9 №14): выше 2^53 JSON-граница молча округляет —
+      // dividends.mjs ссылается на этот потолок как на «потолок самой схемы»
+      if (e.amountPerUnitRaw > Number.MAX_SAFE_INTEGER) {
+        throw new EventValidationError("amountPerUnitRaw exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "amountPerUnitRaw");
       }
       if (!Number.isInteger(e.decimals) || e.decimals < 0 || e.decimals > 18) {
         throw new EventValidationError("decimals must be an integer 0..18", "decimals");

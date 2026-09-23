@@ -199,12 +199,14 @@ export function crossCheckDividendAccrual(event, candles) {
   const rawEx = after.c * scale;    // raw-цена первой пост-экс свечи
   const observed = observedWindow(before, after);
 
-  if (rawPrev <= 0) {
-    // вырожденный пул (цена 0/отрицательная): долю не построить — честное «не видно»
+  if (rawPrev <= 0 || rawEx <= 0) {
+    // вырожденный пул (цена 0/отрицальная С ЛЮБОЙ стороны): доля >100% или
+    // отрицательная — сильный вердикт на мусоре; честное «не видно», зеркально
+    // гварду обеих сторон в crossCheckMultiplierChange (ROUND9 №5)
     return {
       ...base, observedDropFraction: null, observed,
       verdict: "inconclusive",
-      note: `non-positive pre-ex close (${before.c}) — dividend signature cannot be resolved`,
+      note: `non-positive close around the ex-date (${before.c} → ${after.c}) — dividend signature cannot be resolved`,
     };
   }
 

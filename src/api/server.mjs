@@ -67,7 +67,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     const xff = req.headers["x-forwarded-for"];
     if (trustProxy && typeof xff === "string" && xff.trim() !== "") {
       const parts = xff.split(",");
-      return parts[parts.length - 1].trim();
+      // пустой последний элемент (хвостовая запятая/пробел) — не ключ: общая корзина
+      // "" схлопывала разных клиентов (ROUND9 №6); честный фолбэк — сокет
+      const key = parts[parts.length - 1].trim();
+      if (key !== "") return key;
     }
     return req.socket?.remoteAddress ?? "unknown";
   };

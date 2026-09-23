@@ -103,31 +103,46 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     let before;
     let taken = 0;
     let srcTruncated = false; // флаг НА ИСТОЧНИК: упёрся один — остальные сканируются своим потолком целиком
+    let zeroProgressPages = 0; // ROUND9 №13: чередующиеся дубли-страницы = нет прогресса
     for (;;) {
       const batch = await client.call("getSignaturesForAddress", [
         source,
         { limit, ...(before !== undefined ? { before } : {}) },
       ]);
+      // Не-массив (result:null лежащего шлюза) — ЯВНАЯ ошибка, не молчаливый
+      // «конец истории» с truncated:false (ROUND9 №3: «пустой кошелёк» неотличим
+      // от «источник умер» — нарушение fail-closed).
+      if (!Array.isArray(batch)) {
+        throw new WalletScanError(
+          `malformed getSignaturesForAddress response: expected array, got ${batch === null ? "null" : typeof batch}`,
+          "malformed-source",
+        );
+      }
       // Конец истории — ТОЛЬКО пустая страница (раунд 8): «короткая» страница у
-      // эндпоинтов с soft caps/лагающим индексером не значит «дальше пусто» —
-      // молчаливый обрезанный хвост выдавал себя за complete:true.
-      if (!Array.isArray(batch) || batch.length === 0) break;
+      // эндпоинтов с soft caps/лагающим индексером не значит «дальше пусто».
+      if (batch.length === 0) break;
+      let added = 0;
+      let lastValid = null;
       for (const s of batch) {
+        // битый элемент (null/без signature) — skip, не TypeError всего скана
+        // (ROUND9 №12, класс ROUND7 №14); курсор считаем по последнему валидному
+        if (s === null || typeof s !== "object" || typeof s.signature !== "string") continue;
         if (taken >= maxTxs) { srcTruncated = true; break; }
         if (!sigs.has(s.signature)) {
           sigs.set(s.signature, { slot: s.slot, blockTime: s.blockTime ?? null, err: s.err ?? null });
-          // taken ПОСЛЕ дедупа: потолок по УНИКАЛЬНЫМ сигнатурам. Раньше taken++ шёл
-          // до проверки — дубль из перекрывшихся батчей съедал слот потолка, и
-          // уникальная tx из выданного эндпоинтом батча не попадала в окно (срез по
-          // «грязным» вхождениям, а не по истории). truncated остаётся честным:
-          // он про «могли не увидеть», а не про объём мусора выдачи.
+          // taken ПОСЛЕ дедупа: потолок по УНИКАЛЬНЫМ сигнатурам (см. раунд 4).
           taken++;
+          added++;
         }
+        lastValid = s.signature;
       }
       if (srcTruncated) break;
-      const last = batch[batch.length - 1].signature;
-      if (last === before) break; // залипший эндпоинт: страница не меняется — прогресса нет, не крутиться вечно
-      before = last;
+      if (added === 0 || lastValid === null || lastValid === before) {
+        if (++zeroProgressPages >= 2) break;
+      } else {
+        zeroProgressPages = 0;
+      }
+      if (lastValid !== null) before = lastValid;
     }
     if (srcTruncated) truncated = true;
   }

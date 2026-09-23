@@ -116,7 +116,7 @@ test("короткая последняя страница НЕ конец — �
   const seen = [];
   for await (const s of streamSignatures(c, MINT, { limit: 3 })) seen.push(s);
   assert.equal(seen.length, 4); // 3 + 1 уникальная; дубль tail не выдаётся (контракт уникальности)
-  assert.equal(c.requestCount, 3); // короткая страница потребовала подтверждения концом
+  assert.equal(c.requestCount, 4); // короткая потребовала подтверждения, повтор без новых — стоп (раунд 9: K-нулевого прогресса)
 });
 
 test("err-транзакции приходят с флагом err", async () => {

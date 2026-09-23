@@ -11,10 +11,13 @@ export class RpcError extends Error {
   }
 }
 
-// Транзиентные JSON-RPC ошибки (раунд 8): публичные/перегруженные ноды отдают их
-// с HTTP 200 в теле — раньше такой ответ был ФАТАЛЕН для всего скана кошелька,
-// хотя через секунду нод догоняет. Коды: -32005 (node behind / лимит слота);
-// сообщения — консервативный шаблон (behind by / rate limit / too many requests).
+// Транзиентные JSON-RPC ошибки (раунды 8–9): публичные/перегруженные ноды отдают их
+// с HTTP 200 в теле — раньше такой ответ был ФАТАЛЕН для всего скана кошелька.
+// Правила раздельные (ROUND9 №11): КОД из множества (-32005) — транзиент всегда;
+// СООБЩЕНИЕ («node is behind» и т.п.) — транзиент ТОЛЬКО при отсутствии кода:
+// детерминированные коды (-32602 «rate limit exceeded…») постоянны, ретрай жёг
+// квоту впустую. Исчерпание message-matched → kind "rate-limit" (потребители
+// переключаются на kind); исчерпание кодового -32005 остаётся kind "rpc".
 const TRANSIENT_RPC_CODES = new Set([-32005]);
 const TRANSIENT_RPC_MESSAGE = /node is behind|behind by|rate limit|too many requests/i;
 
@@ -84,12 +87,24 @@ export class RpcClient {
         lastErr = new RpcError("network", `bad JSON: ${err.message}`);
         continue;
       }
+      // Тело-мусор с HTTP 200 (null/массив/число — ROUND9 №11): раньше null давал
+      // голый TypeError мимо классификации, а [] «успешно» возвращал undefined.
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        lastErr = new RpcError("network", `non-object JSON-RPC body: ${typeof body}`);
+        continue;
+      }
       if (body.error) {
-        const rpcErr = new RpcError("rpc", `${body.error.code}: ${body.error.message}`, { code: body.error.code });
-        // Транзиентные (-32005 «node is behind» и т.п., раунд 8) — ретрай с тем же
-        // бэкоффом, исчерпание — честный бросок. Остальные RPC-ошибки (напр. -32015)
-        // детерминированы: наш запрос плох, ретрай лишь жёг бы квоту.
-        if (TRANSIENT_RPC_CODES.has(body.error.code) || TRANSIENT_RPC_MESSAGE.test(String(body.error.message))) {
+        const codeKnown = body.error.code !== undefined && body.error.code !== null;
+        const transient = TRANSIENT_RPC_CODES.has(body.error.code)
+          || (!codeKnown && TRANSIENT_RPC_MESSAGE.test(String(body.error.message)));
+        const rpcErr = new RpcError(
+          transient && !TRANSIENT_RPC_CODES.has(body.error.code) ? "rate-limit" : "rpc",
+          `${body.error.code}: ${body.error.message}`,
+          { code: body.error.code },
+        );
+        // Транзиент — ретрай с тем же бэкоффом, исчерпание — честный бросок.
+        // Детерминированные RPC-ошибки (напр. -32015) сразу: ретрай лишь жёг бы квоту.
+        if (transient) {
           lastErr = rpcErr;
           continue;
         }

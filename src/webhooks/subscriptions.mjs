@@ -25,7 +25,7 @@
 // несут байт-в-байт тот же payload (иначе получатель не смог бы сверить подпись
 // повторно, а идемпотентность по deliveryId потеряла бы смысл).
 import { createHash, createHmac, randomUUID } from "node:crypto";
-import { readFileSync, openSync, closeSync, unlinkSync, statSync } from "node:fs";
+import { readFileSync, writeSync, openSync, closeSync, unlinkSync, statSync } from "node:fs";
 
 import { atomicWriteJson } from "../fs/atomic.mjs";
 import { validateEvent } from "../schema/events.mjs";
@@ -162,6 +162,22 @@ function isPrivateDeliveryHost(hostname) {
   // ::1, fc00::/7 (fc/fd), fe80::/10 (fe80-febf)
   const v6 = host.split("%")[0];
   if (v6 === "::1" || v6 === "::") return true;
+  // IPv4-mapped IPv6 (ROUND9 №8): ::ffff:127.0.0.1 / ::ffff:a9fe:a9fe (metadata!)
+  // проходят хекстет-проверки — разворачиваем embedded-v4 и гоняем через v4-классификатор
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
+  if (mapped) {
+    const a = (parseInt(mapped[1], 16) >> 8) & 0xff;
+    const b = parseInt(mapped[1], 16) & 0xff;
+    const c = (parseInt(mapped[2], 16) >> 8) & 0xff;
+    const d = parseInt(mapped[2], 16) & 0xff;
+    if ([a, c, d].every((x) => x >= 0 && x <= 255) && b >= 0 && b <= 255) {
+      if ([0, 10, 127].includes(a)) return true;
+      if (a === 169 && b === 254) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+      return false; // публичный embedded-v4 — легитимный адрес
+    }
+  }
   const first = /^([0-9a-f]{1,4}):/.exec(v6);
   if (first) {
     const x = parseInt(first[1], 16);
@@ -172,17 +188,31 @@ function isPrivateDeliveryHost(hostname) {
 }
 
 /**
- * Кросс-процессный лок файлового стора (раунд 8): read-modify-write без лока терял
- * запись при двух конкурентных CLI-вызовах (последний rename выигрывал). Лок =
- * exclusive-create `<store>.lock`; чужой СВЕЖИЙ лок — короткие ретраи с sync-паузой
- * (Atomics.wait: updateStore синхронный); ПРОТАХШИЙ (mtime старше staleMs —
- * владелец умер) ломается. Не взяли за attempts — честная ошибка, не тишина.
+ * Кросс-процессный лок файлового стора (раунды 8–9): read-modify-write без лока
+ * терял запись при двух конкурентных CLI-вызовах. Лок = exclusive-create
+ * `<store>.lock` с содержимым {pid, createdAt}. Чужой СВЕЖИЙ лок — короткие
+ * sync-ретраи (Atomics.wait: updateStore синхронный). ПРОТАХШИЙ по mtime ломается
+ * ТОЛЬКО если владелец мёртв (ROUND9 №9: SIGSTOP-застрявший живой владелец со
+ * старым mtime — ломка была потерей его обновления; kill(pid,0) отличает мёртвого).
+ * kill -9 сирота самоизлечивается старением mtime: дефолтные attempts покрывают
+ * staleMs целиком. Не взяли — честная ошибка, не тишина.
  */
-export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts = 200, retryPauseMs = 5, nowMs = Date.now } = {}) {
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM"; // существует, но чужой — жив
+  }
+}
+
+export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryPauseMs = 5, nowMs = Date.now } = {}) {
   const lockPath = `${filePath}.lock`;
+  const maxAttempts = attempts ?? Math.ceil(staleMs / retryPauseMs) + 100;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   let fd = null;
-  for (let i = 0; i < attempts && fd === null; i++) {
+  for (let i = 0; i < maxAttempts && fd === null; i++) {
     if (i > 0) Atomics.wait(sleeper, 0, 0, retryPauseMs);
     try {
       fd = openSync(lockPath, "wx");
@@ -191,7 +221,15 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts = 200, 
       try {
         const age = nowMs() - statSync(lockPath).mtimeMs;
         if (age > staleMs) {
-          unlinkSync(lockPath); // улика мёртвого владельца — ломаем, следующая попытка возьмёт
+          // ломка только МЁРТВОГО владельца: живой SIGSTOP-процесс со старым mtime
+          // не должен терять своё обновление (TOCTOU ROUND9 №9). Легаси-лок без
+          // pid (раунд 8) — по одному mtime, как раньше.
+          let ownerAlive = false;
+          try {
+            const meta = JSON.parse(readFileSync(lockPath, "utf8"));
+            ownerAlive = isPidAlive(meta?.pid);
+          } catch { /* не JSON / нет файла — считаем мёртвым (легаси-формат) */ }
+          if (!ownerAlive) unlinkSync(lockPath);
         }
       } catch { /* лок исчез между create и stat — следующая попытка возьмёт */ }
     }
@@ -200,9 +238,12 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts = 200, 
     throw new SubscriptionError(`subscription store is locked by another process (${lockPath} persists)`);
   }
   try {
+    writeSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs()).toISOString() }));
+  } catch { /* содержимое лок-файла — диагностика, не контракт */ }
+  try {
     return fn();
   } finally {
-    closeSync(fd);
+    try { closeSync(fd); } catch { /* уже закрыт */ }
     try { unlinkSync(lockPath); } catch { /* уже удалён — не важно */ }
   }
 }

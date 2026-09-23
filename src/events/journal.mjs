@@ -5,7 +5,33 @@
 import { journalTransition } from "./normalize-onchain.mjs";
 import { readFileSync } from "node:fs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
+import { canonicalDecimalString } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
+
+// Канонизация записи журнала ПРИ ЧТЕНИИ (ROUND9 №15): журнал, записанный билдом
+// до канонизации, несёт сырую репрезентацию RPC («5.0») — строковый дифф с
+// канонической цепью («5») эмитил фантомное MULTIPLIER_CHANGE той же величины.
+// Канонизируем lastEffective и multiplier-поля истории. Уже-каноническая запись
+// возвращается ПО ССЫЛКЕ (контракт «entry===priorEntry при недоступной цепи»);
+// поле не похоже на decimal — остаётся как есть (валидация ниже честно отвергнет).
+function canonicalizeEntry(entry) {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  const canonMult = (v) => (typeof v === "string" && /^\d+(\.\d+)?$/.test(v) ? canonicalDecimalString(v) : v);
+  const eventsCanonical = !Array.isArray(entry.events) || entry.events.every((e) => (
+    e === null || typeof e !== "object"
+    || (canonMult(e.multiplierFrom) === e.multiplierFrom && canonMult(e.multiplierTo) === e.multiplierTo)
+  ));
+  if (canonMult(entry.lastEffective) === entry.lastEffective && eventsCanonical) return entry;
+  return {
+    ...entry,
+    lastEffective: canonMult(entry.lastEffective),
+    events: Array.isArray(entry.events)
+      ? entry.events.map((e) => (e !== null && typeof e === "object"
+        ? { ...e, multiplierFrom: canonMult(e.multiplierFrom), multiplierTo: canonMult(e.multiplierTo) }
+        : e))
+      : entry.events,
+  };
+}
 
 /**
  * @param {object} token — запись реестра (нужны mint, symbol)
@@ -43,16 +69,23 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
   //   (4) при недоступной цепи entry: null — битая запись на диске не трогается,
   //       восстановление возможно только по факту цепи (улика переживает шаг).
   const priorIsObject = priorEntry !== null && priorEntry !== undefined && typeof priorEntry === "object";
-  // ROUND7 №4: запись-ПРИМИТИВ (строка/число/бул) — та же порча, что events-не-массив.
-  // Раньше гвард `priorIsObject` пропускал её в «нет истории» (base=null): бэкфилл
-  // переизлучал дубль события, corrupted:false, финальный персист затирал мусор
-  // без .corrupt-* — асимметрия с events-не-массивом внутри той же функции.
+  // ROUND7 №4 + ROUND9 №4: запись-ПРИМИТИВ и запись-МАССИВ — та же порча, что
+  // events-не-массив. Массив — тоже typeof "object", но структурой не запись
+  // {lastEffective, events}: раньше проходил в «нет истории» (base=null), бэкфилл
+  // переизлучал дубль, финальный персист затирал улику; loadJournalOnchain при этом
+  // массив НАВЕРХУ файла отвергает как порчу — по-записи обязан так же.
   const priorIsCorrupted = priorEntry !== null && priorEntry !== undefined
-    && (typeof priorEntry !== "object" || (priorEntry.events !== undefined && !Array.isArray(priorEntry.events)));
+    && (typeof priorEntry !== "object"
+      || Array.isArray(priorEntry)
+      || (priorEntry.events !== undefined && !Array.isArray(priorEntry.events)));
   if (priorIsCorrupted) {
     console.error(
       `[journal] ${token.symbol ?? token.mint}: запись журнала ПОВРЕЖДЕНА — ${
-        priorIsObject ? `events не массив (тип ${priorEntry.events === null ? "null" : typeof priorEntry.events})` : `не объект (${typeof priorEntry})`
+        !priorIsObject
+          ? `не объект (${typeof priorEntry})`
+          : Array.isArray(priorEntry)
+            ? "массив вместо объекта записи"
+            : `events не массив (тип ${priorEntry.events === null ? "null" : typeof priorEntry.events})`
       }, история недоверена. Улика: ${JSON.stringify(priorEntry)}. ` +
       `Реплей и бэкфилл по ней НЕ выполняются — дубль события не переизлучается; ` +
       `при живой цепи запись восстановится с нуля (без событий, витрина предупредит о множителе без истории).`,
@@ -71,11 +104,13 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
     };
   }
   // v2-маркер записи — массив events; записи v1 (без него) прогоняются бэкфиллом:
-  // так задеплоенный инстанс самовосстанавливается без ручной миграции файла
-  const base = priorIsObject && Array.isArray(priorEntry.events) ? priorEntry : null;
+  // так задеплоенный инстанс самовосстанавливается без ручной миграции файла.
+  // Канонизация — ДО всех сравнений (ROUND9 №15): реплей/дифф видят канонические строки.
+  const prior = canonicalizeEntry(priorEntry);
+  const base = priorIsObject && Array.isArray(prior.events) ? prior : null;
   const replay = base ? base.events : [];
   if (parsed === null) {
-    const unavailableV1 = base === null && priorEntry && priorEntry.lastEffective !== "1";
+    const unavailableV1 = base === null && prior && prior.lastEffective !== "1";
     return { replay, event: null, entry: base, chain: "unavailable", unavailableV1, corrupted: false };
   }
   const { event, entry } = journalTransition(token, parsed, base, nowMs);

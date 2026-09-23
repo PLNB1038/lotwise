@@ -17,12 +17,21 @@ const DEFAULT_RPC = "https://api.mainnet-beta.solana.com";
 function readFlag(argv, name) {
   const eq = `--${name}=`;
   const eqIdx = argv.findIndex((a) => a.startsWith(eq));
-  if (eqIdx !== -1) return argv[eqIdx].slice(eq.length);
+  if (eqIdx !== -1) {
+    const value = argv[eqIdx].slice(eq.length);
+    // пустое значение = отсутствующее: "" у host делал listen на ВСЕХ интерфейсах
+    // (ROUND9 №1), у rpc — бут в пустых 503; отказ, а не тихий дефолт-обход
+    if (value === "") throw new ServeArgsError(`--${name} requires a non-empty value`, `--${name}`);
+    return value;
+  }
   const i = argv.indexOf(`--${name}`);
   if (i === -1) return undefined;
   const value = argv[i + 1];
   if (value === undefined || value.startsWith("--")) {
     throw new ServeArgsError(`--${name} requires a value`, `--${name}`);
+  }
+  if (value === "") {
+    throw new ServeArgsError(`--${name} requires a non-empty value`, `--${name}`);
   }
   return value;
 }
@@ -38,6 +47,11 @@ export function parseServeArgs(argv, env = process.env) {
   let port = 8787;
   const portRaw = readFlag(argv, "port");
   if (portRaw !== undefined) {
+    // digits-only (ROUND9 №1b): Number() льготно ест 0x10/1e2 — та же дисциплина,
+    // что у /multiplier?raw (BigInt молча принимает "0x10")
+    if (!/^\d+$/.test(portRaw)) {
+      throw new ServeArgsError(`--port must be an integer between 1 and 65535, got ${JSON.stringify(portRaw)}`, "--port");
+    }
     port = Number(portRaw);
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new ServeArgsError(`--port must be an integer between 1 and 65535, got ${JSON.stringify(portRaw)}`, "--port");

@@ -11,17 +11,11 @@ export class ScaledUiError extends Error {
  * @param {object} accountInfoValue — result.value ответа getAccountInfo (jsonParsed)
  * @returns {{program: string, decimals: number, activeMultiplier: string, pendingMultiplier: string|null, pendingEffectiveDate: string|null, authority: string}}
  */
-// Каноническая запись десятичной строки: «05»→«5», «5.0»→«5», «1.10»→«1.1» —
-// репрезентация зависит от источника (RPC/эмитент-API), а сравнения строковые:
-// «5» vs «5.0» в диффе журнала фантомит событие (ROUND7 №16), в reconcile —
-// ложный planes-disagree (Jev-аудит R3). Значащие цифры не трогаются.
-// Вызов после regex-гварда — форма уже гарантирована.
-function canonicalDecimal(s) {
-  const [int = "0", frac = ""] = s.split(".");
-  const canonInt = int.replace(/^0+(?=\d)/, "");
-  const canonFrac = frac.replace(/0+$/, "");
-  return canonFrac ? `${canonInt}.${canonFrac}` : canonInt;
-}
+// Каноническая запись — общая точка схемы (ROUND9 №15): «05»→«5», «5.0»→«5»,
+// «1.10»→«1.1». Репрезентация зависит от источника (RPC/эмитент-API), а сравнения
+// строковые: дифф журнала и reconcile лгали на дрейфе репрезентации (ROUND7 №16,
+// Jev R3). Значащие цифры не трогаются; вызов после regex-гварда.
+import { canonicalDecimalString as canonicalDecimal } from "../schema/events.mjs";
 
 export function parseScaledUiAmount(accountInfoValue) {
   const parsed = accountInfoValue?.data?.parsed;

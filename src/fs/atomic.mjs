@@ -69,7 +69,10 @@ export function atomicWriteJson(filePath, value) {
   const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
   // сериализация до openSync: бросок (BigInt/циклические ссылки) не оставляет файлов
   const data = JSON.stringify(value, null, 1) + "\n";
-  const fd = openSync(tmp, "w");
+  // 0600 с создания (ROUND9 №10): в data/-файлах бывают plaintext-секреты (webhooks);
+  // прежде первая запись получала umask 0644 на Linux, а R8-2 берёг mode только
+  // со второй записи. Существующую цель copyModeIfExists ниже приведёт к её mode.
+  const fd = openSync(tmp, "w", 0o600);
   try {
     try {
       writeSync(fd, data);
