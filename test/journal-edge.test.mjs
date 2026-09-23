@@ -92,28 +92,28 @@ test("ротация без pendingEffectiveDate — событие датиро
   assert.equal(event.multiplierTo, "5");
 });
 
-test("parsed-мусор {} при первом наблюдении: entry без lastEffective уезжает на диск, восстановление глотает ротацию (GAP)", () => {
-  // GAP: битый payload цепи ({} вместо parsed) даёт entry с lastEffective:undefined;
-  // JSON выкидывает поле, запись выглядит как v2 (events:[]) — недоступная цепь и
-  // unavailableV1 эту дыру не видят, а следующая ротация поглощается молча.
+test("parsed-мусор {} при первом наблюдении: записи НЕТ — следующая ротация не поглощается (GAP закрыт волной C4-1)", () => {
+  // Было (задокументированный GAP): битый payload {} давал entry с
+  // lastEffective:undefined, «здоровую» по форме на диске, и следующая ротация
+  // поглощалась молча. Волнa C4-1: ответ без фактов (hasExtension falsy) — записи
+  // нет вовсе; первый живой бут строит историю с нуля, ротация 1→5 ЭМИТИТСЯ.
   const s1 = planJournalStep(token, null, {}, NOW);
   assert.equal(s1.event, null);
   assert.equal(s1.chain, "ok");
-  assert.equal(s1.entry.lastEffective, undefined, "факт: lastEffective undefined (в памяти ключ есть, JSON его выкинет)");
+  assert.equal(s1.entry, null, "фактов нет — записи нет");
 
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
-  saveJournalAtomic(p, { [MINT]: s1.entry });
+  saveJournalAtomic(p, s1.entry === null ? {} : { [MINT]: s1.entry });
   const loaded = loadJournalOnchain(p);
   assert.equal(loaded.ok, true);
-  assert.deepEqual(loaded.journal[MINT], { observedAt: iso(NOW), events: [] }, "на диске запись без lastEffective, но «здоровая» по форме");
+  assert.equal(loaded.journal[MINT], undefined, "на диске ничего не уехало");
 
   const s2 = planJournalStep(token, loaded.journal[MINT], BASE, NOW + 60_000);
-  assert.equal(s2.event, null, "ротация 1→5 поглощена без события (разрыв цепочки от '1')");
-  assert.equal(s2.entry.lastEffective, "5", "lastEffective хотя бы скорректирован фактом");
-  assert.deepEqual(s2.entry.events, []);
-  // warn-условие serve.mjs честно стреляет на такой записи
-  assert.ok(s2.entry.lastEffective !== "1" && s2.entry.events.length === 0);
+  assert.ok(s2.event, "ротация 1→5 эмитится первым живым наблюдением — не поглощается");
+  assert.equal(s2.event.multiplierFrom, "1");
+  assert.equal(s2.event.multiplierTo, "5");
+  assert.equal(s2.entry.events.length, 1);
 });
 
 test("planJournalStep: events не массив (битое поле записи) — дубль из бэкфилла НЕ переизлучен, warn оператору был, последующая запись корректна (GAP переписан: раньше история тихо сбрасывалась и дубликат переизлучался)", (t) => {

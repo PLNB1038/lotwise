@@ -49,7 +49,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
 
   const json = (res, status, body, extra = {}) => {
     const payload = JSON.stringify(body);
-    res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), ...extra });
+    res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), "X-Content-Type-Options": "nosniff", ...extra });
     res.end(payload);
   };
 
@@ -136,7 +136,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
 
     if (url.pathname === "/") {
       pageHtml ??= renderPage();
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Length": Buffer.byteLength(pageHtml) });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Length": Buffer.byteLength(pageHtml), "X-Content-Type-Options": "nosniff" });
       return res.end(pageHtml);
     }
     if (url.pathname === "/summary") {

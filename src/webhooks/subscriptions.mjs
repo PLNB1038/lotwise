@@ -146,7 +146,9 @@ function writeStore(filePath, subs) {
 // SSRF-данлист для validateSubscription (раунд 8). Литеральные адреса и
 // localhost; DNS-резолв в момент доставки — за скобками (см. комментарий выше).
 function isPrivateDeliveryHost(hostname) {
-  const host = String(hostname).toLowerCase().replace(/^\[|\]$/g, ""); // v6 в скобках
+  // концевые точки срезаем ДО проверок (волна C: «localhost.» резолвится в loopback,
+  // но строкой не равен «localhost») — root-форма FQDN легитимна для публичных хостов
+  const host = String(hostname).toLowerCase().replace(/\.+$/, "").replace(/^\[|\]$/g, ""); // v6 в скобках
   if (host === "localhost" || host.endsWith(".localhost")) return true;
   // IPv4-литерал: 0/8, 10/8, 127/8, 169.254/16 (вкл. 169.254.169.254 metadata), 172.16/12, 192.168/16
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);

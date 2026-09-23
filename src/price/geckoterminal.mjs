@@ -108,6 +108,10 @@ export class GeckoTerminalClient {
     if (!Array.isArray(list)) throw new PriceError("parse", "ohlcv response has no ohlcv_list");
     return list
       .map(([ts, o, h, l, c]) => ({ ts, o, h, l, c }))
-      .sort((a, b) => a.ts - b.ts);
+      .sort((a, b) => a.ts - b.ts)
+      // Дубль-свечи одного дня — живая реальность GT (волна C2, 23.09: тот же ts,
+      // разные o/h/l) — не контракт, а дрейф формы. Схлопываем, ПОСЛЕДНЯЯ запись
+      // дня выигрывает (GT перезаписывает текущую/переагрегированную свечу).
+      .filter((cd, i, arr) => i === arr.length - 1 || cd.ts !== arr[i + 1].ts);
   }
 }

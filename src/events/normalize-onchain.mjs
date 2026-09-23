@@ -82,6 +82,11 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   const priorEvents = Array.isArray(entry?.events) ? entry.events : [];
 
   if (entry === null) {
+    if (!parsed.hasExtension) {
+      // минт без механизма ребейза: дефолт "1" парсера — не факт, записи нет
+      // (волна C4-1: пустые записи {lastEffective:"1"} лишь шум и приманка)
+      return { event: null, entry: null };
+    }
     // Первое наблюдение: бэкфилл имеет смысл, только если СТАРТУЕТ цепочку от "1".
     // Токен, впервые увиденный mid-history (active="5", pending="6"), раньше эмитил 5→6 —
     // TimelineError при построении таймлайнов и вечный boot-loop (ядо персистится в
@@ -92,6 +97,15 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
     const event = candidate !== null && candidate.multiplierFrom === "1" ? candidate : null;
     // entry фиксирует ЭФФЕКТИВНУЮ величину — будущие ротации диффом от неё
     return { event, entry: { lastEffective: effective, observedAt: nowIso, events: event ? [event] : [] } };
+  }
+
+  // Волна C4-1 [P1]: ответ БЕЗ scaledUiAmountConfig — «нет факта», а не «сброс до 1»:
+  // парсер честно отдаёт дефолт "1" (hasExtension:false), но дифф принимал его за
+  // наблюдённый сброс → фантом X→1, а при возврате правды — вечный дубль-триплет
+  // в истории (марафон 2400 бутов: 1221 нарушение этого класса до фикса). Запись
+  // не трогаем — тот же контракт, что у недоступной цепи.
+  if (!parsed.hasExtension) {
+    return { event: null, entry };
   }
 
   if (effective === entry.lastEffective) {

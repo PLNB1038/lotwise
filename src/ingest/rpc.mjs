@@ -18,6 +18,13 @@ export class RpcError extends Error {
 // детерминированные коды (-32602 «rate limit exceeded…») постоянны, ретрай жёг
 // квоту впустую. Исчерпание message-matched → kind "rate-limit" (потребители
 // переключаются на kind); исчерпание кодового -32005 остаётся kind "rpc".
+// Редакция URL из сообщений об ошибках (волна C3-1 [P1]): undici вшивает полный
+// URL (с кредами userinfo) в TypeError, провайдер может эхнуть ключ в тексте
+// JSON-RPC ошибки — раньше всё это доезжало до 503-тел ЛЮБОМУ посетителю и в
+// boot-лог, при том что баннер маскирует origin. Единая точка: конструктор ошибки.
+const URL_IN_MESSAGE = /https?:\/\/\S+/g;
+const redactUrls = (msg) => String(msg).replace(URL_IN_MESSAGE, "[url]");
+
 const TRANSIENT_RPC_CODES = new Set([-32005]);
 const TRANSIENT_RPC_MESSAGE = /node is behind|behind by|rate limit|too many requests/i;
 
@@ -70,7 +77,7 @@ export class RpcClient {
           body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
         });
       } catch (err) {
-        lastErr = new RpcError("network", err.message);
+        lastErr = new RpcError("network", redactUrls(err.message));
         continue;
       }
       if (res.status === 429) { lastErr = new RpcError("rate-limit", "HTTP 429", { status: 429 }); continue; }
@@ -99,7 +106,7 @@ export class RpcClient {
           || (!codeKnown && TRANSIENT_RPC_MESSAGE.test(String(body.error.message)));
         const rpcErr = new RpcError(
           transient && !TRANSIENT_RPC_CODES.has(body.error.code) ? "rate-limit" : "rpc",
-          `${body.error.code}: ${body.error.message}`,
+          `${body.error.code}: ${redactUrls(body.error.message)}`,
           { code: body.error.code },
         );
         // Транзиент — ретрай с тем же бэкоффом, исчерпание — честный бросок.
