@@ -247,6 +247,10 @@ function select(symbol) {
   el('detail').style.display = 'block';
   el('detail-title').textContent = t.symbol + ' — ' + t.name;
   el('date-in').value = todayISO();
+  // смена токена чистит панели ДО загрузки (волна D1): события/расчёт прошлого
+  // токена не висят под заголовком нового, пока его ответы в полёте
+  el('events').innerHTML = '<li class="note">loading events…</li>';
+  el('calc-out').innerHTML = '';
   loadEvents(t);
   loadPlanes(t);
   calc();
@@ -397,13 +401,16 @@ function loadPlanes(t) {
       else setVerdict('disagree', 'planes disagree');
     })
     .catch(function (e) {
+      if (state.selected !== t) return; // чужая ошибка не ложится на новый токен (волна D1)
       setVerdict('unavailable', 'unavailable');
       el('planes').innerHTML = '<dt>on-chain source</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
 }
 
+var calcSeq = 0;
 function calc() {
   var t = state.selected;
+  var mySeq = ++calcSeq; // эпоха: устаревший пересчёт не перерисовывается (волна D1)
   if (!t) return;
   var rawIn = (el('raw-in').value || '0').trim();
   if (!/^\\d*(\\.\\d*)?$/.test(rawIn) || rawIn === '' || rawIn === '.') {
@@ -431,7 +438,7 @@ function calc() {
   fetch(qs)
     .then(function (r) { return r.json(); })
     .then(function (m) {
-      if (state.selected !== t) return; // устаревший ответ
+      if (mySeq !== calcSeq || state.selected !== t) return; // устаревший ответ (эпоха — волна D1)
       // {error}-тело от 400/500: json успел, данных нет — показываем причину честно
       if (m && m.error) {
         el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(m.error) + '</dd>';
@@ -456,6 +463,7 @@ function calc() {
         (truncated ? '<dt>input precision</dt><dd class="err">amount exceeds ' + t.decimals + ' token decimals — truncated to base units</dd>' : '');
     })
     .catch(function (e) {
+      if (mySeq !== calcSeq || state.selected !== t) return; // устаревшая попытка молчит (волна D1)
       el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
 }
@@ -511,6 +519,7 @@ function renderWallet(rep) {
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
+    '<dt>report generated at</dt><dd>' + esc(rep.now || '—') + '</dd>' +
     '<dt>signatures scanned</dt><dd>' + esc(c.signatures) + ' (' + esc(c.fetched) + ' fetched, ' + esc(c.skipped) + ' skipped)</dd>' +
     '<dt>scan window</dt><dd>' + (rep.truncated ? 'truncated at cap — older history not scanned' : 'full history') + '</dd>' +
     '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' +
@@ -555,8 +564,16 @@ function renderWallet(rep) {
 document.getElementById('scan-btn').onclick = scanWalletUi;
 el('addr-in').onkeydown = function (e) { if (e.key === 'Enter') scanWalletUi(); };
 
-fetch('/health').then(function (r) { return r.json(); }).then(function (h) {
-  return fetch('/summary').then(function (r) { return r.json(); }).then(function (list) {
+fetch('/health').then(function (r) {
+  if (!r.ok) throw new Error('/health HTTP ' + r.status); // 502-джейсон прокси — не «undefined tokens» (волна D1)
+  return r.json();
+}).then(function (h) {
+  if (!h || typeof h !== 'object') throw new Error('/health: unexpected body');
+  return fetch('/summary').then(function (r) {
+    if (!r.ok) throw new Error('/summary HTTP ' + r.status);
+    return r.json();
+  }).then(function (list) {
+    if (!Array.isArray(list)) throw new Error('/summary: unexpected body');
     state.tokens = list;
     renderStats(h, list);
     renderTokens(list);

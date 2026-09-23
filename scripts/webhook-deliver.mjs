@@ -74,7 +74,8 @@ function readEvents(opts) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    // пустой/пробельный stdin — честный пустой список (no-op), не ошибка запуска (волна D2)
+    parsed = raw.trim() === "" ? [] : JSON.parse(raw);
   } catch (err) {
     throw new Error(`события не парсятся: ${err.message}`);
   }
@@ -143,4 +144,6 @@ const invokedAs = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 const isSelf =
   import.meta.url === invokedAs ||
   (process.platform === "win32" && import.meta.url.toLowerCase() === invokedAs.toLowerCase());
-if (isSelf) process.exit(await main(process.argv.slice(2)));
+// process.exitCode вместо process.exit (волна D2): exit над живыми undici-сокетами
+// крашил процесс ПОСЛЕ успешного отчёта (0xC0000409 на win, код 127) — контракт 0/1/2
+if (isSelf) process.exitCode = await main(process.argv.slice(2));
