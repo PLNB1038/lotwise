@@ -11,6 +11,18 @@ export class ScaledUiError extends Error {
  * @param {object} accountInfoValue — result.value ответа getAccountInfo (jsonParsed)
  * @returns {{program: string, decimals: number, activeMultiplier: string, pendingMultiplier: string|null, pendingEffectiveDate: string|null, authority: string}}
  */
+// Каноническая запись десятичной строки: «05»→«5», «5.0»→«5», «1.10»→«1.1» —
+// репрезентация зависит от источника (RPC/эмитент-API), а сравнения строковые:
+// «5» vs «5.0» в диффе журнала фантомит событие (ROUND7 №16), в reconcile —
+// ложный planes-disagree (Jev-аудит R3). Значащие цифры не трогаются.
+// Вызов после regex-гварда — форма уже гарантирована.
+function canonicalDecimal(s) {
+  const [int = "0", frac = ""] = s.split(".");
+  const canonInt = int.replace(/^0+(?=\d)/, "");
+  const canonFrac = frac.replace(/0+$/, "");
+  return canonFrac ? `${canonInt}.${canonFrac}` : canonInt;
+}
+
 export function parseScaledUiAmount(accountInfoValue) {
   const parsed = accountInfoValue?.data?.parsed;
   if (!parsed || typeof parsed !== "object") {
@@ -34,16 +46,6 @@ export function parseScaledUiAmount(accountInfoValue) {
     };
   }
   const st = ext.state ?? {};
-  // Каноническая запись десятичной строки: «05»→«5», «5.0»→«5», «1.10»→«1.1» —
-  // репрезентация зависит от формата RPC, а дифф журнала строковый: «5» vs «5.0»
-  // эмитил фантомное MULTIPLIER_CHANGE той же величины (ROUND7 №16). Значащие
-  // цифры не трогаются. Вызов после regex-гварда — форма уже гарантирована.
-  const canonicalDecimal = (s) => {
-    const [int = "0", frac = ""] = s.split(".");
-    const canonInt = int.replace(/^0+(?=\d)/, "");
-    const canonFrac = frac.replace(/0+$/, "");
-    return canonFrac ? `${canonInt}.${canonFrac}` : canonInt;
-  };
   // active обязан быть десятичной строкой: String(undefined) = "undefined" не должен
   // ехать дальше и падать где-то в валидации с невнятным сообщением. Fail-closed
   // с ЧЕСТНОЙ ошибкой (тихая ложь хуже падения).
@@ -111,11 +113,15 @@ export function reconcileMultiplier(apiMultiplier, onChain, date = new Date().to
     pendingTs !== null && !Number.isNaN(pendingTs) && pendingTs <= ts && onChain.pendingMultiplier !== null
       ? onChain.pendingMultiplier
       : onChain.activeMultiplier;
+  // Сравнение — канонически, отображение — как пришло: «1.10» (API) против «1.1»
+  // (цепь) — та же величина, ложный planes-disagree на дрейфе репрезентации
+  // был бы ровно тем классом тихой лжи, который канонизация убивает (Jev R3).
+  const agree = canonicalDecimal(String(apiMultiplier)) === canonicalDecimal(String(effectiveOnChain));
   return {
     api: apiMultiplier,
     onChainActive: onChain.activeMultiplier,
     onChainEffective: effectiveOnChain,
-    agree: apiMultiplier === effectiveOnChain,
-    verdict: apiMultiplier === effectiveOnChain ? "ok" : "planes-disagree",
+    agree,
+    verdict: agree ? "ok" : "planes-disagree",
   };
 }

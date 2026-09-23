@@ -82,6 +82,20 @@ test("scaled-ui: pending тоже канонизируется («5.000»→«5�
   assert.equal(parsed.pendingMultiplier, "5");
 });
 
+test("reconcile: дрейф репрезентации той же величины (api «1.10» vs chain «1.1») — ok, не planes-disagree (Jev R3, хвост R7-16)", async () => {
+  const { reconcileMultiplier } = await import("../src/issuer/scaled-ui.mjs");
+  const onChain = parseScaledUiAmount(settled("1.1"));
+  const r = reconcileMultiplier("1.10", onChain, "2026-01-01T00:00:00Z");
+  assert.equal(r.verdict, "ok");
+  assert.equal(r.agree, true);
+  // действительное расхождение величин ловится как раньше
+  const bad = reconcileMultiplier("1.9", onChain, "2026-01-01T00:00:00Z");
+  assert.equal(bad.verdict, "planes-disagree");
+  // отображаемые значения не перекрашиваются — как пришли, так и показаны
+  assert.equal(r.api, "1.10");
+  assert.equal(r.onChainEffective, "1.1");
+});
+
 test("journal: смена репрезентации той же величины («5» на цепи → «5.0» в RPC) — фантомного события НЕТ", () => {
   // бут-1: первое наблюдение, active="5" → entry с событием 1→5
   const boot1 = planJournalStep(TOKEN, null, parseScaledUiAmount(rotation("1", "5")));
