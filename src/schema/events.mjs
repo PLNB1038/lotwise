@@ -102,6 +102,11 @@ export function validateEvent(e) {
           !Number.isInteger(e.ratioDenominator) || e.ratioDenominator <= 0) {
         throw new EventValidationError("split ratio must be two positive integers (e.g. 3/1)", "ratioNumerator");
       }
+      // Потолок safe-integer — тот же аргумент, что у amountPerUnitRaw (волна B):
+      // выше 2^53 JSON-граница молча округляет, а движок считает точно
+      if (e.ratioNumerator > Number.MAX_SAFE_INTEGER || e.ratioDenominator > Number.MAX_SAFE_INTEGER) {
+        throw new EventValidationError("split ratio exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "ratioNumerator");
+      }
       break;
     case "DIVIDEND_ACCRUAL":
       requireFields(e, ["amountPerUnitRaw", "decimals"]);
@@ -125,6 +130,9 @@ export function validateEvent(e) {
         if (!Number.isInteger(e.exchangeNumerator) || e.exchangeNumerator <= 0 ||
             !Number.isInteger(e.exchangeDenominator) || e.exchangeDenominator <= 0) {
           throw new EventValidationError("exchange ratio must be two positive integers (old per new)", "exchangeNumerator");
+        }
+        if (e.exchangeNumerator > Number.MAX_SAFE_INTEGER || e.exchangeDenominator > Number.MAX_SAFE_INTEGER) {
+          throw new EventValidationError("exchange ratio exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "exchangeNumerator");
         }
       }
       break;

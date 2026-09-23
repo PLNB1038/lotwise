@@ -65,7 +65,7 @@ test("crosscheck: вырожденная цена пула (close <= 0) — inco
   const v = crossCheckMultiplierChange(multEvent("1", "2"), degenerate);
   assert.equal(v.verdict, "inconclusive");
   assert.equal(v.observedRatio, null); // не Infinity, который JSON молча превращает в null
-  assert.match(v.note, /non-positive/i);
+  assert.match(v.note, /unusable|non-positive/i); // раунд 10: формулировка расширена на нечисловые close
 
   const negative = candles.map((c, i) => (i === 1 ? { ...c, c: -3 } : c));
   const v2 = crossCheckMultiplierChange(multEvent("1", "2"), negative);

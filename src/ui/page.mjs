@@ -159,7 +159,7 @@ export function renderPage() {
 
   <footer>
     This page is a sample consumer of the Lotwise REST API:
-    <code>/health</code> <code>/tokens</code> <code>/events</code> <code>/multiplier</code> <code>/summary</code> <code>/onchain</code> <code>/lots</code> <code>/crosscheck</code>.
+    <code>/health</code> <code>/tokens</code> <code>/events</code> <code>/multiplier</code> <code>/summary</code> <code>/onchain</code> <code>/lots</code> <code>/accruals</code> <code>/crosscheck</code>.
     Registry size, issuers and event totals come live from <code>/health</code> — nothing is
     hardcoded in this page (registry expanded with the dividend layer on Sep 22, 2026).
   </footer>
@@ -199,14 +199,14 @@ function renderStats(h, tokens) {
   // и по ним витрина рисует множитель «1». Молчать = тихая ложь, показываем честный warn.
   if (h.journal && h.journal.unavailable > 0) {
     el('stats').innerHTML +=
-      '<div class="stat"><b class="err">' + h.journal.unavailable + '</b>' +
+      '<div class="stat"><b class="err">' + esc(h.journal.unavailable) + '</b>' +
       '<i>tokens unavailable at startup — multipliers may be understated</i></div>';
   }
   // Токены, исключённые из витрины по кривому таймлайну (health.excluded[] с сервера):
   // строка с «1» в таблице без пометки неотличима от честного «событий не было».
   if (h.excluded && h.excluded.length > 0) {
     el('stats').innerHTML +=
-      '<div class="stat"><b class="err">' + h.excluded.length + '</b>' +
+      '<div class="stat"><b class="err">' + esc(h.excluded.length) + '</b>' +
       '<i>tokens excluded from multiplier reporting — shown as excluded, not computed</i></div>';
   }
   // Повреждения источников на старте: журнал повреждён (бэкфилл восстановил не всё),

@@ -88,10 +88,15 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
  *   txs — хронологические (старейшие первыми), дельты всех владельцев (фильтр в отчёте);
  *   accounts — Map mint->{address, currentRaw} для сверки балансов
  */
-export async function scanWallet(client, owner, registry, { maxTxs = 300, limit = 100, onProgress } = {}) {
+export async function scanWallet(client, owner, registry, { maxTxs = 300, limit = 100, onProgress, signal } = {}) {
   if (!isValidAddress(owner)) {
     throw new WalletScanError("owner must be a base58 Solana pubkey", "invalid-address");
   }
+  // Abort-пропагация (волна B): ушедший клиент останавливает скан между
+  // страницами/транзакциями — RPC-квота не дожигается в пустоту
+  const aborted = () => {
+    if (signal?.aborted) throw new WalletScanError("scan aborted by client", "aborted");
+  };
   const mintSet = new Set(registry.map((t) => t.mint));
   const accounts = await fetchOwnerTokenAccounts(client, owner, registry);
 
@@ -105,6 +110,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     let srcTruncated = false; // флаг НА ИСТОЧНИК: упёрся один — остальные сканируются своим потолком целиком
     let zeroProgressPages = 0; // ROUND9 №13: чередующиеся дубли-страницы = нет прогресса
     for (;;) {
+      aborted();
       const batch = await client.call("getSignaturesForAddress", [
         source,
         { limit, ...(before !== undefined ? { before } : {}) },
@@ -162,6 +168,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   const txs = [];
   let fetched = 0;
   for (const s of ordered) {
+    aborted();
     const tx = await fetchWalletDeltas(client, s.signature, mintSet);
     fetched++;
     if (onProgress) onProgress({ fetched, total: ordered.length });

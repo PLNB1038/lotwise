@@ -61,6 +61,12 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // контролирует клиент: ключевание по нему позволяло ротацией заголовка плодить
   // себе безлимитные корзины (ROUND7 №8). Прямое подключение с поддельным XFF
   // здесь не бывает (единственный публичный путь — funnel), иначе — адрес сокета.
+  // Частичная конфигурация ({} или один ключ) — внятный отказ конфигурации, а не
+  // TypeError из деструктуризации лимитёра (волна B): rateLimits — либо полный,
+  // либо null/false.
+  if (rateLimits && (!rateLimits.scan || !rateLimits.rpc)) {
+    throw new RangeError("rateLimits requires both buckets: { scan: {windowMs,max}, rpc: {windowMs,max} } (or null to disable)");
+  }
   const scanLimiter = rateLimits ? createRateLimiter(rateLimits.scan) : null;
   const rpcLimiter = rateLimits ? createRateLimiter(rateLimits.rpc) : null;
   const clientKey = (req) => {
@@ -74,7 +80,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     }
     return req.socket?.remoteAddress ?? "unknown";
   };
-  // возвращает true, если запросу разрешён дорогой I/O; иначе сам отвечает 429
+  // возвращает true, если запросу разрешён дорогой I/O; иначе сам отвечает 429.
+  // Токен сжигается ДО вызова источника: и 503 упавшего RPC тоже его жжёт —
+  // осознанный анти-ретрай-шторм (волна B проверила; иначе мёртвый источник
+  // размалывается бесконечными повторами), задокументировано здесь.
   const allow = (limiter, req, res) => {
     if (!limiter) return true;
     const { allowed, retryAfterMs } = limiter.check(clientKey(req));
@@ -201,9 +210,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
       if (!allow(scanLimiter, req, res)) return;
+      // Ушедший клиент не должен дожигать RPC-квоту (волна B): abort прокидывается
+      // в сканер, скан останавливается между страницами/транзакциями; результат
+      // отменённого скана НЕ кэшируется (кэш-хелпер кэширует только успех).
+      const abort = new AbortController();
+      req.on("aborted", () => abort.abort());
       let scan;
       try {
-        scan = await walletScanner(address);
+        scan = await walletScanner(address, { signal: abort.signal });
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
@@ -245,9 +259,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
       if (!allow(scanLimiter, req, res)) return;
+      const abort = new AbortController();
+      req.on("aborted", () => abort.abort());
       let scan;
       try {
-        scan = await walletScanner(address);
+        scan = await walletScanner(address, { signal: abort.signal });
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }

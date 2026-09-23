@@ -103,13 +103,15 @@ export function crossCheckMultiplierChange(event, candles) {
     };
   }
 
-  if (before.c <= 0 || after.c <= 0) {
-    // вырожденный пул (close 0/отрицательный): observedRatio = ∞/− — сильный
-    // вердикт на мусоре; честное «не видно», как у дивидендного сиблинга (ROUND7 №11)
+  if (!Number.isFinite(before.c) || !Number.isFinite(after.c) || before.c <= 0 || after.c <= 0) {
+    // вырожденный пул: close 0/отрицательный/НЕЧИСЛОВОЙ (NaN/Infinity/undefined —
+    // волна B: NaN <= 0 ложен и проходил гвард, давая «mismatch» с null-полями).
+    // observedRatio = ∞/−/NaN — сильный вердикт на мусоре; честное «не видно»,
+    // зеркально дивидендному сиблингу (ROUND7 №11, ROUND9 №5, волна B)
     return {
       ...base, observedRatio: null, observed: null,
       verdict: "inconclusive",
-      note: `non-positive close around the event (${before.c} → ${after.c}) — rebase signature cannot be resolved`,
+      note: `unusable close around the event (${before.c} → ${after.c}) — rebase signature cannot be resolved`,
     };
   }
 
@@ -199,14 +201,14 @@ export function crossCheckDividendAccrual(event, candles) {
   const rawEx = after.c * scale;    // raw-цена первой пост-экс свечи
   const observed = observedWindow(before, after);
 
-  if (rawPrev <= 0 || rawEx <= 0) {
-    // вырожденный пул (цена 0/отрицальная С ЛЮБОЙ стороны): доля >100% или
-    // отрицательная — сильный вердикт на мусоре; честное «не видно», зеркально
-    // гварду обеих сторон в crossCheckMultiplierChange (ROUND9 №5)
+  if (!Number.isFinite(rawPrev) || !Number.isFinite(rawEx) || rawPrev <= 0 || rawEx <= 0) {
+    // вырожденный пул: close 0/отрицательный/НЕЧИСЛОВОЙ с любой стороны (волна B:
+    // NaN проходил rawPrev<=0, expectedFraction становился NaN → «mismatch») —
+    // доля не строится, честное «не видно» (ROUND9 №5 расширен на обе стороны+finite)
     return {
       ...base, observedDropFraction: null, observed,
       verdict: "inconclusive",
-      note: `non-positive close around the ex-date (${before.c} → ${after.c}) — dividend signature cannot be resolved`,
+      note: `unusable close around the ex-date (${before.c} → ${after.c}) — dividend signature cannot be resolved`,
     };
   }
 
@@ -256,6 +258,14 @@ export function crossCheckDividendAccrual(event, candles) {
  * @returns {{verdicts: Array, coverage: {candlesFrom: string|null, candlesTo: string|null, candles: number}}}
  */
 export function crossCheckEvents(events, candles) {
+  // Гард формы свечей (волна B): мусорный ts (NaN/undefined от лежащего шлюза)
+  // раньше доезжал до new Date(NaN*1000) в coverage → RangeError → /crosscheck
+  // падал generic-500, хотя дисциплина модуля — типизированная CrossCheckError.
+  for (const cd of candles) {
+    if (!Number.isFinite(cd.ts)) {
+      throw new CrossCheckError(`candle with non-finite ts: ${JSON.stringify(cd.ts)}`);
+    }
+  }
   const mult = events.filter((e) => e.type === "MULTIPLIER_CHANGE");
   const divs = events.filter((e) => e.type === "DIVIDEND_ACCRUAL");
   const verdicts = [

@@ -59,8 +59,21 @@ export function parseServeArgs(argv, env = process.env) {
   }
 
   const host = readFlag(argv, "host") ?? "127.0.0.1";
+  if (/\s/.test(host)) {
+    // волна B: «not a host» проходил парсер и ронял listen ПОСЛЕ полного бут-I/O
+    // (реестр+журнал+RPC-квота); пробел в host — всегда опечатка
+    throw new ServeArgsError(`--host must not contain whitespace, got ${JSON.stringify(host)}`, "--host");
+  }
   // флаг > env > публичный RPC; env-ключ не должен утекать в cmdline (см. serve.mjs)
   const rpcUrl = readFlag(argv, "rpc") ?? env.LOTWISE_RPC_URL ?? DEFAULT_RPC;
+  try {
+    const u = new URL(rpcUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("not http(s)");
+  } catch {
+    // бут в честные 503 на мусорном URL — легально, но отказ ДО I/O дешевле
+    // (та же семья, что ROUND7 №10 / ROUND9 №1)
+    throw new ServeArgsError(`--rpc must be a valid http(s) URL, got ${JSON.stringify(rpcUrl)}`, "--rpc");
+  }
 
   let maxTxs = 300;
   const maxTxsRaw = readFlag(argv, "max-txs");

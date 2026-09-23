@@ -164,7 +164,7 @@ test("нулевая pre-ex цена — inconclusive, а не деление н
   ]);
   assert.equal(r.verdict, "inconclusive");
   // ROUND9 №5: гвард обеих сторон — нота про close ВОКРУГ экс-даты (было «pre-ex»)
-  assert.match(r.note, /non-positive close around the ex-date/);
+  assert.match(r.note, /unusable close around the ex-date/); // раунд 10: finite-гвард, формулировка шире
 });
 
 test("кривое событие — отказ, а не догадка: тип, дата, amount, decimals", () => {

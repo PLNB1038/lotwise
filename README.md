@@ -47,6 +47,7 @@ GET only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for any
 | `/multiplier?symbol=&date=&raw=` | Multiplier at a date plus a raw-to-adjusted sample with exact dust |
 | `/onchain?symbol=&date=` | Issuer-reported vs on-chain multiplier reconcile verdict |
 | `/lots?address=` | Wallet report: FIFO lots, raw vs adjusted balances |
+| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet (engine-computed) |
 | `/crosscheck?symbol=` | Price cross-check verdicts per event |
 | `/health` | Event/token counts, journal and registry integrity flags, excluded tokens |
 
@@ -99,7 +100,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-604 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+614 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

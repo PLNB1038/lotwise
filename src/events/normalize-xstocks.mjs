@@ -59,6 +59,12 @@ function nodeKey(n) {
  * @returns {Array<object>} канонические MULTIPLIER_CHANGE, отсортированные по времени (старые → новые)
  */
 export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Ethereum" }) {
+  // Гвард формы (волна B): не-массив — NormalizeError, не голый TypeError ниже по
+  // потоку; зеркально dividendsFromDeclarations (клиент уже гвардит, вход-сторона
+  // может быть любой).
+  if (!Array.isArray(historyNodes)) {
+    throw new NormalizeError(`history nodes must be an array, got ${historyNodes === null ? "null" : typeof historyNodes}`);
+  }
   const sourceUrl = `https://api.xstocks.fi/api/v2/public/assets/${symbol}/multiplier/history?network=${network}`;
   // Дедуп до разбора дат и сортa: повтор узла = повтор события с тем же
   // multiplierFrom, на котором таймлайн падает. Первое вхождение выигрывает.

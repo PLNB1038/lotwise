@@ -18,7 +18,10 @@ if (!res.ok) {
 }
 const prices = await res.json();
 
+// счётчик пустых decimals — ДО обогащения (волна B): после мутации список уже
+// полон и каждый повторный прогон врал «0/31»
+const missingBefore = list.filter((t) => t.decimals === null || t.decimals === undefined).length;
 const { filled, unknown, written } = enrichDecimalsFile(REGISTRY, prices);
 if (!written) console.log("filled=0 — data/tokens.json не перезаписан (нечего писать)");
-console.log(`decimals заполнено: ${filled}/${list.filter((t) => t.decimals !== null).length} всего`);
+console.log(`decimals заполнено: ${filled}/${missingBefore} без decimals на входе`);
 console.log(unknown.length ? `НЕ найдены в Jupiter: ${unknown.join(", ")}` : "все минты известны Jupiter");

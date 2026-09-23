@@ -10,6 +10,13 @@ import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot } from "../src/events/journal.mjs";
 import { parseServeArgs, ServeArgsError } from "../src/cli/flags.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// data-пути — от РАСПОЛОЖЕНИЯ СКРИПТА, не CWD (волна B): неверный WorkingDirectory
+// юнита раньше давал «здоровый» пустой сервер (tokens:0, corrupted:0) и журнал
+// под чужим каталогом; systemd-контракт WorkingDirectory не должен быть единственной защитой.
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Гварды флагов ДО любого I/O (ROUND7 №10): раньше --port abc проживал весь бут
 // (минуты квот RPC) и падал только на listen, а --rpc последним аргументом молча
@@ -42,7 +49,7 @@ const rpcDisplay = (() => {
 // rejection, ни деградированного режима, ни диагностики класса «повреждён» (раунд 6,
 // LW2_tokens_json_write_non_atomic). Паттерн журнала: повреждение — явное состояние,
 // улика сохраняется рядом, бут продолжается на пустом реестре; флаг уходит в /health.
-const loadedRegistry = await loadRegistrySafe("data/tokens.json");
+const loadedRegistry = await loadRegistrySafe(path.join(ROOT, "data", "tokens.json"));
 const registry = loadedRegistry.registry;
 if (!loadedRegistry.ok) {
   console.error(
@@ -62,7 +69,7 @@ const rpcForJournal = new RpcClient({ endpoint: rpcUrl });
 // живут прямо в минте (scaledUiAmountConfig). Бэкфилл при первом наблюдении,
 // далее дифф от прошлой эффективной величины. Живые находки 19.09: SPACEX ×5 (10.06),
 // OPENAI ×1.4861347 (17.07). Журнал — runtime-состояние, из цепи восстанавливается.
-const journalPath = "data/onchain-journal.json";
+const journalPath = path.join(ROOT, "data", "onchain-journal.json");
 // Битый файл журнала — НЕ «первый запуск» (раунд 5): усечённый JSON после обрыва
 // записи раньше молча давал journal={}, и вся история событий терялась невосстановимо,
 // а /health показывал журнал здоровым. Теперь состояние различимо: corrupted-флаг
@@ -228,11 +235,12 @@ const onchainReader = (mint) =>
 // Кошельковый скан: дорогой (по getTransaction на транзакцию, ~350мс на публичном RPC)
 const walletCached = cached("wallet");
 
-const walletScanner = (address) =>
+const walletScanner = (address, { signal } = {}) =>
   walletCached(address, () => {
     console.log(`[serve] скан кошелька ${address} (потолок ${maxTxs} подписей)`);
     return scanWallet(rpc, address, registry, {
       maxTxs,
+      signal,
       onProgress: ({ fetched, total }) => {
         if (fetched % 25 === 0 || fetched === total) console.log(`[serve] ${address}: ${fetched}/${total}`);
       },
@@ -273,6 +281,9 @@ try {
       unavailable: journalUnavailable,
       corrupted: journalCorrupted ? 1 : 0,
       preserveFailed: journalReadOnly ? 1 : 0, // read-only бут: финальной записи журнала не было (раунд 6)
+      // волна B: срыв записи (диск полон/EBUSY) — события бута только в памяти,
+      // /health обязан это показывать, мониторинг не должен считать журнал здоровым
+      saveFailed: !journalSaved.written && !journalSaved.readonly ? 1 : 0,
     },
     registryStats, // { corrupted: 0|1 } — контракт /health: registry.corrupted (см. отчёт раунда 6)
   });

@@ -195,7 +195,10 @@ function isPrivateDeliveryHost(hostname) {
  * ТОЛЬКО если владелец мёртв (ROUND9 №9: SIGSTOP-застрявший живой владелец со
  * старым mtime — ломка была потерей его обновления; kill(pid,0) отличает мёртвого).
  * kill -9 сирота самоизлечивается старением mtime: дефолтные attempts покрывают
- * staleMs целиком. Не взяли — честная ошибка, не тишина.
+ * staleMs целиком. ОСЗНАННЫЙ ТРЕЙД-ОФФ (волна B): pid мёртвого владельца мог
+ * быть переработан долгоживущим процессом — тогда протухший лок не сломается
+ * никогда (до ручного rm); редкое ручное вмешательство против потери чужих
+ * обновлений — приняли. Не взяли лок — честная ошибка, не тишина.
  */
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -207,7 +210,7 @@ function isPidAlive(pid) {
   }
 }
 
-export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryPauseMs = 5, nowMs = Date.now } = {}) {
+export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryPauseMs = 5, nowMs = Date.now, writeSync: writeSyncFn = writeSync } = {}) {
   const lockPath = `${filePath}.lock`;
   const maxAttempts = attempts ?? Math.ceil(staleMs / retryPauseMs) + 100;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
@@ -238,8 +241,15 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryP
     throw new SubscriptionError(`subscription store is locked by another process (${lockPath} persists)`);
   }
   try {
-    writeSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs()).toISOString() }));
-  } catch { /* содержимое лок-файла — диагностика, не контракт */ }
+    writeSyncFn(fd, JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs()).toISOString() }));
+  } catch (err) {
+    // Содержимое лока load-bearing (pid-живость ломки): пустой/усечённый файл
+    // следующий процесс прочтёт как легаси и сломает ЖИВОГО владельца по mtime —
+    // реанимация TOCTOU ROUND9 №9. Снимаем лок и падаем честно (волна B).
+    try { closeSync(fd); } catch { /* уже закрыт */ }
+    try { unlinkSync(lockPath); } catch { /* уже удалён */ }
+    throw err;
+  }
   try {
     return fn();
   } finally {
