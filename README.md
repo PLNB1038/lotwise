@@ -1,4 +1,4 @@
-# Lotwise
+# <img src="assets/logo-mark.svg" alt="Lotwise" width="28" height="28"> Lotwise
 
 
 A corporate actions engine for tokenized equities on Solana. Lotwise normalizes splits, dividends, mergers, ticker changes and multiplier rebases across xStocks, PreStocks, Backpack and Tessera tokens into adjusted tax lots, and serves them over a REST API with a self-hosted report page.

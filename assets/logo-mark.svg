@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Lotwise mark">
+  <!-- Lotwise mark: the letter L. The spine is the event axis, the accent foot is
+       the adjusted lot it produced, the accent dot on the spine is the event itself.
+       Neutral shapes inherit `color` (currentColor): dark ink on light backgrounds,
+       color:#e6edf0 on dark ones. Accent elements are fixed #58a6ff (reads on both). -->
+  <title>Lotwise</title>
+  <rect x="4.5" y="4" width="4" height="24" rx="2" fill="currentColor"/>
+  <rect x="4.5" y="24.5" width="21" height="3.5" rx="1.75" fill="#58a6ff" class="accent"/>
+  <circle cx="6.5" cy="13" r="2.3" fill="#58a6ff" class="accent"/>
+</svg>

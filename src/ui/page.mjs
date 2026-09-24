@@ -2,12 +2,23 @@
 // Без зависимостей и внешних ресурсов: только относительные fetch к своему же API.
 // Публичная сторона — английский, без эмодзи, только проверяемые факты из эндпоинтов.
 
+// Фавиконка = та же L-марка (assets/logo-mark.svg), но одним акцентом #58a6ff:
+// у data-URI нет CSS-контекста страницы — currentColor наследовать неоткуда, а
+// нейтральный инк (#e6edf0/#1f2328) пропадает на светлом или тёмном таб-баре.
+const FAVICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+  '<rect x="4.5" y="4" width="4" height="24" rx="2" fill="#58a6ff"/>' +
+  '<rect x="4.5" y="24.5" width="21" height="3.5" rx="1.75" fill="#58a6ff"/>' +
+  '<circle cx="6.5" cy="13" r="2.3" fill="#58a6ff"/></svg>';
+const FAVICON_HREF = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`;
+
 export function renderPage() {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="${FAVICON_HREF}">
 <title>Lotwise — corporate actions engine for tokenized equities</title>
 <style>
   :root {
