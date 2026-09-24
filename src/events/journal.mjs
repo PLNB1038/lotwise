@@ -3,7 +3,7 @@
 // рестарт процесса. parsed === null — цепь недоступна: реплеем кэш прошлых событий,
 // запись журнала не трогаем (observedAt остаётся честно протухшим).
 import { journalTransition } from "./normalize-onchain.mjs";
-import { readFileSync, openSync, closeSync, unlinkSync, statSync } from "node:fs";
+import { readFileSync, openSync, closeSync, unlinkSync, statSync, writeSync } from "node:fs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 import { canonicalDecimalString } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
@@ -278,21 +278,70 @@ export function persistJournalOnBoot(journalPath, journal, { preserveFailed = fa
 const SYNC_WAIT_CELL = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(SYNC_WAIT_CELL, 0, 0, ms);
 
-// Эксклюзивный лок-файл с ломкой протухшего (mtime > staleMs): живой сосед когда-то
-// отпустит, мёртвый — не отпустит никогда. Возвращает fd или null (не взяли — деградация).
-function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs }) {
+// pid-живость (семантика ROUND9 №9 из стор-лока вебхуков): существующий процесс =
+// живой владелец, EPERM = чужой, но живой; ESRCH = мёртв.
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+// Эксклюзивный лок-файл. Содержимое load-bearing: {pid, createdAt} — по pid мёртвый
+// владелец ломается СРАЗУ (сирота после kill -9), живой SIGSTOP-процесс со старым
+// mtime НЕ ломается (волна F1 повторила TOCTOU R9 №9 для второго лока — закрыто).
+// Легаси/не-JSON содержимое — по одному mtime, как в вебхук-локе. Будущий mtime
+// (перекос часов) — тоже кандидат на ломку: ждать staleMs от «завтра» бессмысленно.
+// nowMs инжектится (паттерн лимитёра) — граница «ровно staleMs» пинится детерминированно.
+// Возвращает fd или null (не взяли — деградация, бут не должен падать из-за лока).
+function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, nowMs = Date.now }) {
+  const now = typeof nowMs === "function" ? nowMs() : nowMs;
   for (let i = 0; i < attempts; i++) {
+    let fd = null;
     try {
-      return openSync(lockPath, "wx");
+      fd = openSync(lockPath, "wx");
     } catch (err) {
       if (err.code !== "EEXIST") return null;
       try {
-        const age = Date.now() - statSync(lockPath).mtimeMs;
-        if (age > staleMs) unlinkSync(lockPath); // владелец умер — ломаем и ретраим
+        const meta = (() => {
+          try {
+            return JSON.parse(readFileSync(lockPath, "utf8"));
+          } catch {
+            return null; // легаси/пустой контент — pid-семантика неприменима
+          }
+        })();
+        if (meta !== null && Number.isInteger(meta?.pid)) {
+          // лок с pid: мёртвый владелец ломается СРАЗУ (сирота после kill -9 не жжёт
+          // staleMs — волна F1-4), живой не ломается ВООБЩЕ (SIGSTOP-владелец не теряет
+          // обновление — R9 №9), независимо от mtime
+          if (!isPidAlive(meta.pid)) unlinkSync(lockPath);
+        } else {
+          const age = now - statSync(lockPath).mtimeMs;
+          // легаси-лок — mtime-семантика; будущее учитывается только ЗА ±staleMs:
+          // NTFS округляет mtime вверх на доли мс — свежий лок не должен выглядеть
+          // «минус-миллисекундным будущим» (грабли раунда 15)
+          if (age > staleMs || age < -staleMs) unlinkSync(lockPath);
+        }
       } catch {
         /* лок исчез между EEXIST и stat — просто ретрай */
       }
-      sleepSync(retryPauseMs);
+      if (fd === null) {
+        sleepSync(retryPauseMs);
+        continue;
+      }
+    }
+    try {
+      writeSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
+      return fd;
+    } catch (err) {
+      // Пустой лок следующий процесс сочтёт легаси и сломает ЖИВОГО владельца по
+      // mtime — реанимация TOCTOU. Снимаем и деградируем без лока.
+      try { closeSync(fd); } catch { /* уже закрыт */ }
+      try { unlinkSync(lockPath); } catch { /* уже удалён */ }
+      return null;
     }
   }
   return null;
@@ -309,11 +358,11 @@ function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs }) {
  * @param {string} journalPath
  * @param {object} journal — карта { mint: entry } этого процесса
  */
-export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, attempts = 700, retryPauseMs = 5 } = {}) {
+export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, attempts = 700, retryPauseMs = 5, nowMs } = {}) {
   const lockPath = `${journalPath}.lock`;
   let fd = null;
   try {
-    fd = acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs });
+    fd = acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, ...(nowMs !== undefined ? { nowMs } : {}) });
   } catch {
     fd = null;
   }

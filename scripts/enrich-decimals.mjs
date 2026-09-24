@@ -10,21 +10,38 @@ import { readFileSync } from "node:fs";
 import { enrichDecimalsFile } from "../src/registry/enrich.mjs";
 
 const argv = process.argv.slice(2);
+// Грамматика = serve (ROUND7 №10): «--flag value» И «--flag=value»; пустое значение и
+// флаг без значения — ОТКАЗ ДО любого I/O (волна F1 [P2]: «?? дефолт» съедал null
+// ошибки, скрипт печатал отказ, а потом всё равно шёл в сеть и переписывал реестр).
+// Возвращает: string | undefined (флага нет) | null (флаг битый — вызывающий обязан прерваться).
 const readFlag = (name) => {
+  const eq = `--${name}=`;
+  const eqIdx = argv.findIndex((a) => a.startsWith(eq));
+  if (eqIdx !== -1) {
+    const value = argv[eqIdx].slice(eq.length);
+    if (value === "") {
+      console.error(`--${name} requires a non-empty value`);
+      return null;
+    }
+    return value;
+  }
   const i = argv.indexOf(`--${name}`);
   if (i === -1) return undefined;
   const value = argv[i + 1];
   if (value === undefined || value.startsWith("--")) {
     console.error(`--${name} requires a value`);
-    process.exitCode = 2;
     return null;
   }
   return value;
 };
-const REGISTRY = readFlag("registry") ?? "data/tokens.json";
-const API = readFlag("api") ?? "https://lite-api.jup.ag";
+const registryFlag = readFlag("registry");
+const apiFlag = readFlag("api");
+const badFlag = registryFlag === null || apiFlag === null;
+if (badFlag) process.exitCode = 2;
 
-if (REGISTRY !== null && API !== null) {
+if (!badFlag) {
+  const REGISTRY = registryFlag ?? "data/tokens.json";
+  const API = apiFlag ?? "https://lite-api.jup.ag";
   const list = JSON.parse(readFileSync(REGISTRY, "utf8"));
   const ids = list.map((t) => t.mint).join(",");
   const res = await fetch(`${API}/price/v3?ids=${ids}`, {

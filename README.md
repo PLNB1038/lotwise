@@ -47,7 +47,7 @@ GET only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for any
 | `/multiplier?symbol=&date=&raw=` | Multiplier at a date plus a raw-to-adjusted sample with exact dust |
 | `/onchain?symbol=&date=` | Issuer-reported vs on-chain multiplier reconcile verdict |
 | `/lots?address=` | Wallet report: FIFO lots, raw vs adjusted balances |
-| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet (engine-computed) |
+| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet (engine-computed from issuer dividend declarations; xStocks publishes no per-unit amounts, so dividend rebases currently appear in the live feed as multiplier events) |
 | `/crosscheck?symbol=` | Price cross-check verdicts per event |
 | `/health` | Event/token counts, journal and registry integrity flags, excluded tokens |
 
@@ -76,7 +76,7 @@ curl "http://127.0.0.1:8787/crosscheck?symbol=OPENAI"
 
 ### Response and error contract
 
-Every response is JSON. Errors are `{"error": string, "kind"?: "rate-limit" | "rpc" | "http" | "network"}` — `kind` is the retry policy. `rate-limit` and `network` are transient (a 429 also carries `Retry-After`); `rpc` and `http` mean an upstream source refused, and the endpoint answers `503` without fabricating data. A `400` means the request itself is wrong — unknown symbol/mint/issuer/type, a rolled-over date, a structurally invalid address — and will fail identically on every retry.
+Every response is JSON. Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy. Transient (back off and retry): `rate-limit` (a 429 also carries `Retry-After`) and `network`. Not retryable — the upstream source refused or sent garbage, and the endpoint answers `503` without fabricating data: `rpc`, `http`, `parse` (a price source returned an unusable body), `malformed-source` (an RPC source returned a non-array response). A few untyped internal checks reject with `"kind": null`. A `400` means the request itself is wrong — unknown symbol/mint/issuer/type, a rolled-over date, a structurally invalid address — and will fail identically on every retry.
 
 Response shape (a real `/events` row, truncated):
 
@@ -87,9 +87,9 @@ Response shape (a real `/events` row, truncated):
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
-Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit. When both `mint` and `symbol` are passed, `mint` wins.
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit.
 
-Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy, else the socket): 12 wallet scans/min, 60 on-chain/price calls/min; configure via `RATE_LIMIT_SCAN_PER_MIN` / `RATE_LIMIT_RPC_PER_MIN`. `/onchain` verdicts are `ok | planes-disagree`; `/crosscheck` verdicts are the five values listed above.
+Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy, else the socket): 12 wallet scans/min, 60 on-chain/price calls/min; configure via `RATE_LIMIT_SCAN_PER_MIN` / `RATE_LIMIT_RPC_PER_MIN`. Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree`; `/crosscheck` verdicts are the five values listed above.
 
 ## Architecture
 
@@ -108,7 +108,7 @@ Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a
 - `ui/` the report page.
 - `webhooks/` subscription store and HMAC-SHA256 signed deliveries with retries (`scripts/webhook-deliver.mjs` CLI).
 - `fs/` atomic file writes.
-- `cli/` the serve flag grammar: `--flag value` and `--flag=value` forms, malformed values rejected before any I/O, and the host is resolved before boot starts spending RPC quota.
+- `cli/` the serve flag grammar: `--flag value` and `--flag=value` forms, malformed values rejected before any I/O, and the host is resolved and the port probed before boot starts spending RPC quota.
 
 Live on-chain findings observed during development: SPACEX multiplier `1` → `5` effective 2026-06-10, OPENAI `1` → `1.4861347` effective 2026-07-17. Tessera tokens have no rebase mechanism; their multiplier is `1`, and the API says so plainly.
 
