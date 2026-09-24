@@ -33,7 +33,7 @@ Then open http://127.0.0.1:8787/ .
 
 On startup the server loads the registry, reads mint state for every non-xStocks token, pulls xStocks multiplier history, and only then starts listening. Unavailable sources are skipped with a warning instead of crashing the boot; the state of every source is visible at `/health`.
 
-Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (per-wallet signature cap for `/lots`).
+Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota.
 
 ## API
 
@@ -73,6 +73,23 @@ curl "http://127.0.0.1:8787/lots?address=$WALLET_ADDRESS"
 # Price cross-check: daily candles vs event dates for OPENAI
 curl "http://127.0.0.1:8787/crosscheck?symbol=OPENAI"
 ```
+
+### Response and error contract
+
+Every response is JSON. Errors are `{"error": string, "kind"?: "rate-limit" | "rpc" | "http" | "network"}` — `kind` is the retry policy. `rate-limit` and `network` are transient (a 429 also carries `Retry-After`); `rpc` and `http` mean an upstream source refused, and the endpoint answers `503` without fabricating data. A `400` means the request itself is wrong — unknown symbol/mint/issuer/type, a rolled-over date, a structurally invalid address — and will fail identically on every retry.
+
+Response shape (a real `/events` row, truncated):
+
+```json
+{"type":"MULTIPLIER_CHANGE","effectiveDate":"2026-02-02T21:47:00.000Z","status":"confirmed",
+ "sources":["https://api.xstocks.fi/api/v2/public/assets/JPMx/multiplier/history?network=Ethereum#node:…"],
+ "multiplierFrom":"1.0040015369331659","multiplierTo":"1.0071547908304908","reason":"Dividend",
+ "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
+```
+
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit. When both `mint` and `symbol` are passed, `mint` wins.
+
+Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy, else the socket): 12 wallet scans/min, 60 on-chain/price calls/min; configure via `RATE_LIMIT_SCAN_PER_MIN` / `RATE_LIMIT_RPC_PER_MIN`. `/onchain` verdicts are `ok | planes-disagree`; `/crosscheck` verdicts are the five values listed above.
 
 ## Architecture
 

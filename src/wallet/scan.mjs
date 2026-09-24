@@ -21,8 +21,25 @@ export class WalletScanError extends Error {
   }
 }
 
+// E4-1 (волна E): charset+длины мало — «1»×41 проходит regex, но декодируется не в
+// 32 байта: сканер тратил RPC и отвечал 503 «rpc» на перманентно битый ввод (retry-
+// логика потребителя долбит его вечно). Структурная проверка: base58 → ровно 32 байта;
+// лидирующие «1» — нулевые байты (поэтому «1»×32 = system program, структурно валиден).
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const B58_INDEX = new Map([...B58].map((ch, i) => [ch, i]));
+
 export function isValidAddress(addr) {
-  return typeof addr === "string" && PUBKEY_RE.test(addr);
+  if (typeof addr !== "string" || !PUBKEY_RE.test(addr)) return false;
+  let n = 0n;
+  for (const ch of addr) n = n * 58n + BigInt(B58_INDEX.get(ch));
+  let leadZeros = 0;
+  while (addr[leadZeros] === "1") leadZeros++;
+  let bytes = leadZeros;
+  while (n > 0n) {
+    bytes++;
+    n >>= 8n;
+  }
+  return bytes === 32;
 }
 
 /**

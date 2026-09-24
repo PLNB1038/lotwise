@@ -82,6 +82,14 @@ export function parseScaledUiAmount(accountInfoValue) {
       `scaledUiAmountConfig: newMultiplierEffectiveTimestamp is not a number: ${JSON.stringify(tsRaw)} (pending ${pending} without a valid activation date)`,
     );
   }
+  // Волна E (фаззинг ×10): конечный, но за ±8.64e15 мс — toISOString() кидал ГОЛЫЙ
+  // RangeError мимо типизированной ошибки модуля; на /onchain это 503 kind:null
+  // с утечкой внутреннего текста наружу. Граница включительна: 8_640_000_000_000 — валидно.
+  if (pending !== null && (!Number.isFinite(ts) || Math.abs(ts * 1000) > 8.64e15)) {
+    throw new ScaledUiError(
+      `scaledUiAmountConfig: newMultiplierEffectiveTimestamp is outside the representable date range: ${JSON.stringify(tsRaw)} (pending ${pending} without a representable activation date)`,
+    );
+  }
   return {
     program: accountInfoValue.owner,
     decimals: info.decimals,

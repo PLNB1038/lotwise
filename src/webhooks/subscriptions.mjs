@@ -145,20 +145,27 @@ function writeStore(filePath, subs) {
 
 // SSRF-данлист для validateSubscription (раунд 8). Литеральные адреса и
 // localhost; DNS-резолв в момент доставки — за скобками (см. комментарий выше).
+// Волна E: добавлены CGNAT 100.64/10 (TAILNET ГОТОВ ДОСТАВИТЬ ВЕБХУКОМ — tailscale
+// адреса это ровно эта зона) и переходные v6: 6to4 2002::/16 (первый хекстет 0x2002),
+// NAT64 64:ff9b::/96 — целиком, без разбора embedded: операторский вход не должен
+// уметь стучаться в переходную инфраструктуру.
+function isPrivateV4(a, b) {
+  if ([0, 10, 127].includes(a)) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT — с волны E
+  return false;
+}
 function isPrivateDeliveryHost(hostname) {
   // концевые точки срезаем ДО проверок (волна C: «localhost.» резолвится в loopback,
   // но строкой не равен «localhost») — root-форма FQDN легитимна для публичных хостов
   const host = String(hostname).toLowerCase().replace(/\.+$/, "").replace(/^\[|\]$/g, ""); // v6 в скобках
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // IPv4-литерал: 0/8, 10/8, 127/8, 169.254/16 (вкл. 169.254.169.254 metadata), 172.16/12, 192.168/16
+  // IPv4-литерал: 0/8, 10/8, 127/8, 169.254/16 (вкл. 169.254.169.254 metadata), 172.16/12, 192.168/16, 100.64/10
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    if ([0, 10, 127].includes(a)) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    return false;
+    return isPrivateV4(Number(v4[1]), Number(v4[2]));
   }
   // IPv6-литерал (без разворота :: — по первому хекстету, зоны %eth0 отброшены):
   // ::1, fc00::/7 (fc/fd), fe80::/10 (fe80-febf)
@@ -173,13 +180,11 @@ function isPrivateDeliveryHost(hostname) {
     const c = (parseInt(mapped[2], 16) >> 8) & 0xff;
     const d = parseInt(mapped[2], 16) & 0xff;
     if ([a, c, d].every((x) => x >= 0 && x <= 255) && b >= 0 && b <= 255) {
-      if ([0, 10, 127].includes(a)) return true;
-      if (a === 169 && b === 254) return true;
-      if (a === 172 && b >= 16 && b <= 31) return true;
-      if (a === 192 && b === 168) return true;
-      return false; // публичный embedded-v4 — легитимный адрес
+      return isPrivateV4(a, b); // публичный embedded-v4 — легитимный адрес
     }
   }
+  if (/^2002:/.test(v6)) return true; // 6to4 — с волны E
+  if (/^64:ff9b:/.test(v6)) return true; // NAT64 — с волны E
   const first = /^([0-9a-f]{1,4}):/.exec(v6);
   if (first) {
     const x = parseInt(first[1], 16);

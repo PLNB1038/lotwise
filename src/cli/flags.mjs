@@ -4,6 +4,7 @@
 // молча убивал env-фолбэк (rpcUrl = undefined → весь бут в честных 503).
 // Гварды ДО любого I/O — по образцу --max-txs, который уже так умел.
 import { lookup as dnsLookup } from "node:dns/promises";
+import { createServer } from "node:net";
 
 export class ServeArgsError extends Error {
   constructor(msg, flag) {
@@ -99,4 +100,27 @@ export async function assertHostResolvable(host, lookup = dnsLookup) {
   } catch (err) {
     throw new ServeArgsError(`--host does not resolve: ${err.code ?? err.message} (${JSON.stringify(host)})`, "--host");
   }
+}
+
+// Занятый порт ДО бут-I/O (волна E, E3-4): EADDRINUSE раньше ловился только на listen
+// ПОСЛЕ полного бута — двойной запуск сжигал реестр/журнал/15 RPC-вызовов. Одноразовый
+// bind-проб закрывает типовой случай; гонка «двое пробуют в одну миллисекунду» остаётся
+// за пост-бут EADDRINUSE-отказом (внятный exit 1) — осознанный остаток.
+export function checkPortAvailable(port, host = "127.0.0.1") {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    const fail = (msg) => {
+      probe.close();
+      reject(new ServeArgsError(msg, "--port"));
+    };
+    probe.once("error", (err) => {
+      if (err.code === "EADDRINUSE" || err.code === "EACCES") {
+        fail(`--port ${port} is already in use on ${host} (${err.code}) — refusing before boot I/O`);
+      } else {
+        fail(`--port ${port} cannot be bound on ${host}: ${err.code ?? err.message}`);
+      }
+    });
+    probe.once("listening", () => probe.close(() => resolve()));
+    probe.listen(port, host);
+  });
 }

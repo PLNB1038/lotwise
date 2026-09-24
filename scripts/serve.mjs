@@ -9,7 +9,7 @@ import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot } from "../src/events/journal.mjs";
-import { parseServeArgs, ServeArgsError, assertHostResolvable } from "../src/cli/flags.mjs";
+import { parseServeArgs, ServeArgsError, assertHostResolvable, checkPortAvailable } from "../src/cli/flags.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -48,6 +48,18 @@ const rpcDisplay = (() => {
 // (реестр+журнал+RPC-квота) и умирал только на listen с невнятным ENOTFOUND.
 try {
   await assertHostResolvable(host);
+} catch (err) {
+  if (err instanceof ServeArgsError) {
+    console.error(`[serve] ${err.message}`);
+    process.exit(1);
+  }
+  throw err;
+}
+
+// Волна E (E3-4): занятый порт — тоже ДО бута: EADDRINUSE ловился только на listen
+// после полного бута, и двойной запуск сжигал RPC-квоту ради отказа за секунду.
+try {
+  await checkPortAvailable(port, host);
 } catch (err) {
   if (err instanceof ServeArgsError) {
     console.error(`[serve] ${err.message}`);
@@ -303,8 +315,13 @@ try {
   console.error(`[serve] не поднялся на порту ${port}: ${err.code ?? err.message}`);
   process.exit(1);
 }
-console.log(`\n[serve] Lotwise API: http://127.0.0.1:${server.address().port}`);
-console.log(`[serve] витрина: http://127.0.0.1:${server.address().port}/`);
+// Волна E (E3-1): баннер — по ФАКТИЧЕСКОМУ биндингу server.address(), не по захардкоженному
+// 127.0.0.1: на win «--host localhost» слушает только [::1], а старый баннер врал
+// http://127.0.0.1 — идёшь по баннеру, получаешь ECONNREFUSED.
+const bound = server.address();
+const boundHost = bound.family === "IPv6" ? `[${bound.address}]` : bound.address;
+console.log(`\n[serve] Lotwise API: http://${boundHost}:${bound.port}`);
+console.log(`[serve] витрина: http://${boundHost}:${bound.port}/`);
 console.log(`[serve] токенов: ${registry.length}, событий: ${events.length}, on-chain RPC: ${rpcDisplay}`);
 console.log(`[serve] rate limits (на IP): ${rateLimits.scan.max}/мин сканов кошелька, ${rateLimits.rpc.max}/мин on-chain/цен (env: RATE_LIMIT_SCAN_PER_MIN, RATE_LIMIT_RPC_PER_MIN)`);
 console.log(`[serve] попробуй: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);

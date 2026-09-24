@@ -3,7 +3,7 @@
 // рестарт процесса. parsed === null — цепь недоступна: реплеем кэш прошлых событий,
 // запись журнала не трогаем (observedAt остаётся честно протухшим).
 import { journalTransition } from "./normalize-onchain.mjs";
-import { readFileSync } from "node:fs";
+import { readFileSync, openSync, closeSync, unlinkSync, statSync } from "node:fs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 import { canonicalDecimalString } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
@@ -265,9 +265,79 @@ export function bootJournalOnchain(journalPath, opts = {}) {
 export function persistJournalOnBoot(journalPath, journal, { preserveFailed = false } = {}) {
   if (preserveFailed) return { written: false, readonly: true, error: null };
   try {
-    saveJournalAtomic(journalPath, journal);
+    // Волна E (E3-2): merge-under-lock, а не снапшот поверх диска — чужая запись,
+    // положенная в окно «бут прочитал → персистнул», раньше молча затиралась.
+    saveJournalMerged(journalPath, journal);
     return { written: true, readonly: false, error: null };
   } catch (err) {
     return { written: false, readonly: false, error: err };
+  }
+}
+
+// Синхронная пауза без занятого ожидания (паттерн стор-лока вебхуков R8).
+const SYNC_WAIT_CELL = new Int32Array(new SharedArrayBuffer(4));
+const sleepSync = (ms) => Atomics.wait(SYNC_WAIT_CELL, 0, 0, ms);
+
+// Эксклюзивный лок-файл с ломкой протухшего (mtime > staleMs): живой сосед когда-то
+// отпустит, мёртвый — не отпустит никогда. Возвращает fd или null (не взяли — деградация).
+function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs }) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return openSync(lockPath, "wx");
+    } catch (err) {
+      if (err.code !== "EEXIST") return null;
+      try {
+        const age = Date.now() - statSync(lockPath).mtimeMs;
+        if (age > staleMs) unlinkSync(lockPath); // владелец умер — ломаем и ретраим
+      } catch {
+        /* лок исчез между EEXIST и stat — просто ретрай */
+      }
+      sleepSync(retryPauseMs);
+    }
+  }
+  return null;
+}
+
+/**
+ * Merge-under-lock журнала (волна E, E3-2). Бут — не единственный писатель: ручной
+ * фикс или второй процесс могли положить запись в окно между чтением на старте и
+ * финальным персистом; снапшот поверх диска её затирал. Под лок-файлом перечитываем
+ * диск и мёржим ПО МИНТАМ: наши записи свежее (выигрывают для своих минтов), чужие
+ * минты переживают. Файл не читается/битый — пишем свой снапшот (как до раунда 14:
+ * решение о preserve — на уровне persistJournalOnBoot). Лок не взялся (живой сосед
+ * дольше staleMs держит, диск полон) — пишем без лока: не хуже статус-кво.
+ * @param {string} journalPath
+ * @param {object} journal — карта { mint: entry } этого процесса
+ */
+export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, attempts = 700, retryPauseMs = 5 } = {}) {
+  const lockPath = `${journalPath}.lock`;
+  let fd = null;
+  try {
+    fd = acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs });
+  } catch {
+    fd = null;
+  }
+  try {
+    let merged = { ...journal };
+    const existing = loadJournalOnchain(journalPath);
+    if (existing.ok) {
+      for (const [mint, entry] of Object.entries(existing.journal)) {
+        if (!(mint in merged)) merged[mint] = entry;
+      }
+    }
+    atomicWriteJson(journalPath, merged);
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* уже закрыт */
+      }
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        /* кто-то сломал протухший — ок */
+      }
+    }
   }
 }
