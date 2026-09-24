@@ -208,7 +208,7 @@ test("scanWallet: transfer за потолком maxTxs — окно режет�
     },
     accountsByProgram: {
       "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [
-        { pubkey: "AtaEdge" + "c".repeat(34), account: { data: { parsed: { info: {
+        { pubkey: "AtaEdge" + "c".repeat(36), account: { data: { parsed: { info: {
           mint: SPYx, owner: OWNER, tokenAmount: { amount: "100" },
         } } } } },
       ] },
@@ -229,21 +229,21 @@ test("fetchOwnerTokenAccounts: мусор в выдаче (нет info/parsed/da
   const client = fakeScanClient({
     accountsByProgram: {
       "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [
-        mk("GoodAcct" + "c".repeat(34), { mint: SPYx, owner: OWNER, tokenAmount: { amount: "12" } }),
+        mk("GoodAcct" + "c".repeat(35), { mint: SPYx, owner: OWNER, tokenAmount: { amount: "12" } }),
         mk("NoInfo", {}), // parsed.info пуст
         mk("NoParsed", null), // data без parsed
         { pubkey: "NoData", account: {} }, // нет data вовсе
         mk("JunkAcct", { mint: UNTRACKED, owner: OWNER, tokenAmount: { amount: "99" } }), // минт вне реестра
-        mk("NoAmountAcct" + "d".repeat(33), { mint: AAPLx, owner: OWNER }), // tokenAmount отсутствует
+        mk("NoAmountAcct" + "d".repeat(31), { mint: AAPLx, owner: OWNER }), // tokenAmount отсутствует
       ] },
     },
   });
   const accts = await fetchOwnerTokenAccounts(client, OWNER, REG);
   assert.equal(accts.size, 2);
   assert.equal(accts.get(SPYx).currentRaw, 12n);
-  assert.deepEqual(accts.get(SPYx).addresses, ["GoodAcct" + "c".repeat(34)]);
+  assert.deepEqual(accts.get(SPYx).addresses, ["GoodAcct" + "c".repeat(35)]);
   assert.equal(accts.get(AAPLx).currentRaw, 0n, "нет tokenAmount → трактуется как 0, не падение");
-  assert.ok(accts.get(AAPLx).addresses.includes("NoAmountAcct" + "d".repeat(33)), "адрес при нулевом балансе всё равно сканируется");
+  assert.ok(accts.get(AAPLx).addresses.includes("NoAmountAcct" + "d".repeat(31)), "адрес при нулевом балансе всё равно сканируется");
 });
 
 test("fetchOwnerTokenAccounts: один pubkey в двух программах — дедуп, баланс НЕ задвоен, warn оператору", async () => {
@@ -277,12 +277,12 @@ test("fetchOwnerTokenAccounts: разные pubkey в двух программ�
   } } } } });
   const client = fakeScanClient({
     accountsByProgram: {
-      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": { value: [mk("LegAcc" + "f".repeat(36), "7")] },
-      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [mk("AtaAcc" + "a".repeat(36), "5")] },
+      "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": { value: [mk("LegAcc" + "f".repeat(37), "7")] },
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [mk("AtaAcc" + "a".repeat(37), "5")] },
     },
   });
   const { result: accts, lines } = await captureConsoleError(() => fetchOwnerTokenAccounts(client, OWNER, REG));
-  assert.deepEqual(accts.get(SPYx).addresses, ["LegAcc" + "f".repeat(36), "AtaAcc" + "a".repeat(36)], "оба аккаунта в порядке программ");
+  assert.deepEqual(accts.get(SPYx).addresses, ["LegAcc" + "f".repeat(37), "AtaAcc" + "a".repeat(37)], "оба аккаунта в порядке программ");
   assert.equal(accts.get(SPYx).currentRaw, 12n, "разные аккаунты складываются, а не дедупятся");
   assert.equal(lines.length, 0, "легитимная мультипрограммность — не конфликт, warn не звучит");
 });
@@ -375,7 +375,7 @@ test("scanWallet: failed-tx с расходящимися pre/post — дель�
     } },
     accountsByProgram: {
       "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [
-        { pubkey: "AtaNoPh" + "c".repeat(34), account: { data: { parsed: { info: {
+        { pubkey: "AtaNoPh" + "c".repeat(36), account: { data: { parsed: { info: {
           mint: SPYx, owner: OWNER, tokenAmount: { amount: "0" },
         } } } } },
       ] },

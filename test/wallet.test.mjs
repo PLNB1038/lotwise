@@ -119,7 +119,7 @@ test("scanWallet: потолок maxTxs режет окно честно — tru
 
 test("scanWallet: источник, упёршийся в потолок, не режет страницы остальных источников", async () => {
   const registry = await loadRegistry("data/tokens.json");
-  const ATA = "AtaSPYx" + "c".repeat(34);
+  const ATA = "AtaSPYx" + "c".repeat(36);
   const sig = (s, slot) => ({ signature: s, slot, blockTime: slot, err: null });
   const PAGES = {
     [OWNER]: [sig("a1", 1), sig("a2", 2), sig("a3", 3), sig("a4", 4), sig("a5", 5)], // 5 при maxTxs=3 → truncated
@@ -160,7 +160,7 @@ test("scanWallet: мусорный адрес — ошибка, не скан", 
 
 test("scanWallet v2: входящий перевод через token-аккаунт (владелец НЕ подписант) — пойман", async () => {
   const registry = await loadRegistry("data/tokens.json");
-  const ATA = "AtaSPYx" + "c".repeat(34); // base58, 42 символа
+  const ATA = "AtaSPYx" + "c".repeat(36); // base58, 42 символа
   const client = fakeClient({
     sigPages: {
       [OWNER]: [{ signature: "self-buy", slot: 2, blockTime: 200, err: null }],
@@ -196,16 +196,16 @@ test("fetchOwnerTokenAccounts: оба токен-программа, тольк�
   const client = fakeClient({
     accountsByProgram: {
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": { value: [
-        mk("AtaA", SPYx, "7"), // xStocks живёт в Token-2022, тут для теста — обе программы
-        mk("AtaJ", "Junk111111111111111111111111111111111111", "9"), // не наш минт
+        mk("AtaAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SPYx, "7"), // xStocks живёт в Token-2022, тут для теста — обе программы
+        mk("AtaJjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj", "Junk111111111111111111111111111111111111", "9"), // не наш минт
       ] },
-      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [ mk("AtaB", AAPLx, "5") ] },
+      "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [ mk("AtaBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", AAPLx, "5") ] },
     },
   });
   const accts = await (await import("../src/wallet/scan.mjs")).fetchOwnerTokenAccounts(client, OWNER, registry);
   assert.equal(accts.size, 2);
   assert.equal(accts.get(SPYx).currentRaw, 7n);
-  assert.deepEqual(accts.get(AAPLx).addresses, ["AtaB"]);
+  assert.deepEqual(accts.get(AAPLx).addresses, ["AtaBbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
 });
 
 test("buildWalletReport: токен есть на цепи, дельт нет — виден с reconciles: false, не спрятан", async () => {
@@ -369,8 +369,8 @@ test("/lots: сканер бросил RpcError-подобное — 503 с kind
 
 test("два аккаунта одного минта (ATA + legacy): скан обоих, баланс = сумме, отчёт сходится", async () => {
   const registry = await loadRegistry("data/tokens.json");
-  const ATA = "AtaSPYx" + "c".repeat(34);
-  const LEG = "LegSPYx" + "d".repeat(34);
+  const ATA = "AtaSPYx" + "c".repeat(36);
+  const LEG = "LegSPYx" + "d".repeat(36);
   const mk = (pubkey, amount) => ({ pubkey, account: { data: { parsed: { info: {
     mint: SPYx, owner: OWNER, tokenAmount: { amount },
   } } } } });

@@ -16,6 +16,12 @@ export async function fetchWalletDeltas(client, signature, mints) {
   // и без error (лежащий/троттлящий шлюз): оба — честный skip одной транзакции,
   // а не TypeError, валящий весь скан кошелька (ROUND7 №14)
   if (tx == null) return null;
+  // Волна H3-4 [P2]: каркас без meta (лаг индексера/частичная выдача) — НЕ «нет наших
+  // минтов», а недоступная фактура: честный null → скан пометит «tx unavailable».
+  // Раньше такая tx молча исчезала: fetched+1, ни в txs, ни в skipped.
+  if (typeof tx !== "object" || tx.meta === null || tx.meta === undefined || typeof tx.meta !== "object") {
+    return null;
+  }
 
   // Ключ — accountIndex, НЕ owner|mint: у одного владельца бывает несколько
   // токен-аккаунтов одного минта (legacy + ATA), и самоперенос между ними —

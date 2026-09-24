@@ -279,11 +279,15 @@ const SYNC_WAIT_CELL = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(SYNC_WAIT_CELL, 0, 0, ms);
 
 // pid-живость (семантика ROUND9 №9 из стор-лока вебхуков): существующий процесс =
-// живой владелец, EPERM = чужой, но живой; ESRCH = мёртв.
-function isPidAlive(pid) {
+// живой владелец, EPERM = чужой, но живой; ESRCH = мёртв. kill инжектится для пинов
+// EPERM-ветки (на win в one-user-сьюте process.kill чужих не даёт EPERM).
+// Linux-слепое пятно (H1): неприпнутый зомби (родитель не ripнул) отвечает успехом
+// на kill(pid,0) — ждём весь бюджет и деградируем; того же трейд-офф-семейства, что
+// pid-reuse, деградация ограничена staleMs.
+export function isPidAlive(pid, kill = process.kill) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
     return true;
   } catch (err) {
     return err.code === "EPERM";
@@ -297,9 +301,17 @@ function isPidAlive(pid) {
 // (перекос часов) — тоже кандидат на ломку: ждать staleMs от «завтра» бессмысленно.
 // nowMs инжектится (паттерн лимитёра) — граница «ровно staleMs» пинится детерминированно.
 // Возвращает fd или null (не взяли — деградация, бут не должен падать из-за лока).
-function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, nowMs = Date.now }) {
+export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, nowMs }) {
+  // Волна H4 [P4]: мусорный nowMs (null/NaN) раньше просачивался в арифметику age
+  // (null − mtime = «глубокое будущее» = ломка свежего лока) — валидируем инъекцию.
+  if (typeof nowMs !== "function" && !Number.isFinite(nowMs)) nowMs = Date.now;
   const now = typeof nowMs === "function" ? nowMs() : nowMs;
+  // Волна H4 [P3]: счёт попыток — ложная метрика на Windows (Atomics.wait(5) реально
+  // ~15.6мс): 700 попыток = 10.9-12с блокировки вместо «~3.5с» из комментария R14.
+  // Честный потолок — настенные часы: деградация не позже ~staleMs независимо от ОС.
+  const deadline = Date.now() + staleMs;
   for (let i = 0; i < attempts; i++) {
+    if (i > 0 && Date.now() >= deadline) break;
     let fd = null;
     try {
       fd = openSync(lockPath, "wx");

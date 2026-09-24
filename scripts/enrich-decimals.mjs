@@ -19,7 +19,9 @@ const readFlag = (name) => {
   const eqIdx = argv.findIndex((a) => a.startsWith(eq));
   if (eqIdx !== -1) {
     const value = argv[eqIdx].slice(eq.length);
-    if (value === "") {
+    // Волна H4 [P3]: «--api=--evil» раньше уезжал в runtime (сырой ENOENT/undici-стек,
+    // exit 1) вместо usage-отказа exit 2 — паритет с space-формой
+    if (value === "" || value.startsWith("--")) {
       console.error(`--${name} requires a non-empty value`);
       return null;
     }

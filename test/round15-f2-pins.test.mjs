@@ -26,16 +26,19 @@ const tmpJournal = () => {
   return { dir, jp: path.join(dir, "onchain-journal.json"), lock: path.join(dir, "onchain-journal.json.lock") };
 };
 
-test("journal-лок: ровно staleMs — ещё свежий, ломка только строго позже (F09)", () => {
+test("journal-лок: граница протухания — внутри ±staleMs свежий, за ней ломка (F09)", () => {
+  // Точную границу (age == staleMs) портабельно не проверить: NTFS округляет mtime
+  // ВВЕРХ (age чуть меньше), ext-семейство обрезает на 1µс ВНИЗ (age чуть больше —
+  // H1-проба на живом Linux, deltaNs=-1000). Пинимаем ЗАВЕДОМО внутренние точки.
   const { dir, jp, lock } = tmpJournal();
   try {
     const staleMs = 10_000;
     const now = Date.now();
     writeFileSync(jp, JSON.stringify({ A: entry("1") }));
     writeFileSync(lock, "");
-    utimesSync(lock, new Date(now - staleMs), new Date(now - staleMs)); // ровно граница
+    utimesSync(lock, new Date(now - staleMs + 25), new Date(now - staleMs + 25)); // 25мс ДО границы
     saveJournalMerged(jp, { B: entry("2") }, { staleMs, attempts: 1, retryPauseMs: 1, nowMs: now });
-    assert.ok(existsSync(lock), "лок на границе НЕ сломан (age > staleMs, не >=) и пережил деградировавшую запись");
+    assert.ok(existsSync(lock), "лок внутри границы НЕ сломан и пережил деградировавшую запись");
 
     utimesSync(lock, new Date(now - staleMs - 60_000), new Date(now - staleMs - 60_000)); // явно протух
     saveJournalMerged(jp, { C: entry("3") }, { staleMs, attempts: 1, retryPauseMs: 1, nowMs: now });

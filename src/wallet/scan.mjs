@@ -78,10 +78,40 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
       { programId },
       { encoding: "jsonParsed", commitment: "confirmed" },
     ]);
-    for (const entry of res?.value ?? []) {
+    // Волна H3-3 [P1]: не-массив от шлюза — ЯВНАЯ malformed-source (зеркало ROUND9 №3
+    // для сигнатур): «пустой набор аккаунтов» от лежащего источника неотличим от нуля.
+    if (!Array.isArray(res?.value)) {
+      throw new WalletScanError(
+        `malformed getTokenAccountsByOwner response: expected array, got ${res?.value === null ? "null" : typeof res?.value}`,
+        "malformed-source",
+      );
+    }
+    for (const entry of res.value) {
+      if (entry === null || typeof entry !== "object") continue;
       const info = entry?.account?.data?.parsed?.info;
       if (!info || !mintSet.has(info.mint)) continue;
-      const address = entry.pubkey ?? null;
+      const address = typeof entry.pubkey === "string" ? entry.pubkey : null;
+      // битый pubkey не становится источником сигнатур (класс E4: «1»×41 жёг RPC и валил
+      // скан на -32602); мусорный amount («1e6») не попадает в сверку молча — оба
+      // пропускаем с warn: наблюдаемость вместо тихой лжи
+      if (address !== null && !isValidAddress(address)) {
+        console.error(`[wallet-scan] ${owner}: аккаунт с невалидным pubkey ${JSON.stringify(entry.pubkey).slice(0, 60)} пропущен (не источник сигнатур, не баланс)`);
+        continue;
+      }
+      // Нет tokenAmount → 0n, но адрес остаётся источником сигнатур (легаси-контракт
+      // wallet-edge: «нулевой баланс всё равно сканируется»). Мусорный amount («1e6»,
+      // 1.5) — skip с warn: тихий 0n без предупреждения = молчаливая потеря сверки.
+      const amountRaw = info.tokenAmount?.amount;
+      let amt = 0n;
+      if (amountRaw !== undefined && amountRaw !== null) {
+        const rawOk = (typeof amountRaw === "number" && Number.isSafeInteger(amountRaw) && amountRaw >= 0)
+          || (typeof amountRaw === "string" && /^\d+$/.test(amountRaw));
+        if (!rawOk) {
+          console.error(`[wallet-scan] ${owner}: аккаунт ${address ?? "?"} с мусорным balance amount ${JSON.stringify(amountRaw)} пропущен`);
+          continue;
+        }
+        amt = BigInt(amountRaw);
+      }
       if (address !== null) {
         if (seenPubkeys.has(address)) {
           console.error(`[wallet-scan] ${owner}: аккаунт ${address} встречен в выдаче токен-программ повторно — аккаунт принадлежит ровно одной программе; первое вхождение выигрывает, дубль в сумму не пошёл (иначе баланс задваивается и reconcile ложно падает)`);
@@ -89,7 +119,7 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
         }
         seenPubkeys.add(address);
       }
-      add(info.mint, address, BigInt(info.tokenAmount?.amount ?? "0"));
+      add(info.mint, address, amt);
     }
   }
   return out;
@@ -180,13 +210,28 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
 
   // 3) обрабатываем хронологически: сборка шла новейшими-первыми.
   // Сорт по slot: он есть всегда и монотонен; blockTime бывает null, а смешение
-  // секунд и слотов в одном компараторе — единицы разных порядков.
-  const ordered = toFetch.sort((a, b) => a.slot - b.slot);
+  // секунд и слотов в одном компараторе — единицы разных порядков. slot от битого
+  // эндпоинта бывает undefined — ?? 0 даёт определённый порядок (H3-6).
+  const ordered = toFetch.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
   const txs = [];
   let fetched = 0;
   for (const s of ordered) {
     aborted();
-    const tx = await fetchWalletDeltas(client, s.signature, mintSet);
+    let tx;
+    try {
+      tx = await fetchWalletDeltas(client, s.signature, mintSet);
+    } catch (err) {
+      // Волна H3-1/H3-2 [P1]: ОДНА ядовитая tx (мусорная meta из лежащего шлюза,
+      // постоянная RpcError на versioned-tx) роняла ВЕСЬ скан — кошелёк становился
+      // permanent-несканируемым, потребитель долбил 503-ретраями. Контракт ROUND7 №14
+      // «битая tx = skipped с причиной» покрывает и БРОСКИ, не только null.
+      // Наш собственный abort (WalletScanError) не глотаем — летит дальше.
+      if (err instanceof WalletScanError) throw err;
+      skipped.push({ signature: s.signature, reason: `tx unreadable: ${err?.code ? `${err.code}: ` : ""}${String(err?.message ?? err).slice(0, 120)}` });
+      fetched++;
+      if (onProgress) onProgress({ fetched, total: ordered.length });
+      continue;
+    }
     fetched++;
     if (onProgress) onProgress({ fetched, total: ordered.length });
     if (tx === null) {
