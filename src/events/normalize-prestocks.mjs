@@ -1,13 +1,14 @@
-// Нормализация метаданных PreStocks в канонические события Lotwise.
-// По образцу normalize-xstocks.mjs, но с честной оговоркой: текущая схема
-// метаданных PreStocks (снята с живого эндпоинта 2026-09-22) — identity-документ:
+// Normalization of PreStocks metadata into canonical Lotwise events.
+// Modeled on normalize-xstocks.mjs, but with an honest caveat: the current PreStocks
+// metadata schema (captured from the live endpoint on 2026-09-22) is an identity document:
 //   { name, symbol, description, image, external_url, terms }
-// Полей корпоративных событий (сплит/дивиденд/даты/коэффициенты) в ней НЕТ.
-// Поэтому metadataToEvents для актуальной схемы возвращает ПУСТОЙ список —
-// синтезировать события (даты, коэффициенты) из логотипа и описания — значит
-// выдумывать данные; конвейер проекта работает только с реальными наблюдениями.
-// Слой существует как точка подключения: когда эмитент добавит поля событий,
-// интерпретация появится здесь, а контракт «mint привязывается снаружи» не изменится.
+// It has NO corporate-event fields (split/dividend/dates/ratios).
+// Therefore metadataToEvents returns an EMPTY list for the current schema —
+// synthesizing events (dates, ratios) from a logo and a description would mean
+// inventing data; the project pipeline works only with real observations.
+// The layer exists as a plug-in point: when the issuer adds event fields,
+// their interpretation will appear here, and the "mint is bound externally" contract
+// will not change.
 import { validateEvent } from "../schema/events.mjs";
 
 export class NormalizeError extends Error {
@@ -18,9 +19,9 @@ export class NormalizeError extends Error {
   }
 }
 
-// Ключи identity-схемы, снятой с живого эндпоинта, в ОБОИХ написаниях:
-// snake_case — сырой JSON эндпоинта, camelCase (externalUrl) — наш клиент.
-// Всё, что за пределами набора, — сигнал об эволюции схемы эмитента.
+// Keys of the identity schema captured from the live endpoint, in BOTH spellings:
+// snake_case — the raw JSON of the endpoint, camelCase (externalUrl) — our client.
+// Anything outside this set is a signal that the issuer's schema has evolved.
 const KNOWN_KEYS = new Set([
   "name",
   "symbol",
@@ -32,14 +33,14 @@ const KNOWN_KEYS = new Set([
 ]);
 
 /**
- * План эмитента (метаданные PreStocks) -> канонические события.
- * Текущая схема содержит только identity-поля, поэтому честный результат — [].
- * Неизвестные ключи НЕ игнорируются молча: возможные будущие поля событий
- * (по образцу round 6, «тихая потеря данных») подсвечиваются оператору в
- * console.error — наблюдаемость вместо блокировки токена из-за косметики.
- * @param {{name, symbol, description?, image?, external_url?, terms?}} metadata — как отдаёт fetchTokenMetadata ИЛИ сырой JSON эндпоинта
- * @param {{sourceUrl?: string}} [ctx] — URL источника для пометки в логе
- * @returns {Array<object>} канонические события (сейчас всегда пусто)
+ * Issuer's plan (PreStocks metadata) -> canonical events.
+ * The current schema carries only identity fields, so the honest result is [].
+ * Unknown keys are NOT silently ignored: possible future event fields
+ * (modeled on round 6, "silent data loss") are highlighted to the operator in
+ * console.error — observability instead of blocking a token over cosmetics.
+ * @param {{name, symbol, description?, image?, external_url?, terms?}} metadata — as fetchTokenMetadata returns OR the raw endpoint JSON
+ * @param {{sourceUrl?: string}} [ctx] — source URL for the log note
+ * @returns {Array<object>} canonical events (currently always empty)
  */
 export function metadataToEvents(metadata, { sourceUrl = "https://prestocks.com/metadata" } = {}) {
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
@@ -51,33 +52,33 @@ export function metadataToEvents(metadata, { sourceUrl = "https://prestocks.com/
   const unknown = Object.keys(metadata).filter((k) => !KNOWN_KEYS.has(k));
   if (unknown.length > 0) {
     console.error(
-      `[normalize-prestocks] ${metadata.symbol}: в метаданных незнакомые ключи ${JSON.stringify(unknown)} — схема эмитента изменилась; возможно, появились поля событий. События из них пока НЕ извлекаются (нулевая интерпретация), оператору на заметку.`,
+      `[normalize-prestocks] ${metadata.symbol}: unknown keys in metadata ${JSON.stringify(unknown)} — the issuer's schema has changed; event fields may have appeared. Events are NOT extracted from them yet (zero interpretation), a note for the operator.`,
     );
   }
-  // Никаких событий из identity-полей: REDEEM из ссылки на оферту или
-  // TICKER_CHANGE без старого тикера — фальсификация даты/факта, а не маппинг.
+  // No events out of identity fields: a REDEEM derived from an offer link or
+  // a TICKER_CHANGE without the old ticker is a falsified date/fact, not a mapping.
   return [];
 }
 
 /**
- * Легитимные ссылки-источники из identity-документа: external_url (страница
- * токена) и terms (оферта эмитента). Когда у эмитента появятся реальные
- * поля событий, эти ссылки пойдут в sources канонических событий.
- * @returns {string[]} непустые строки-ссылки в стабильном порядке
+ * Legitimate source links from the identity document: external_url (the token's
+ * page) and terms (the issuer's offer). When the issuer gets real event
+ * fields, these links will go into the sources of the canonical events.
+ * @returns {string[]} non-empty link strings in a stable order
  */
 export function metadataSources(metadata) {
   if (metadata === null || typeof metadata !== "object") {
     throw new NormalizeError("metadata must be an object", metadata);
   }
-  // externalUrl — camelCase-вывод нашего же клиента (src/issuer/prestocks.mjs),
-  // external_url — сырой identity-JSON: оба легитимные входы (KNOWN_KEYS bless'ит
-  // клиентскую форму), терять ссылку страницы токена из sources нельзя (ROUND7 №6)
+  // externalUrl — the camelCase output of our own client (src/issuer/prestocks.mjs),
+  // external_url — the raw identity JSON: both are legitimate inputs (KNOWN_KEYS blesses
+  // the client form); losing the token page link from sources is not allowed (ROUND7 fix 6)
   return [metadata.external_url ?? metadata.externalUrl, metadata.terms].filter((s) => typeof s === "string" && s.length >= 4);
 }
 
-/** Дополняет события минтом из реестра и прогоняет валидацию схемы; атомарно.
- *  Контракт тот же, что у normalize-xstocks.bindMintAndValidate — копия,
- *  а не импорт: источники эмитентов подключаются независимо друг от друга. */
+/** Fills in the events with the mint from the registry and runs schema validation; atomic.
+ *  Same contract as normalize-xstocks.bindMintAndValidate — a copy,
+ *  not an import: issuer sources are wired up independently of each other. */
 export function bindMintAndValidate(events, mint) {
   const bound = events.map((e) => ({ ...e, mint }));
   for (const e of bound) {

@@ -1,29 +1,29 @@
-// Webhook-подписки Lotwise: хранилище (файл), сопоставление событий подпискам
-// и доставка с HMAC-подписью и ретраями.
+// Lotwise webhook subscriptions: storage (a file), event-to-subscription matching
+// and delivery with an HMAC signature and retries.
 //
-// ПОЧЕМУ БИБЛИОТЕКА, А НЕ HTTP-МАРШРУТЫ: API-сервер (src/api/server.mjs) строго
-// GET-only — 405 на не-GET запинен тестами (api.test.mjs) и сломать его нельзя.
-// Поэтому вебхуки — это модуль + CLI доставки (scripts/webhook-deliver.mjs),
-// без единого HTTP-эндпоинта: подписки живут в файле (по умолчанию
-// data/webhooks.json, появляется только в рантайме — при первой addSubscription),
-// доставка инициируется оператором/кроном, а не сервером.
+// WHY A LIBRARY, NOT HTTP ROUTES: the API server (src/api/server.mjs) is strictly
+// GET-only — 405 on non-GET is pinned by tests (api.test.mjs) and must not be broken.
+// So webhooks are a module + a delivery CLI (scripts/webhook-deliver.mjs),
+// without a single HTTP endpoint: subscriptions live in a file (by default
+// data/webhooks.json, created only at runtime — on the first addSubscription),
+// delivery is initiated by the operator/cron, not by the server.
 //
-// Формат записи подписки: {id, url, symbols, secret, createdAt, active}
-//   symbols — "*" (wildcard: все события) или непустой массив токен-идентификаторов
-//             (символы реестра или минты — сверка точная, без регистра-магии);
-//   secret  — ключ HMAC-SHA256 для подписи тела (X-Lotwise-Signature);
-//   active  — выключенная подписка не доставляет, но остаётся в файле (деактивация
-//             обратима удалением+добавлением; отдельного activate нет сознательно).
+// Subscription record format: {id, url, symbols, secret, createdAt, active}
+//   symbols — "*" (wildcard: all events) or a non-empty array of token identifiers
+//             (registry symbols or mints — exact match, no case magic);
+//   secret  — the HMAC-SHA256 key for signing the body (X-Lotwise-Signature);
+//   active  — a disabled subscription does not deliver but stays in the file (deactivation
+//             is reversible via delete+add; there is deliberately no separate activate).
 //
-// Доставка: POST JSON-конверта {deliveryId, sentAt, event}; заголовки
-//   X-Lotwise-Event     — тип события (event.type);
-//   X-Lotwise-Delivery  — id доставки (один на все ретраи: получатель видит дубль,
-//                         а не два разных вебхука — идемпотентность на его стороне);
+// Delivery: POST of the JSON envelope {deliveryId, sentAt, event}; headers
+//   X-Lotwise-Event     — the event type (event.type);
+//   X-Lotwise-Delivery  — the delivery id (one across all retries: the receiver sees a duplicate,
+//                         not two different webhooks — idempotency on its side);
 //   X-Lotwise-Signature — "sha256=" + hex(HMAC-SHA256(secret, exact body)).
-// Ретраи: до 3 попыток, backoff 1s → 4s; успех = 2xx; сетевой отказ/таймаут/не-2xx
-// — попытка не удалась. Тело и подпись считаются ОДИН РАЗ до попыток: все ретраи
-// несут байт-в-байт тот же payload (иначе получатель не смог бы сверить подпись
-// повторно, а идемпотентность по deliveryId потеряла бы смысл).
+// Retries: up to 3 attempts, backoff 1s → 4s; success = 2xx; a network failure/timeout/non-2xx
+// means the attempt failed. The body and signature are computed ONCE before the attempts: all retries
+// carry the byte-for-byte same payload (otherwise the receiver could not re-verify the signature,
+// and deliveryId idempotency would lose its meaning).
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { readFileSync, writeSync, openSync, closeSync, unlinkSync, statSync } from "node:fs";
 
@@ -31,8 +31,8 @@ import { atomicWriteJson } from "../fs/atomic.mjs";
 import { validateEvent } from "../schema/events.mjs";
 import { isValidIsoDate } from "../schema/isodate.mjs";
 
-// Дефолтный путь хранилища — ТОЛЬКО значение по умолчанию для CLI: модуль сам
-// файл не создаёт и при импорте не трогает (тестам путь передаётся явно).
+// The default storage path is a CLI default ONLY: the module itself neither creates
+// the file nor touches it on import (tests pass the path explicitly).
 export const DEFAULT_SUBSCRIPTIONS_PATH = "data/webhooks.json";
 
 export const MAX_ATTEMPTS = 3;
@@ -49,18 +49,18 @@ export class SubscriptionError extends Error {
   }
 }
 
-// ---------- валидация ----------
+// ---------- validation ----------
 
 /**
- * Валидация записи подписки. Бросает SubscriptionError с именем поля.
- * Поля обязательны все: хранилище не знает «частично заполненных» записей —
- * запись либо годна для доставки, либо не должна попадать в файл.
+ * Subscription record validation. Throws SubscriptionError with the field name.
+ * All fields are required: the storage knows no "partially filled" records —
+ * a record is either fit for delivery or must not enter the file.
  */
 export function validateSubscription(sub) {
   if (!sub || typeof sub !== "object" || Array.isArray(sub)) {
-    throw new SubscriptionError("подписка обязана быть объектом");
+    throw new SubscriptionError("subscription must be an object");
   }
-  // symbols в этот цикл не входит: это "*" или массив, проверяется ниже своей веткой
+  // symbols is not in this loop: it is "*" or an array, checked by its own branch below
   for (const f of ["id", "url", "secret", "createdAt"]) {
     if (typeof sub[f] !== "string" || sub[f] === "") {
       throw new SubscriptionError("missing or non-string required field", f);
@@ -75,11 +75,11 @@ export function validateSubscription(sub) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new SubscriptionError("url must be http(s)", "url");
   }
-  // SSRF-данлист (раунд 8): доставка — исходящие POST из прода; URL с приватным/
-  // loopback/link-local/metadata-адресом — стучаться в собственную инфраструктуру
-  // (funnel, RPC с ключом, метаданные облака). Вход операторский, DNS-rebinding
-  // за скобками (имя резолвится в момент доставки), но литеральные приватные
-  // адреса и localhost отбиваем на записи.
+  // SSRF denylist (round 8): delivery is outbound POSTs from production; a URL with a private/
+  // loopback/link-local/metadata address means knocking on your own infrastructure
+  // (funnel, keyed RPC, cloud metadata). The input is operator-side; DNS rebinding
+  // is out of scope (the name resolves at delivery time), but literal private
+  // addresses and localhost are rejected at write time.
   if (isPrivateDeliveryHost(parsed.hostname)) {
     throw new SubscriptionError("url host must be public (private, loopback, link-local and metadata addresses are not delivered to)", "url");
   }
@@ -93,8 +93,8 @@ export function validateSubscription(sub) {
       }
     }
   }
-  // createdAt пишем только мы (new Date(...).toISOString()) — строгий ISO,
-  // тот же парсер, что у всего конвейера дат (schema/isodate.mjs).
+  // createdAt is written only by us (new Date(...).toISOString()) — strict ISO,
+  // the same parser as the whole date pipeline (schema/isodate.mjs).
   if (!isValidIsoDate(sub.createdAt)) {
     throw new SubscriptionError("createdAt must be canonical ISO-8601 datetime", "createdAt");
   }
@@ -104,13 +104,13 @@ export function validateSubscription(sub) {
   return true;
 }
 
-// ---------- хранилище (файл, путь передаётся параметром) ----------
+// ---------- storage (a file, the path is passed as a parameter) ----------
 
 /**
- * Чтение хранилища подписок. Нет файла = честный пустой список (первый запуск);
- * битый JSON / не массив / невалидная запись — ГРОМКИЙ отказ (fail-closed):
- * доставка по недоверенной базе не выполняется, файл не перезаписывается.
- * @returns {Array} записи подписок
+ * Read the subscription storage. No file = an honest empty list (the first run);
+ * broken JSON / non-array / invalid record — a LOUD failure (fail-closed):
+ * no delivery over an untrusted base, the file is not rewritten.
+ * @returns {Array} subscription records
  */
 function readStore(filePath) {
   let raw;
@@ -118,22 +118,22 @@ function readStore(filePath) {
     raw = readFileSync(filePath, "utf8");
   } catch (err) {
     if (err && err.code === "ENOENT") return [];
-    throw new SubscriptionError(`файл подписок не читается: ${err.message}`);
+    throw new SubscriptionError(`subscription file is unreadable: ${err.message}`);
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new SubscriptionError(`невалидный JSON в ${filePath}: ${err.message}`);
+    throw new SubscriptionError(`invalid JSON in ${filePath}: ${err.message}`);
   }
   if (!Array.isArray(parsed)) {
-    throw new SubscriptionError(`хранилище подписок ${filePath} обязано быть массивом записей`);
+    throw new SubscriptionError(`subscription store ${filePath} must be an array of records`);
   }
   parsed.forEach((sub, i) => {
     try {
       validateSubscription(sub);
     } catch (err) {
-      throw new SubscriptionError(`битая запись subscriptions[${i}]: ${err.message}`, err.field);
+      throw new SubscriptionError(`broken record subscriptions[${i}]: ${err.message}`, err.field);
     }
   });
   return parsed;
@@ -143,36 +143,36 @@ function writeStore(filePath, subs) {
   atomicWriteJson(filePath, subs);
 }
 
-// SSRF-данлист для validateSubscription (раунд 8). Литеральные адреса и
-// localhost; DNS-резолв в момент доставки — за скобками (см. комментарий выше).
-// Волна E: добавлены CGNAT 100.64/10 (TAILNET ГОТОВ ДОСТАВИТЬ ВЕБХУКОМ — tailscale
-// адреса это ровно эта зона) и переходные v6: 6to4 2002::/16 (первый хекстет 0x2002),
-// NAT64 64:ff9b::/96 — целиком, без разбора embedded: операторский вход не должен
-// уметь стучаться в переходную инфраструктуру.
+// SSRF denylist for validateSubscription (round 8). Literal addresses and
+// localhost; DNS resolution at delivery time is out of scope (see the comment above).
+// Wave E: added CGNAT 100.64/10 (A TAILNET IS READY TO DELIVER WEBHOOKS — tailscale
+// addresses are exactly this zone) and transition v6: 6to4 2002::/16 (first hextet 0x2002),
+// NAT64 64:ff9b::/96 — wholesale, without parsing the embedded part: operator input must
+// not be able to knock on transition infrastructure.
 function isPrivateV4(a, b) {
   if ([0, 10, 127].includes(a)) return true;
   if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT — с волны E
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT — since wave E
   return false;
 }
 function isPrivateDeliveryHost(hostname) {
-  // концевые точки срезаем ДО проверок (волна C: «localhost.» резолвится в loopback,
-  // но строкой не равен «localhost») — root-форма FQDN легитимна для публичных хостов
-  const host = String(hostname).toLowerCase().replace(/\.+$/, "").replace(/^\[|\]$/g, ""); // v6 в скобках
+  // trailing dots stripped BEFORE the checks (wave C: "localhost." resolves to loopback
+  // but is not string-equal to "localhost") — the root form of an FQDN is legitimate for public hosts
+  const host = String(hostname).toLowerCase().replace(/\.+$/, "").replace(/^\[|\]$/g, ""); // bracketed v6
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  // IPv4-литерал: 0/8, 10/8, 127/8, 169.254/16 (вкл. 169.254.169.254 metadata), 172.16/12, 192.168/16, 100.64/10
+  // IPv4 literal: 0/8, 10/8, 127/8, 169.254/16 (incl. 169.254.169.254 metadata), 172.16/12, 192.168/16, 100.64/10
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (v4) {
     return isPrivateV4(Number(v4[1]), Number(v4[2]));
   }
-  // IPv6-литерал (без разворота :: — по первому хекстету, зоны %eth0 отброшены):
+  // IPv6 literal (no :: expansion — by the first hextet, %eth0 zones stripped):
   // ::1, fc00::/7 (fc/fd), fe80::/10 (fe80-febf)
   const v6 = host.split("%")[0];
   if (v6 === "::1" || v6 === "::") return true;
-  // IPv4-mapped IPv6 (ROUND9 №8): ::ffff:127.0.0.1 / ::ffff:a9fe:a9fe (metadata!)
-  // проходят хекстет-проверки — разворачиваем embedded-v4 и гоняем через v4-классификатор
+  // IPv4-mapped IPv6 (round 9 fix 8): ::ffff:127.0.0.1 / ::ffff:a9fe:a9fe (metadata!)
+  // pass the hextet checks — expand the embedded v4 and run it through the v4 classifier
   const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
   if (mapped) {
     const a = (parseInt(mapped[1], 16) >> 8) & 0xff;
@@ -180,11 +180,11 @@ function isPrivateDeliveryHost(hostname) {
     const c = (parseInt(mapped[2], 16) >> 8) & 0xff;
     const d = parseInt(mapped[2], 16) & 0xff;
     if ([a, c, d].every((x) => x >= 0 && x <= 255) && b >= 0 && b <= 255) {
-      return isPrivateV4(a, b); // публичный embedded-v4 — легитимный адрес
+      return isPrivateV4(a, b); // a public embedded v4 — a legitimate address
     }
   }
-  if (/^2002:/.test(v6)) return true; // 6to4 — с волны E
-  if (/^64:ff9b:/.test(v6)) return true; // NAT64 — с волны E
+  if (/^2002:/.test(v6)) return true; // 6to4 — since wave E
+  if (/^64:ff9b:/.test(v6)) return true; // NAT64 — since wave E
   const first = /^([0-9a-f]{1,4}):/.exec(v6);
   if (first) {
     const x = parseInt(first[1], 16);
@@ -195,17 +195,17 @@ function isPrivateDeliveryHost(hostname) {
 }
 
 /**
- * Кросс-процессный лок файлового стора (раунды 8–9): read-modify-write без лока
- * терял запись при двух конкурентных CLI-вызовах. Лок = exclusive-create
- * `<store>.lock` с содержимым {pid, createdAt}. Чужой СВЕЖИЙ лок — короткие
- * sync-ретраи (Atomics.wait: updateStore синхронный). ПРОТАХШИЙ по mtime ломается
- * ТОЛЬКО если владелец мёртв (ROUND9 №9: SIGSTOP-застрявший живой владелец со
- * старым mtime — ломка была потерей его обновления; kill(pid,0) отличает мёртвого).
- * kill -9 сирота самоизлечивается старением mtime: дефолтные attempts покрывают
- * staleMs целиком. ОСЗНАННЫЙ ТРЕЙД-ОФФ (волна B): pid мёртвого владельца мог
- * быть переработан долгоживущим процессом — тогда протухший лок не сломается
- * никогда (до ручного rm); редкое ручное вмешательство против потери чужих
- * обновлений — приняли. Не взяли лок — честная ошибка, не тишина.
+ * Cross-process lock of the file store (rounds 8–9): read-modify-write without a lock
+ * lost writes with two concurrent CLI calls. The lock is an exclusive-create
+ * `<store>.lock` holding {pid, createdAt}. Someone else's FRESH lock — short
+ * sync retries (Atomics.wait: updateStore is synchronous). An EXPIRED lock is broken
+ * ONLY if its owner is dead (round 9 fix 9: a SIGSTOP-stuck live owner with an old
+ * mtime — breaking it would lose its update; kill(pid,0) tells the dead one apart).
+ * A kill -9 orphan self-heals via mtime aging: the default attempts cover the whole
+ * staleMs. KNOWN TRADE-OFF (wave B): a dead owner's pid may be recycled by a long-lived
+ * process — then the expired lock is never broken (until a manual rm); rare manual
+ * intervention versus losing others' updates — accepted. Failing to take the lock is an
+ * honest error, not silence.
  */
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -213,7 +213,7 @@ function isPidAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return err.code === "EPERM"; // существует, но чужой — жив
+    return err.code === "EPERM"; // exists but belongs to someone else — alive
   }
 }
 
@@ -231,17 +231,17 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryP
       try {
         const age = nowMs() - statSync(lockPath).mtimeMs;
         if (age > staleMs) {
-          // ломка только МЁРТВОГО владельца: живой SIGSTOP-процесс со старым mtime
-          // не должен терять своё обновление (TOCTOU ROUND9 №9). Легаси-лок без
-          // pid (раунд 8) — по одному mtime, как раньше.
+          // breaking only a DEAD owner: a live SIGSTOPped process with an old mtime
+          // must not lose its update (the TOCTOU of round 9 fix 9). A legacy lock without
+          // pid (round 8) — by mtime alone, as before.
           let ownerAlive = false;
           try {
             const meta = JSON.parse(readFileSync(lockPath, "utf8"));
             ownerAlive = isPidAlive(meta?.pid);
-          } catch { /* не JSON / нет файла — считаем мёртвым (легаси-формат) */ }
+          } catch { /* not JSON / no file — treat as dead (legacy format) */ }
           if (!ownerAlive) unlinkSync(lockPath);
         }
-      } catch { /* лок исчез между create и stat — следующая попытка возьмёт */ }
+      } catch { /* the lock vanished between create and stat — the next attempt will take it */ }
     }
   }
   if (fd === null) {
@@ -250,18 +250,18 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryP
   try {
     writeSyncFn(fd, JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs()).toISOString() }));
   } catch (err) {
-    // Содержимое лока load-bearing (pid-живость ломки): пустой/усечённый файл
-    // следующий процесс прочтёт как легаси и сломает ЖИВОГО владельца по mtime —
-    // реанимация TOCTOU ROUND9 №9. Снимаем лок и падаем честно (волна B).
-    try { closeSync(fd); } catch { /* уже закрыт */ }
-    try { unlinkSync(lockPath); } catch { /* уже удалён */ }
+    // The lock content is load-bearing (pid-liveness breaking): an empty/truncated file
+    // is read by the next process as legacy, and it would break a LIVE owner by mtime —
+    // resurrecting the TOCTOU of round 9 fix 9. Release the lock and fail honestly (wave B).
+    try { closeSync(fd); } catch { /* already closed */ }
+    try { unlinkSync(lockPath); } catch { /* already removed */ }
     throw err;
   }
   try {
     return fn();
   } finally {
-    try { closeSync(fd); } catch { /* уже закрыт */ }
-    try { unlinkSync(lockPath); } catch { /* уже удалён — не важно */ }
+    try { closeSync(fd); } catch { /* already closed */ }
+    try { unlinkSync(lockPath); } catch { /* already removed — does not matter */ }
   }
 }
 
@@ -279,19 +279,19 @@ function makeId() {
 }
 
 /**
- * Добавить подписку. id генерируется, если не передан (тестам — явный id);
- * дубликат id — отказ (id — ключ remove/deactivate, молчаливая перезапись
- * чужой подписки недопустима).
- * @param {string} filePath — путь к хранилищу (файл создаётся при первой записи)
+ * Add a subscription. id is generated when not passed (tests use an explicit id);
+ * a duplicate id is a rejection (id is the key for remove/deactivate; silently
+ * overwriting someone else's subscription is unacceptable).
+ * @param {string} filePath — storage path (the file is created on the first write)
  * @param {{id?: string, url: string, symbols: "*"|string[], secret: string, nowMs?: number}} spec
- * @returns {object} записанная подписка
+ * @returns {object} the stored subscription
  */
 export function addSubscription(filePath, { id, url, symbols, secret, nowMs = Date.now() } = {}) {
   const record = { id: id ?? makeId(), url, symbols, secret, createdAt: new Date(nowMs).toISOString(), active: true };
   validateSubscription(record);
   return updateStore(filePath, (subs) => {
     if (subs.some((s) => s.id === record.id)) {
-      throw new SubscriptionError(`подписка с id "${record.id}" уже существует`, "id");
+      throw new SubscriptionError(`subscription with id "${record.id}" already exists`, "id");
     }
     subs.push(record);
     return record;
@@ -299,15 +299,15 @@ export function addSubscription(filePath, { id, url, symbols, secret, nowMs = Da
 }
 
 /**
- * Список подписок; нет файла — пустой массив. Возвращает копию: правка результата
- * не должна задевать диск и следующие вызовы.
+ * List subscriptions; no file — an empty array. Returns a copy: mutating the result
+ * must not touch the disk or affect subsequent calls.
  */
 export function listSubscriptions(filePath) {
   return readStore(filePath).map((s) => ({ ...s, symbols: s.symbols === "*" ? "*" : [...s.symbols] }));
 }
 
 /**
- * Удалить подписку по id. @returns {boolean} нашли и удалили.
+ * Delete a subscription by id. @returns {boolean} found and removed.
  */
 export function removeSubscription(filePath, id) {
   return updateStore(filePath, (subs) => {
@@ -319,8 +319,8 @@ export function removeSubscription(filePath, id) {
 }
 
 /**
- * Деактивировать подписку (active=false, запись остаётся). Повторная деактивация
- * уже выключенной — не ошибка. @returns {boolean} нашли ли id.
+ * Deactivate a subscription (active=false, the record stays). Deactivating an already
+ * disabled one is not an error. @returns {boolean} whether the id was found.
  */
 export function deactivateSubscription(filePath, id) {
   return updateStore(filePath, (subs) => {
@@ -331,17 +331,17 @@ export function deactivateSubscription(filePath, id) {
   });
 }
 
-// ---------- сопоставление ----------
+// ---------- matching ----------
 
 /**
- * Подписки, адресованные событию. Матч — по токен-идентификатору: wildcard "*"
- * ловит всё; иначе symbols записи сверяются с symbol события ИЛИ с его mint
- * (минт в списке — легальный способ подписаться, реестр стоит на минтах, а
- * символ не уникален). Сверка ТОЧНАЯ: base58-минты регистрозависимы, «умный»
- * case-folding сломал бы их. Активность здесь НЕ фильтруется — чистый матч;
- * решает «доставлять или нет» deliverToAll.
+ * Subscriptions addressed by an event. Matching is by token identifier: the wildcard "*"
+ * catches everything; otherwise the record's symbols are compared with the event's symbol OR its mint
+ * (a mint in the list is a legitimate way to subscribe: the registry is keyed by mints, and
+ * a symbol is not unique). Matching is EXACT: base58 mints are case-sensitive, "smart"
+ * case-folding would break them. Active state is NOT filtered here — pure matching;
+ * deliverToAll decides "deliver or not".
  * @param {Array} subs
- * @param {{symbol?: string, mint?: string}} ctx — идентификаторы события
+ * @param {{symbol?: string, mint?: string}} ctx — event identifiers
  */
 export function matchSubscriptions(subs, { symbol, mint } = {}) {
   return subs.filter((sub) => {
@@ -352,25 +352,25 @@ export function matchSubscriptions(subs, { symbol, mint } = {}) {
   });
 }
 
-// ---------- доставка ----------
+// ---------- delivery ----------
 
 /**
- * Символ/минт события для матчинга. Канонические события символ НЕ несут
- * (схема — mint-only), кроме TICKER_CHANGE, где oldSymbol/newSymbol — часть
- * контракта типа; операторский файл может нести и «сырое» поле symbol.
- * Предпочтение — АКТУАЛЬНОЕ имя (symbol, затем newSymbol): после смены тикера
- * живой идентификатор — новое имя, подписчики старого адресуются по минту.
+ * Symbol/mint of an event for matching. Canonical events carry no symbol
+ * (the schema is mint-only), except TICKER_CHANGE where oldSymbol/newSymbol are part
+ * of the type contract; an operator's file may also carry a raw symbol field.
+ * Preference — the CURRENT name (symbol, then newSymbol): after a ticker change
+ * the live identifier is the new name; holders of the old one are addressed by mint.
  */
 function eventContext(event) {
   return { symbol: event.symbol ?? event.newSymbol ?? event.oldSymbol, mint: event.mint };
 }
 
-// Детерминированный id доставки (ROUND7 №7): sha256(подписка × канонический JSON
-// события). Прогон доставки по тому же файлу событий mint'ит ТОТ ЖЕ
-// X-Lotwise-Delivery — получатель дедупит между прогонами, а не только внутри
-// ретраев одной доставки (раньше каждый прогон = randomUUID = «новое» событие).
-// sentAt в id НЕ входит (оно меняется между прогонами); идентичность = пара
-// (подписка, событие) с канонизацией ключей — порядок полей JSON не влияет.
+// Deterministic delivery id (round 7 fix 7): sha256(subscription × canonical JSON
+// of the event). A delivery run over the same events file mints THE SAME
+// X-Lotwise-Delivery — the receiver dedupes across runs, not only within
+// the retries of one delivery (previously each run = randomUUID = a "new" event).
+// sentAt is NOT part of the id (it changes between runs); identity = the pair
+// (subscription, event) with key canonicalization — JSON field order does not matter.
 function canonicalJson(v) {
   if (v === null || typeof v !== "object") return JSON.stringify(v);
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
@@ -383,20 +383,20 @@ function deterministicDeliveryId(sub, event) {
 }
 
 /**
- * Доставить одно событие в одну подписку. POST JSON-конверта
- * {deliveryId, sentAt, event}; подпись HMAC-SHA256(secret, body) — точь-в-точь
- * по байтам отправленного тела. До MAX_ATTEMPTS попыток с backoff BACKOFF_MS;
- * успех = 2xx, остальное (не-2xx, сетевой отказ, таймаут, 3xx — redirect:error)
- * — попытка не удалась. Сеть и таймеры инжектируемые: тесты ходят мок-fetcher'ом
- * и mock-sleep без пауз.
- * Идемпотентность: deliveryId по умолчанию ДЕТЕРМИНИРОВАН парой (подписка,
- * событие) — повторный прогон доставки даёт получателю уже знакомый id; явный
- * opts.deliveryId побеждает (единичные доставки с наружным идентификатором).
- * @param {object} sub — валидная подписка (url, secret)
- * @param {object} event — валидное каноническое событие (schema/events.mjs)
+ * Deliver a single event to a single subscription. POSTs the JSON envelope
+ * {deliveryId, sentAt, event}; the signature is HMAC-SHA256(secret, body) — exactly
+ * the sent body, byte for byte. Up to MAX_ATTEMPTS attempts with BACKOFF_MS backoff;
+ * success = 2xx, everything else (non-2xx, a network failure, a timeout, 3xx — redirect:error)
+ * means the attempt failed. Network and timers are injectable: tests use a mock fetcher
+ * and mock-sleep without pauses.
+ * Idempotency: deliveryId is by default DETERMINISTIC from the pair (subscription,
+ * event) — a repeated delivery run gives the receiver an already familiar id; an explicit
+ * opts.deliveryId wins (one-off deliveries with an external identifier).
+ * @param {object} sub — a valid subscription (url, secret)
+ * @param {object} event — a valid canonical event (schema/events.mjs)
  * @param {{fetcher?: Function, sleep?: Function, timeoutMs?: number, deliveryId?: string, nowMs?: number}} [opts]
  * @returns {Promise<{ok: boolean, attempts: number, statuses: Array<number|null>, error: string|null}>}
- *   statuses — по попытке: HTTP-статус или null (сеть/таймаут); error — последняя причина.
+ *   statuses — per attempt: the HTTP status or null (network/timeout); error — the last cause.
  */
 export async function deliverWebhook(
   sub,
@@ -404,8 +404,8 @@ export async function deliverWebhook(
   { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, deliveryId, nowMs = Date.now() } = {},
 ) {
   const id = deliveryId ?? deterministicDeliveryId(sub, event);
-  // Конверт и подпись фиксируются ДО попыток: все ретраи несут тот же payload
-  // и ту же подпись (получатель сверяет подпись на каждый повтор).
+  // The envelope and signature are fixed BEFORE the attempts: all retries carry the same
+  // payload and the same signature (the receiver verifies the signature on every repeat).
   const body = JSON.stringify({ deliveryId: id, sentAt: new Date(nowMs).toISOString(), event });
   const signature = `sha256=${createHmac("sha256", sub.secret).update(body).digest("hex")}`;
   const headers = {
@@ -419,11 +419,11 @@ export async function deliverWebhook(
   let lastError = null;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      // AbortSignal.timeout — один таймаут на попытку (не на серию): зависший
-      // приёмник не съедает оставшиеся попытки. redirect:"error" (ROUND7 №5):
-      // дефолтное "follow" превращало 302 в пустой GET на чужой хост, 2xx там
-      // засчитывался как доставка, а заголовки с HMAC-подписью утекали получателю
-      // редиректа. 3xx — провал попытки, как сетевой отказ.
+      // AbortSignal.timeout — one timeout per attempt (not per series): a hung
+      // receiver does not eat the remaining attempts. redirect:"error" (round 7 fix 5):
+      // the default "follow" turned a 302 into an empty GET to a foreign host, where a 2xx
+      // counted as delivery while the HMAC-signed headers leaked to the redirect target.
+      // A 3xx fails the attempt, like a network failure.
       const res = await fetcher(sub.url, { method: "POST", headers, body, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
       statuses.push(res.status);
       if (res.status >= 200 && res.status < 300) {
@@ -440,18 +440,18 @@ export async function deliverWebhook(
 }
 
 /**
- * Доставить список событий во все подходящие подписки. События валидируются
- * схемой ДО первой отправки: битый хвост списка не должен успеть уйти половиной.
- * Счётчики: delivered — (событие, подписка) с 2xx; failed — исчерпали ретраи;
- * skipped — пары без попытки: выключенная подписка под матчем или событие без
- * единого адресата («некому» — не провал, отдельная строка отчёта).
- * symbolToMint (волна I2): Map символ→минт из реестра. Канонические события
- * символ НЕ несут (схема mint-only) — без карты подписка по тикеру молча давала
- * 0 доставок при exit 0 (тихая неудача, находка интегратора). С картой символы
- * подписки резолвятся в минты ДО матчинга; символ вне карты — warning (опечатка
- * видна сразу), доставка не блокируется.
- * @param {Array} events — канонические события
- * @param {Array} subs — подписки (например, listSubscriptions(path))
+ * Deliver a list of events to all matching subscriptions. Events are validated
+ * by the schema BEFORE the first send: a broken tail of the list must not get halfway out.
+ * Counters: delivered — (event, subscription) pairs with 2xx; failed — retries exhausted;
+ * skipped — pairs without an attempt: an inactive subscription under a match, or an event
+ * with no addressee at all ("nobody to deliver to" is not a failure, a separate report line).
+ * symbolToMint (wave I2): a Map symbol→mint from the registry. Canonical events carry no
+ * symbol (the schema is mint-only) — without the map a ticker subscription silently yielded
+ * 0 deliveries with exit 0 (a silent failure, an integrator finding). With the map, subscription
+ * symbols resolve to mints BEFORE matching; a symbol outside the map is a warning (the typo
+ * is visible immediately), delivery is not blocked.
+ * @param {Array} events — canonical events
+ * @param {Array} subs — subscriptions (e.g. listSubscriptions(path))
  * @param {{fetcher?: Function, sleep?: Function, timeoutMs?: number, nowMs?: number,
  *          symbolToMint?: Map<string,string>}} [opts]
  * @returns {Promise<{delivered: number, skipped: number, failed: number,
@@ -461,11 +461,11 @@ export async function deliverWebhook(
  */
 export async function deliverToAll(events, subs, opts = {}) {
   const { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, nowMs = Date.now(), symbolToMint = null } = opts;
-  for (const event of events) validateEvent(event); // fail-fast до любых отправок
+  for (const event of events) validateEvent(event); // fail-fast before any sends
 
-  // Волна I2: резолв символов подписок в минты по реестру. Каноническое событие
-  // символа не несёт — без этого шага подписка ["SPYx"] матчится только с сырыми
-  // symbol-полями операторского файла и молча не доставляет ничего.
+  // Wave I2: resolve subscription symbols to mints via the registry. A canonical event
+  // carries no symbol — without this step a ["SPYx"] subscription matches only the raw
+  // symbol fields of an operator's file and silently delivers nothing.
   const symbolWarnings = new Set();
   let effectiveSubs = subs;
   if (symbolToMint instanceof Map && symbolToMint.size > 0) {
@@ -475,7 +475,7 @@ export async function deliverToAll(events, subs, opts = {}) {
       for (const s of sub.symbols) {
         const mint = symbolToMint.get(s);
         if (mint !== undefined) mints.push(mint);
-        else symbolWarnings.add(`подписка ${sub.id}: идентификатор ${JSON.stringify(s)} не найден в реестре — матчится только с сырыми symbol/newSymbol полями событий`);
+        else symbolWarnings.add(`subscription ${sub.id}: identifier ${JSON.stringify(s)} not found in the registry — matched only against raw symbol/newSymbol event fields`);
       }
       return mints.length > 0 ? { ...sub, symbols: [...sub.symbols, ...mints] } : sub;
     });
@@ -490,7 +490,7 @@ export async function deliverToAll(events, subs, opts = {}) {
     for (const sub of matches) {
       if (!sub.active) {
         counters.skipped += 1;
-        warnings.push(`подписка ${sub.id} выключена — событие ${event.type} не доставлено`);
+        warnings.push(`subscription ${sub.id} is inactive — event ${event.type} not delivered`);
         continue;
       }
       attempted += 1;
@@ -501,7 +501,7 @@ export async function deliverToAll(events, subs, opts = {}) {
     }
     if (matches.length === 0) {
       counters.skipped += 1;
-      warnings.push(`событие ${event.type} (${event.mint}) — подходящих подписок нет`);
+      warnings.push(`event ${event.type} (${event.mint}) — no matching subscriptions`);
     }
   }
   return { ...counters, deliveries, warnings };

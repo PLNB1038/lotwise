@@ -1,19 +1,20 @@
-// Шаг синхронизации on-chain журнала — чистая функция над (запись журнала, план цепи).
-// Выделена из serve.mjs ради тестируемости P0-инварианта: события журнала переживают
-// рестарт процесса. parsed === null — цепь недоступна: реплеем кэш прошлых событий,
-// запись журнала не трогаем (observedAt остаётся честно протухшим).
+// On-chain journal synchronization step — a pure function over (journal entry, chain plan).
+// Split out of serve.mjs for testability and for a P0 invariant: journal events survive
+// a process restart. parsed === null means the chain is unreachable: past events are
+// replayed from cache, the journal entry is left untouched (observedAt stays honestly stale).
 import { journalTransition } from "./normalize-onchain.mjs";
 import { readFileSync, openSync, closeSync, unlinkSync, statSync, writeSync } from "node:fs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 import { canonicalDecimalString } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
 
-// Канонизация записи журнала ПРИ ЧТЕНИИ (ROUND9 №15): журнал, записанный билдом
-// до канонизации, несёт сырую репрезентацию RPC («5.0») — строковый дифф с
-// канонической цепью («5») эмитил фантомное MULTIPLIER_CHANGE той же величины.
-// Канонизируем lastEffective и multiplier-поля истории. Уже-каноническая запись
-// возвращается ПО ССЫЛКЕ (контракт «entry===priorEntry при недоступной цепи»);
-// поле не похоже на decimal — остаётся как есть (валидация ниже честно отвергнет).
+// Canonicalization of a journal entry AT READ TIME (round 9 fix 15): a journal written by a
+// build predating canonicalization carries the raw RPC representation ("5.0") — a string
+// diff against the canonical chain ("5") emitted a phantom MULTIPLIER_CHANGE of the same
+// magnitude. Canonicalizes lastEffective and the multiplier fields of history. An already
+// canonical entry is returned BY REFERENCE (the "entry===priorEntry when the chain is
+// unreachable" contract); a field that does not look like a decimal stays as is
+// (validation below will honestly reject it).
 function canonicalizeEntry(entry) {
   if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return entry;
   const canonMult = (v) => (typeof v === "string" && /^\d+(\.\d+)?$/.test(v) ? canonicalDecimalString(v) : v);
@@ -34,61 +35,61 @@ function canonicalizeEntry(entry) {
 }
 
 /**
- * @param {object} token — запись реестра (нужны mint, symbol)
- * @param {{lastEffective: string, observedAt: string, events?: Array}|null} priorEntry — запись из журнала на диске
- * @param {object|null} parsed — parseScaledUiAmount(...) или null, если цепь недоступна
+ * @param {object} token — registry entry (mint, symbol needed)
+ * @param {{lastEffective: string, observedAt: string, events?: Array}|null} priorEntry — entry from the journal on disk
+ * @param {object|null} parsed — parseScaledUiAmount(...) or null when the chain is unreachable
  * @returns {{replay: Array, event: object|null, entry: object|null, chain: "ok"|"unavailable", unavailableV1: boolean, corrupted: boolean}}
- *   replay — события прошлых сессий для реплея в events-поток;
- *   event — ТОЛЬКО новое событие этого шага;
- *   entry — запись к сохранению (null = нечего сохранить, история не начата);
- *   entry===priorEntry (та же ссылка) при недоступной цепи — сохранение без изменений;
- *   unavailableV1 — запись v1 (без events) с множителем ≠ "1" и недоступной цепью:
- *   миграция бэкфиллом невозможна, витрина покажет множитель 1 — warn обязан стрелять,
- *   иначе «настоящие 5» молча выглядят как 1 (тихая ложь, раунд 4);
- *   corrupted — запись priorEntry повреждена (events есть, но не массив): история
- *   недоверена, шаг выполнен в fail-closed (см. тело planJournalStep).
+ *   replay — events of past sessions, for replaying into the events stream;
+ *   event — ONLY the new event of this step;
+ *   entry — the entry to save (null = nothing to save, history not started);
+ *   entry===priorEntry (same reference) when the chain is unreachable — saved unchanged;
+ *   unavailableV1 — a v1 entry (no events) with a multiplier ≠ "1" and an unreachable chain:
+ *   backfill migration is impossible, the vitrine will show multiplier 1 — the warn must fire,
+ *   otherwise "the real 5" silently looks like 1 (a quiet lie, round 4);
+ *   corrupted — the priorEntry is corrupted (events present but not an array): the history
+ *   is distrusted, the step ran fail-closed (see the body of planJournalStep).
  */
 export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
-  // Раунд 7 (адверсариальные тесты журнала): запись с events-НЕ-массивом —
-  // ПОВРЕЖДЁННАЯ, а не «истории нет». Раньше v1/v2 различались только
-  // Array.isArray(events), поэтому поле-мусор (строка "1→5" вместо массива) молча
-  // превращало запись в «первое наблюдение»: реплей пуст, бэкфилл переизлучал
-  // дубликат события, а файл оставался валидным по форме — проверки повреждений
-  // его не видели. Отсутствие поля (undefined) — легитимная запись v1 (миграция
-  // бэкфиллом), ЛЮБОЕ другое не-массивное значение — порча. Семантика fail-closed
-  // по образцу раунда 6 (повреждение — явное состояние, улика переживает запись):
-  //   (1) громкий console.error оператору с ПОЛНОЙ уликой — битая запись
-  //       сериализуется в лог; это единственное доступное планеру место улики:
-  //       путь журнала сюда не доходит, сохранить битую запись рядом с файлом
-  //       может только слой serve (bootJournalOnchain), в контракт которого
-  //       planJournalStep намеренно не лезет (чистая функция над записью);
-  //   (2) дубль события из бэкфилла НЕ переизлучается — ни в event, ни в events;
-  //   (3) при живой цепи — восстановление с нуля: lastEffective фиксируется от
-  //       факта цепи, events честно пусты (старая история невосстановима —
-  //       не выдумываем); дальнейшие шаги живут по штатной mid-history семантике;
-  //   (4) при недоступной цепи entry: null — битая запись на диске не трогается,
-  //       восстановление возможно только по факту цепи (улика переживает шаг).
+  // Round 7 (journal adversarial tests): an entry with events-NOT-an-array is
+  // CORRUPTED, not "no history". Previously v1/v2 were told apart only by
+  // Array.isArray(events), so a garbage field (the string "1→5" instead of an array) silently
+  // turned the entry into a "first observation": the replay was empty, backfill re-emitted
+  // a duplicate event, and the file stayed shape-valid — the corruption checks
+  // could not see it. An absent field (undefined) is a legitimate v1 entry (backfill
+  // migration); ANY other non-array value is corruption. Fail-closed semantics
+  // modeled on round 6 (corruption is an explicit state, the evidence survives the write):
+  //   (1) a loud console.error to the operator with the FULL evidence — the broken entry
+  //       is serialized into the log; this is the only evidence spot available to the planner:
+  //       the journal path never reaches here, and only the serve layer (bootJournalOnchain)
+  //       can save the broken entry next to the file — planJournalStep deliberately does not
+  //       reach into that contract (a pure function over the entry);
+  //   (2) a duplicate event from backfill is NOT re-emitted — neither in event nor in events;
+  //   (3) with a live chain — recovery from scratch: lastEffective is fixed from the
+  //       chain fact, events are honestly empty (the old history is unrecoverable —
+  //       we do not invent it); subsequent steps follow the normal mid-history semantics;
+  //   (4) with an unreachable chain entry: null — the broken entry on disk is not touched,
+  //       recovery is only possible from the chain fact (the evidence survives the step).
   const priorIsObject = priorEntry !== null && priorEntry !== undefined && typeof priorEntry === "object";
-  // ROUND7 №4 + ROUND9 №4: запись-ПРИМИТИВ и запись-МАССИВ — та же порча, что
-  // events-не-массив. Массив — тоже typeof "object", но структурой не запись
-  // {lastEffective, events}: раньше проходил в «нет истории» (base=null), бэкфилл
-  // переизлучал дубль, финальный персист затирал улику; loadJournalOnchain при этом
-  // массив НАВЕРХУ файла отвергает как порчу — по-записи обязан так же.
+  // ROUND7 fix 4 + ROUND9 fix 4: a PRIMITIVE entry and an ARRAY entry are the same corruption
+  // as events-not-an-array. An array is also typeof "object" but is not an entry in structure
+  // ({lastEffective, events}): it used to slip into "no history" (base=null), backfill
+  // re-emitted a duplicate, the final persist clobbered the evidence; loadJournalOnchain
+  // rejects an array at the TOP of the file as corruption — per-entry must do the same.
   const priorIsCorrupted = priorEntry !== null && priorEntry !== undefined
     && (typeof priorEntry !== "object"
       || Array.isArray(priorEntry)
       || (priorEntry.events !== undefined && !Array.isArray(priorEntry.events)));
   if (priorIsCorrupted) {
     console.error(
-      `[journal] ${token.symbol ?? token.mint}: запись журнала ПОВРЕЖДЕНА — ${
+      `[journal] ${token.symbol ?? token.mint}: journal entry CORRUPTED — ${
         !priorIsObject
-          ? `не объект (${typeof priorEntry})`
+          ? `not an object (${typeof priorEntry})`
           : Array.isArray(priorEntry)
-            ? "массив вместо объекта записи"
-            : `events не массив (тип ${priorEntry.events === null ? "null" : typeof priorEntry.events})`
-      }, история недоверена. Улика: ${JSON.stringify(priorEntry)}. ` +
-      `Реплей и бэкфилл по ней НЕ выполняются — дубль события не переизлучается; ` +
-      `при живой цепи запись восстановится с нуля (без событий, витрина предупредит о множителе без истории).`,
+            ? "an array instead of an entry object"
+            : `events is not an array (type ${priorEntry.events === null ? "null" : typeof priorEntry.events})`
+      }, history is distrusted. Evidence: ${JSON.stringify(priorEntry)}. ` +
+      `Replay and backfill over it are NOT performed — no duplicate event is re-emitted; ` +
+      `with a live chain the entry will be rebuilt from scratch (no events; the vitrine will warn about a multiplier without history).`,
     );
     if (parsed === null) {
       return { replay: [], event: null, entry: null, chain: "unavailable", unavailableV1: false, corrupted: true };
@@ -96,16 +97,17 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
     const recovered = journalTransition(token, parsed, null, nowMs);
     return {
       replay: [],
-      event: null, // бэкфилл задавлен: переизлучать дубликат по недоверенной базе нельзя
+      event: null, // backfill suppressed: re-emitting a duplicate from a distrusted base is not allowed
       entry: { ...recovered.entry, events: [] },
       chain: "ok",
       unavailableV1: false,
       corrupted: true,
     };
   }
-  // v2-маркер записи — массив events; записи v1 (без него) прогоняются бэкфиллом:
-  // так задеплоенный инстанс самовосстанавливается без ручной миграции файла.
-  // Канонизация — ДО всех сравнений (ROUND9 №15): реплей/дифф видят канонические строки.
+  // The v2 marker of an entry is the events array; v1 entries (without it) are run through
+  // backfill: this way a deployed instance self-heals without a manual file migration.
+  // Canonicalization happens BEFORE all comparisons (round 9 fix 15): replay/diff see
+  // canonical strings.
   const prior = canonicalizeEntry(priorEntry);
   const base = priorIsObject && Array.isArray(prior.events) ? prior : null;
   const replay = base ? base.events : [];
@@ -118,29 +120,29 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
 }
 
 /**
- * Проверка полноты цепочки истории эмитента (xStocks multiplier history).
- * Пагинация в serve ограничена потолком страниц, поэтому старейший узел собранного
- * может НЕ начинаться от "1" — такой набор рвёт MultiplierTimeline ("chain
- * discontinuity") и раньше валил сервер на старте (boot-loop). Честный отказ:
- * события не скармливаются таймлайну, warn вместо краша (fail-honest).
- * @param {Array<{previousMultiplier: string, activationDateTime: string}>} nodes — узлы fetchMultiplierHistory, любой порядок
- * @returns {{complete: boolean, reason: string|null}} complete=true — цепочка от "1", можно кормить таймлайн
+ * Completeness check of the issuer's multiplier history chain (xStocks multiplier history).
+ * Pagination in serve is capped by a page ceiling, so the oldest node of what was collected
+ * may NOT start from "1" — such a set breaks MultiplierTimeline ("chain
+ * discontinuity") and used to crash the server at startup (boot-loop). An honest refusal:
+ * events are not fed to the timeline, a warn instead of a crash (fail-honest).
+ * @param {Array<{previousMultiplier: string, activationDateTime: string}>} nodes — fetchMultiplierHistory nodes, any order
+ * @returns {{complete: boolean, reason: string|null}} complete=true — the chain starts from "1", safe to feed the timeline
  */
 export function issuerChainComplete(nodes) {
   if (!Array.isArray(nodes) || nodes.length === 0) return { complete: true, reason: null };
   let oldest = null;
   let oldestTs = Number.POSITIVE_INFINITY;
   for (const n of nodes) {
-    // Тот же строгий парсер, что у всего конвейера дат (schema/isodate.mjs) — раунд 6,
-    // LW2_issuer_chain_complete_dateparse_divergence: раньше здесь был Date.parse,
-    // который перекатывал "2026-02-30T00:00:00Z" на 2 марта и парсил наивное время
-    // как ЛОКАЛЬНОЕ — узлы с такими датами проходили гейт, а затем падали ниже
-    // с NormalizeError («источник недоступен» при живом источнике).
+    // The same strict parser as the whole date pipeline (schema/isodate.mjs) — round 6,
+    // LW2_issuer_chain_complete_dateparse_divergence: this used to be Date.parse, which
+    // rolled "2026-02-30T00:00:00Z" over to March 2 and parsed naive time as LOCAL —
+    // nodes with such dates passed the gate and then crashed further down
+    // with NormalizeError ("source unreachable" while the source was alive).
     const ts = parseIsoDateMs(n.activationDateTime);
-    // дата-мусор/перекат/наивное время — не гадаем: узел не участвует в выборе
-    // старейшего, цепочка непроверяема = неполна (fail-closed)
+    // garbage date/rollover/naive time — no guessing: the node does not take part in
+    // picking the oldest one, an unverifiable chain = incomplete (fail-closed)
     if (ts === null) {
-      return { complete: false, reason: `непарсируемая дата активации: ${JSON.stringify(n.activationDateTime)}` };
+      return { complete: false, reason: `unparseable activation date: ${JSON.stringify(n.activationDateTime)}` };
     }
     if (ts < oldestTs) {
       oldestTs = ts;
@@ -150,43 +152,43 @@ export function issuerChainComplete(nodes) {
   if (oldest.previousMultiplier !== "1") {
     return {
       complete: false,
-      reason: `старейшее событие ${oldest.activationDateTime} начинается от "${oldest.previousMultiplier}", а не от "1"`,
+      reason: `oldest event ${oldest.activationDateTime} starts from "${oldest.previousMultiplier}", not from "1"`,
     };
   }
   return { complete: true, reason: null };
 }
 
-// ---- персистентность журнала (раунд 5, LW_journal_write_non_atomic) ----
-// Прямой writeFileSync поверх живого файла при обрыве (краш/kill в окне бута, диск)
-// оставлял усечённый JSON, который при следующем старте молча трактовался как
-// «первый запуск» (пустой журнал) — невосстановимая потеря всей истории событий.
-// Два противопоставления: (1) запись атомарна — temp в той же директории + fsync +
-// rename, на диске всегда либо старая целая версия, либо новая целая; (2) битый
-// файл при загрузке — явное состояние «повреждён» (fail-closed), различимое от
-// честного первого запуска, а не тихий {}.
+// ---- journal persistence (round 5, LW_journal_write_non_atomic) ----
+// A direct writeFileSync over a live file, interrupted midway (crash/kill in the boot
+// window, disk), left a truncated JSON that on the next start was silently treated as
+// a "first run" (empty journal) — an unrecoverable loss of the entire event history.
+// Two countermeasures: (1) the write is atomic — temp in the same directory + fsync +
+// rename, so on disk there is always either the old whole version or the new whole one;
+// (2) a broken file at load is an explicit "corrupted" state (fail-closed), distinguishable
+// from an honest first run, not a silent {}.
 
 /**
- * Атомарная запись журнала: payload целиком уходит во временный файл в ТОЙ ЖЕ
- * директории (rename между устройствами не работает), fsync'ится и переименовывается
- * поверх целевого файла. Обрыв в любой момент оставляет на месте журнала целую
- * предыдущую версию; temp-файл при неудачном rename подчищается.
- * С раунда 6 делегирует общему atomicWriteJson (src/fs/atomic.mjs) — той же
- * реализацией пользуются писатели tokens.json.
- * @param {string} journalPath — путь к onchain-journal.json
- * @param {object} journal — карта { mint: entry }
+ * Atomic journal write: the payload goes whole into a temp file in the SAME
+ * directory (rename across devices does not work), is fsync'ed and renamed
+ * over the target file. An interruption at any moment leaves the previous whole
+ * version in place of the journal; the temp file is cleaned up after a failed rename.
+ * Since round 6 this delegates to the shared atomicWriteJson (src/fs/atomic.mjs) — the same
+ * implementation is used by the tokens.json writers.
+ * @param {string} journalPath — path to onchain-journal.json
+ * @param {object} journal — map { mint: entry }
  */
 export function saveJournalAtomic(journalPath, journal) {
   atomicWriteJson(journalPath, journal);
 }
 
 /**
- * Загрузка журнала с различением «первый запуск» и «файл повреждён».
- * Раньше один catch на оба случая давал тихий {} — усечённый после обрыва записи
- * файл выглядел как чистый старт, и история событий терялась невосстановимо.
+ * Journal load that distinguishes "first run" from "file corrupted". Previously a single
+ * catch for both cases produced a silent {} — a file truncated after a write interruption
+ * looked like a clean start, and the event history was lost unrecoverably.
  * @param {string} journalPath
  * @returns {{ok: boolean, corrupted: boolean, journal: object, reason: string|null}}
- *   файла нет → { ok: true, corrupted: false } (бэкфилл из цепи — легитимный старт);
- *   прочитано, но не парсится / не объект {mint: entry} → { ok: false, corrupted: true }.
+ *   no file → { ok: true, corrupted: false } (backfill from the chain is a legitimate start);
+ *   readable but unparseable / not an object {mint: entry} → { ok: false, corrupted: true }.
  */
 export function loadJournalOnchain(journalPath) {
   let raw;
@@ -196,41 +198,41 @@ export function loadJournalOnchain(journalPath) {
     if (err && err.code === "ENOENT") {
       return { ok: true, corrupted: false, journal: {}, reason: null };
     }
-    return { ok: false, corrupted: true, journal: {}, reason: `файл журнала не читается: ${err.message}` };
+    return { ok: false, corrupted: true, journal: {}, reason: `journal file is unreadable: ${err.message}` };
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    return { ok: false, corrupted: true, journal: {}, reason: `усечённый/невалидный JSON: ${err.message}` };
+    return { ok: false, corrupted: true, journal: {}, reason: `truncated/invalid JSON: ${err.message}` };
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
-    return { ok: false, corrupted: true, journal: {}, reason: `журнал обязан быть объектом {mint: entry}, получен ${got}` };
+    return { ok: false, corrupted: true, journal: {}, reason: `journal must be an object {mint: entry}, got ${got}` };
   }
   return { ok: true, corrupted: false, journal: parsed, reason: null };
 }
 
 /**
- * Сохранить повреждённый файл журнала как улику ПЕРЕД первой перезаписью. С раунда 6
- * делегирует общему preserveCorruptedFile (src/fs/atomic.mjs): ретраи rename с другими
- * именами (AV/индексер держат файл мгновение — «временный» отказ часто снят второй
- * попыткой) и copy-фолбэк, если rename так и не удался.
+ * Save the corrupted journal file as evidence BEFORE the first overwrite. Since round 6
+ * this delegates to the shared preserveCorruptedFile (src/fs/atomic.mjs): it retries rename
+ * under other names (AV/indexers hold the file for a moment — a "transient" failure is often
+ * cleared by a second attempt) and falls back to copy if rename never succeeded.
  * @param {string} journalPath
  * @param {{nowMs?: number, attempts?: number, rename?: Function, copy?: Function}} [opts]
- * @returns {string|null} путь к улике или null, если улику сохранить не удалось вовсе.
+ * @returns {string|null} path to the evidence, or null if the evidence could not be saved at all.
  */
 export function preserveCorruptedJournal(journalPath, opts = {}) {
   return preserveCorruptedFile(journalPath, opts);
 }
 
 /**
- * Бут журнала (раунд 6, LW2_journal_evidence_clobber_on_failed_preserve): загрузка +
- * сохранение улики — единая точка для scripts/serve.mjs. Ключевая гарантия: если улику
- * сохранить НЕ удалось (preserveFailed), повреждённый оригинал остаётся на месте — и
- * бут ОБЯЗАН работать в режиме read-only (persistJournalOnBoot откажет в записи),
- * потому что финальный saveJournalAtomic стёр бы единственную копию истории. Раньше
- * serve не ветвился по null от preserveCorruptedJournal и затирал оригинал в конце бута.
+ * Journal boot (round 6, LW2_journal_evidence_clobber_on_failed_preserve): load +
+ * evidence save — a single entry point for scripts/serve.mjs. The key guarantee: if the evidence
+ * could NOT be saved (preserveFailed), the corrupted original stays in place — and the boot
+ * MUST run in read-only mode (persistJournalOnBoot will refuse to write),
+ * because the final saveJournalAtomic would erase the only copy of the history. Previously
+ * serve did not branch on null from preserveCorruptedJournal and clobbered the original at the end of boot.
  * @param {string} journalPath
  * @param {{nowMs?: number, attempts?: number, rename?: Function, copy?: Function}} [opts]
  * @returns {{journal: object, corrupted: boolean, reason: string|null,
@@ -252,11 +254,11 @@ export function bootJournalOnchain(journalPath, opts = {}) {
 }
 
 /**
- * Финальная запись журнала в конце бута — ЕДИНСТВЕННОЕ место, откуда serve.mjs пишет
- * журнал. preserveFailed=true ⇒ режим read-only до перезапуска: запись не выполняется,
- * повреждённый оригинал гарантированно переживает бут; события сессии живут в памяти,
- * /health показывает journal.preserveFailed=1. Перезапуск после ухода залочившего
- * процесса сохранит улику штатно и вернёт запись.
+ * Final journal write at the end of boot — the ONLY place serve.mjs writes the
+ * journal from. preserveFailed=true ⇒ read-only mode until restart: no write is performed,
+ * the corrupted original is guaranteed to survive the boot; session events live in memory,
+ * /health shows journal.preserveFailed=1. A restart after the locking process goes away
+ * will save the evidence normally and restore writing.
  * @param {string} journalPath
  * @param {object} journal
  * @param {{preserveFailed?: boolean}} [opts]
@@ -265,8 +267,8 @@ export function bootJournalOnchain(journalPath, opts = {}) {
 export function persistJournalOnBoot(journalPath, journal, { preserveFailed = false } = {}) {
   if (preserveFailed) return { written: false, readonly: true, error: null };
   try {
-    // Волна E (E3-2): merge-under-lock, а не снапшот поверх диска — чужая запись,
-    // положенная в окно «бут прочитал → персистнул», раньше молча затиралась.
+    // Wave E (E3-2): merge-under-lock, not a snapshot over the disk — a foreign write
+    // landed in the "boot read → persisted" window used to be silently clobbered.
     saveJournalMerged(journalPath, journal);
     return { written: true, readonly: false, error: null };
   } catch (err) {
@@ -274,16 +276,17 @@ export function persistJournalOnBoot(journalPath, journal, { preserveFailed = fa
   }
 }
 
-// Синхронная пауза без занятого ожидания (паттерн стор-лока вебхуков R8).
+// Synchronous pause without busy-waiting (the webhook store-lock pattern from R8).
 const SYNC_WAIT_CELL = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(SYNC_WAIT_CELL, 0, 0, ms);
 
-// pid-живость (семантика ROUND9 №9 из стор-лока вебхуков): существующий процесс =
-// живой владелец, EPERM = чужой, но живой; ESRCH = мёртв. kill инжектится для пинов
-// EPERM-ветки (на win в one-user-сьюте process.kill чужих не даёт EPERM).
-// Linux-слепое пятно (H1): неприпнутый зомби (родитель не ripнул) отвечает успехом
-// на kill(pid,0) — ждём весь бюджет и деградируем; того же трейд-офф-семейства, что
-// pid-reuse, деградация ограничена staleMs.
+// pid liveness (ROUND9 fix 9 semantics from the webhook store-lock): an existing process =
+// a live owner, EPERM = someone else's but alive; ESRCH = dead. kill is injected to pin
+// the EPERM branch (on Windows a one-user suite never gets EPERM from process.kill for
+// foreign pids).
+// Linux blind spot (H1): an unreaped zombie (the parent did not reap it) answers
+// kill(pid,0) with success — we wait out the whole budget and degrade; same trade-off
+// family as pid-reuse, the degradation is bounded by staleMs.
 export function isPidAlive(pid, kill = process.kill) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -294,21 +297,24 @@ export function isPidAlive(pid, kill = process.kill) {
   }
 }
 
-// Эксклюзивный лок-файл. Содержимое load-bearing: {pid, createdAt} — по pid мёртвый
-// владелец ломается СРАЗУ (сирота после kill -9), живой SIGSTOP-процесс со старым
-// mtime НЕ ломается (волна F1 повторила TOCTOU R9 №9 для второго лока — закрыто).
-// Легаси/не-JSON содержимое — по одному mtime, как в вебхук-локе. Будущий mtime
-// (перекос часов) — тоже кандидат на ломку: ждать staleMs от «завтра» бессмысленно.
-// nowMs инжектится (паттерн лимитёра) — граница «ровно staleMs» пинится детерминированно.
-// Возвращает fd или null (не взяли — деградация, бут не должен падать из-за лока).
+// Exclusive lock file. The contents are load-bearing: {pid, createdAt} — via pid, a dead
+// owner is broken IMMEDIATELY (an orphan after kill -9), while a live SIGSTOPped process
+// with an old mtime is NOT broken (wave F1 reproduced the TOCTOU of R9 fix 9 for the second
+// lock — closed). Legacy/non-JSON contents — by mtime alone, as in the webhook lock.
+// A future mtime (clock skew) is also a candidate for breaking: waiting staleMs from
+// "tomorrow" is pointless.
+// nowMs is injected (the rate-limiter pattern) — the "exactly staleMs" boundary is pinned
+// deterministically.
+// Returns an fd or null (not taken — degradation; boot must not crash because of a lock).
 export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, nowMs }) {
-  // Волна H4 [P4]: мусорный nowMs (null/NaN) раньше просачивался в арифметику age
-  // (null − mtime = «глубокое будущее» = ломка свежего лока) — валидируем инъекцию.
+  // Wave H4 [P4]: garbage nowMs (null/NaN) used to leak into the age arithmetic
+  // (null − mtime = "deep future" = breaking a fresh lock) — we validate the injection.
   if (typeof nowMs !== "function" && !Number.isFinite(nowMs)) nowMs = Date.now;
   const now = typeof nowMs === "function" ? nowMs() : nowMs;
-  // Волна H4 [P3]: счёт попыток — ложная метрика на Windows (Atomics.wait(5) реально
-  // ~15.6мс): 700 попыток = 10.9-12с блокировки вместо «~3.5с» из комментария R14.
-  // Честный потолок — настенные часы: деградация не позже ~staleMs независимо от ОС.
+  // Wave H4 [P3]: the attempt counter is a false metric on Windows (Atomics.wait(5) really
+  // takes ~15.6ms): 700 attempts = 10.9-12s of blocking instead of the "~3.5s" from the
+  // R14 comment. The honest ceiling is the wall clock: degradation no later than ~staleMs
+  // regardless of OS.
   const deadline = Date.now() + staleMs;
   for (let i = 0; i < attempts; i++) {
     if (i > 0 && Date.now() >= deadline) break;
@@ -322,23 +328,23 @@ export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, now
           try {
             return JSON.parse(readFileSync(lockPath, "utf8"));
           } catch {
-            return null; // легаси/пустой контент — pid-семантика неприменима
+            return null; // legacy/empty content — pid semantics do not apply
           }
         })();
         if (meta !== null && Number.isInteger(meta?.pid)) {
-          // лок с pid: мёртвый владелец ломается СРАЗУ (сирота после kill -9 не жжёт
-          // staleMs — волна F1-4), живой не ломается ВООБЩЕ (SIGSTOP-владелец не теряет
-          // обновление — R9 №9), независимо от mtime
+          // a lock with a pid: a dead owner is broken IMMEDIATELY (an orphan after kill -9
+          // does not burn staleMs — wave F1-4), a live one is not broken AT ALL (a SIGSTOPped
+          // owner does not lose the update — R9 fix 9), regardless of mtime
           if (!isPidAlive(meta.pid)) unlinkSync(lockPath);
         } else {
           const age = now - statSync(lockPath).mtimeMs;
-          // легаси-лок — mtime-семантика; будущее учитывается только ЗА ±staleMs:
-          // NTFS округляет mtime вверх на доли мс — свежий лок не должен выглядеть
-          // «минус-миллисекундным будущим» (грабли раунда 15)
+          // legacy lock — mtime semantics; the future counts only BEYOND ±staleMs:
+          // NTFS rounds mtime up by fractions of a ms — a fresh lock must not look like
+          // a "minus-a-millisecond future" (the round 15 pitfall)
           if (age > staleMs || age < -staleMs) unlinkSync(lockPath);
         }
       } catch {
-        /* лок исчез между EEXIST и stat — просто ретрай */
+        /* the lock vanished between EEXIST and stat — just retry */
       }
       if (fd === null) {
         sleepSync(retryPauseMs);
@@ -349,10 +355,10 @@ export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, now
       writeSync(fd, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
       return fd;
     } catch (err) {
-      // Пустой лок следующий процесс сочтёт легаси и сломает ЖИВОГО владельца по
-      // mtime — реанимация TOCTOU. Снимаем и деградируем без лока.
-      try { closeSync(fd); } catch { /* уже закрыт */ }
-      try { unlinkSync(lockPath); } catch { /* уже удалён */ }
+      // An empty lock would make the next process treat it as legacy and break a LIVE owner
+      // by mtime — a TOCTOU resurrection. We remove it and degrade without a lock.
+      try { closeSync(fd); } catch { /* already closed */ }
+      try { unlinkSync(lockPath); } catch { /* already removed */ }
       return null;
     }
   }
@@ -360,15 +366,16 @@ export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, now
 }
 
 /**
- * Merge-under-lock журнала (волна E, E3-2). Бут — не единственный писатель: ручной
- * фикс или второй процесс могли положить запись в окно между чтением на старте и
- * финальным персистом; снапшот поверх диска её затирал. Под лок-файлом перечитываем
- * диск и мёржим ПО МИНТАМ: наши записи свежее (выигрывают для своих минтов), чужие
- * минты переживают. Файл не читается/битый — пишем свой снапшот (как до раунда 14:
- * решение о preserve — на уровне persistJournalOnBoot). Лок не взялся (живой сосед
- * дольше staleMs держит, диск полон) — пишем без лока: не хуже статус-кво.
+ * Merge-under-lock of the journal (wave E, E3-2). The boot is not the only writer: a manual
+ * fix or a second process could land an entry in the window between the read at startup and
+ * the final persist; a snapshot over the disk clobbered it. Under the lock file we re-read
+ * the disk and merge BY MINT: our entries are fresher (they win for their mints), foreign
+ * mints survive. File unreadable/broken — we write our own snapshot (as before round 14:
+ * the preserve decision lives at the persistJournalOnBoot level). Lock not acquired (a live
+ * neighbor holds it longer than staleMs, disk full) — we write without the lock: no worse
+ * than the status quo.
  * @param {string} journalPath
- * @param {object} journal — карта { mint: entry } этого процесса
+ * @param {object} journal — the { mint: entry } map of this process
  */
 export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, attempts = 700, retryPauseMs = 5, nowMs } = {}) {
   const lockPath = `${journalPath}.lock`;
@@ -392,12 +399,12 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
       try {
         closeSync(fd);
       } catch {
-        /* уже закрыт */
+        /* already closed */
       }
       try {
         unlinkSync(lockPath);
       } catch {
-        /* кто-то сломал протухший — ок */
+        /* someone broke the stale one — fine */
       }
     }
   }

@@ -1,7 +1,7 @@
-// Клиент источника эмитента xStocks (Backed): множители корпоративных событий.
-// Данные — сырые наблюдения; маппинг в канонические события — отдельный слой
-// (вопрос моделирования multiplier-vs-integer-lots вынесен в отдельный слой).
-// Числа-множители храним КАК СТРОКИ: в нашем пайплайне нет float.
+// Client for the xStocks issuer source (Backed): corporate-event multipliers.
+// The data is raw observations; mapping to canonical events is a separate layer
+// (the multiplier-vs-integer-lots modeling question is deferred to that separate layer).
+// Multiplier numbers are stored AS STRINGS: there is no float in our pipeline.
 export class IssuerError extends Error {
   constructor(msg, { status } = {}) {
     super(msg);
@@ -27,12 +27,12 @@ async function getJson(url, fetcher = fetch) {
   }
 }
 
-// Число из API -> строка-десятичная, без float-математики в пайплайне.
+// Number from the API -> decimal string, no float math in the pipeline.
 const asDecimalString = (v) =>
   typeof v === "number" && Number.isFinite(v) ? String(v) : null;
 
 /**
- * Текущий (и ожидающий активации) множитель символа.
+ * The current (and pending activation) multiplier of a symbol.
  * @returns {{currentMultiplier: string, pendingMultiplier: string|null, activationDateTime: string|null, reason: string|null}}
  */
 export async function fetchCurrentMultiplier(symbol, network = "Solana", { fetcher = fetch } = {}) {
@@ -48,7 +48,7 @@ export async function fetchCurrentMultiplier(symbol, network = "Solana", { fetch
 }
 
 /**
- * История изменений множителя (реальные корпоративные события).
+ * Multiplier change history (real corporate events).
  * @returns {{hasNextPage: boolean, nodes: Array<{id: string, reason: string, multiplier: string, previousMultiplier: string, activationDateTime: string}>}}
  */
 export async function fetchMultiplierHistory(symbol, network = "Ethereum", { page = 0, pageSize = 25, fetcher = fetch } = {}) {

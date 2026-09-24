@@ -1,6 +1,6 @@
-// Раунд 5, находка LW_journal_write_non_atomic: персистентность on-chain журнала.
-// (а) сохранение атомарно (temp в той же директории + rename, без мусора и усечённых файлов);
-// (б) битый файл журнала при загрузке — явное состояние «повреждён», а не тихий «пустой журнал».
+// Round 5, the finding LW_journal_write_non_atomic: the persistence of the on-chain journal.
+// (a) the save is atomic (a temp in the same directory + rename, no litter and truncated files);
+// (b) a broken journal file at load — an explicit "corrupted" state, not a quiet "empty journal".
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -21,17 +21,17 @@ const JOURNAL = {
 
 const freshDir = () => mkdtempSync(path.join(tmpdir(), "lotwise-journal-"));
 
-// ---- (а) атомарная запись ----
+// ---- (a) an atomic write ----
 
-test("saveJournalAtomic: итоговый файл валиден, в директории не остаётся temp-мусора", () => {
+test("saveJournalAtomic: the final file valid, no temp litter left in the directory", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   saveJournalAtomic(p, JOURNAL);
-  assert.deepEqual(readdirSync(dir), ["onchain-journal.json"]); // ровно один файл: temp ушёл в rename
+  assert.deepEqual(readdirSync(dir), ["onchain-journal.json"]); // exactly one file: the temp went into the rename
   assert.deepEqual(JSON.parse(readFileSync(p, "utf8")), JOURNAL);
 });
 
-test("saveJournalAtomic: перезапись живого журнала обновляет содержимое и снова без мусора", () => {
+test("saveJournalAtomic: rewriting a live journal updates the content and again without litter", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   saveJournalAtomic(p, JOURNAL);
@@ -44,21 +44,21 @@ test("saveJournalAtomic: перезапись живого журнала обн
   assert.deepEqual(readdirSync(dir), ["onchain-journal.json"]);
 });
 
-test("saveJournalAtomic: пустой журнал — тоже валидный JSON-объект", () => {
+test("saveJournalAtomic: an empty journal — also a valid JSON object", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   saveJournalAtomic(p, {});
   assert.deepEqual(JSON.parse(readFileSync(p, "utf8")), {});
 });
 
-test("saveJournalAtomic: недостижимая директория — бросает, ничего не оставляет рядом", () => {
+test("saveJournalAtomic: an unreachable directory — throws, leaves nothing nearby", () => {
   const dir = freshDir();
-  const p = path.join(dir, "нет-такой-папки", "journal.json");
+  const p = path.join(dir, "no-such-folder", "journal.json");
   assert.throws(() => saveJournalAtomic(p, JOURNAL));
   assert.deepEqual(readdirSync(dir), []);
 });
 
-test("loadJournalOnchain после saveJournalAtomic: roundtrip без потерь", () => {
+test("loadJournalOnchain after saveJournalAtomic: a roundtrip without losses", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   saveJournalAtomic(p, JOURNAL);
@@ -68,9 +68,9 @@ test("loadJournalOnchain после saveJournalAtomic: roundtrip без поте
   assert.deepEqual(r.journal, JOURNAL);
 });
 
-// ---- (б) битый файл ≠ тихий пустой журнал ----
+// ---- (b) a broken file ≠ a quiet empty journal ----
 
-test("loadJournalOnchain: файла нет — честный первый запуск (ok, corrupted=false)", () => {
+test("loadJournalOnchain: no file — an honest first run (ok, corrupted=false)", () => {
   const dir = freshDir();
   const r = loadJournalOnchain(path.join(dir, "onchain-journal.json"));
   assert.equal(r.ok, true);
@@ -78,11 +78,11 @@ test("loadJournalOnchain: файла нет — честный первый за
   assert.deepEqual(r.journal, {});
 });
 
-test("loadJournalOnchain: усечённый JSON (обрыв записи) — повреждён, НЕ маскируется под первый запуск", () => {
+test("loadJournalOnchain: a truncated JSON (an interrupted write) — corrupted, NOT masked as a first run", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   const raw = JSON.stringify(JOURNAL, null, 1);
-  writeFileSync(p, raw.slice(0, Math.floor(raw.length / 2))); // как после kill -9 в момент writeFileSync
+  writeFileSync(p, raw.slice(0, Math.floor(raw.length / 2))); // as after a kill -9 at the writeFileSync moment
   const r = loadJournalOnchain(p);
   assert.equal(r.ok, false);
   assert.equal(r.corrupted, true);
@@ -90,29 +90,29 @@ test("loadJournalOnchain: усечённый JSON (обрыв записи) — 
   assert.match(r.reason, /JSON/i);
 });
 
-test("loadJournalOnchain: мусор вместо JSON — повреждён", () => {
+test("loadJournalOnchain: garbage instead of JSON — corrupted", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
-  writeFileSync(p, "\x00это вообще не json{{{");
+  writeFileSync(p, "\x00this is not json at all{{{");
   const r = loadJournalOnchain(p);
   assert.equal(r.ok, false);
   assert.equal(r.corrupted, true);
   assert.deepEqual(r.journal, {});
 });
 
-test("loadJournalOnchain: валидный JSON, но не объект (число/массив/null/строка) — повреждён", () => {
+test("loadJournalOnchain: a valid JSON but not an object (a number/array/null/string) — corrupted", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   for (const bad of ["5", "[1,2]", "null", '"str"']) {
     writeFileSync(p, bad);
     const r = loadJournalOnchain(p);
-    assert.equal(r.corrupted, true, `должен быть повреждён: ${bad}`);
-    assert.equal(r.ok, false, `должен быть отказ: ${bad}`);
+    assert.equal(r.corrupted, true, `must be corrupted: ${bad}`);
+    assert.equal(r.ok, false, `must be refused: ${bad}`);
     assert.deepEqual(r.journal, {});
   }
 });
 
-test("loadJournalOnchain: файл нечитается (на его месте директория) — повреждён, не тихий первый запуск", () => {
+test("loadJournalOnchain: the file is unreadable (a directory in its place) — corrupted, not a quiet first run", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   mkdirSync(p);
@@ -122,38 +122,38 @@ test("loadJournalOnchain: файл нечитается (на его месте 
   assert.deepEqual(r.journal, {});
 });
 
-// ---- улика: повреждённый файл переживает первую перезапись ----
+// ---- the evidence: a corrupted file survives the first rewrite ----
 
-test("preserveCorruptedJournal: битый файл переименован в .corrupt-*, на месте не остался", () => {
+test("preserveCorruptedJournal: the broken file renamed to .corrupt-*, not left in place", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
-  writeFileSync(p, "{\"Mint1\": {\"lastEff"); // усечённый
+  writeFileSync(p, "{\"Mint1\": {\"lastEff"); // truncated
   const backup = preserveCorruptedJournal(p);
-  assert.ok(backup, "должен вернуть путь к улике");
+  assert.ok(backup, "it must return the evidence path");
   assert.match(path.basename(backup), /\.corrupt-/);
   assert.equal(existsSync(p), false);
   assert.equal(readFileSync(backup, "utf8"), "{\"Mint1\": {\"lastEff");
 });
 
-test("preserveCorruptedJournal: переименовать не удалось — честный null, не выдуманный путь", () => {
-  const r = preserveCorruptedJournal(path.join(freshDir(), "нет-такого-файла.json"));
+test("preserveCorruptedJournal: the rename failed — an honest null, not an invented path", () => {
+  const r = preserveCorruptedJournal(path.join(freshDir(), "no-such-file.json"));
   assert.equal(r, null);
 });
 
-// ---- интеграция сценария serve.mjs: обрыв → повреждён → бут с пустым → атомарная запись, улика цела ----
+// ---- the integration of the serve.mjs scenario: an interruption → corrupted → a boot with an empty one → an atomic write, the evidence intact ----
 
-test("сценарий обрыва: новая запись не затирает повреждённый файл, история остаётся в улике", () => {
+test("the interruption scenario: a new write does not clobber the corrupted file, the history stays in the evidence", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   const torn = JSON.stringify(JOURNAL, null, 1).slice(0, 40);
   writeFileSync(p, torn);
 
-  const loaded = loadJournalOnchain(p); // шаг 1: загрузка видит повреждение
+  const loaded = loadJournalOnchain(p); // step 1: the load sees the corruption
   assert.equal(loaded.corrupted, true);
-  const backup = preserveCorruptedJournal(p); // шаг 2: улика сохранена
+  const backup = preserveCorruptedJournal(p); // step 2: the evidence preserved
   assert.ok(backup);
 
-  saveJournalAtomic(p, {}); // шаг 3: сервер продолжает бут, пишет свежий журнал атомарно
+  saveJournalAtomic(p, {}); // step 3: the server continues the boot, writes a fresh journal atomically
   assert.deepEqual(JSON.parse(readFileSync(p, "utf8")), {});
-  assert.equal(readFileSync(backup, "utf8"), torn); // повреждённая история не потеряна
+  assert.equal(readFileSync(backup, "utf8"), torn); // the corrupted history not lost
 });

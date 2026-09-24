@@ -1,5 +1,5 @@
-// REST API Lotwise: только stdlib (node:http), без зависимостей.
-// Витрина данных MVP: реестр, события, множитель на дату + витрина-страница.
+// Lotwise REST API: stdlib only (node:http), no dependencies.
+// MVP data showcase: registry, events, multiplier at a date + the showcase page.
 import { createServer } from "node:http";
 import { MultiplierTimeline } from "../lots/timeline.mjs";
 import { applyEvents } from "../lots/lots.mjs";
@@ -13,7 +13,7 @@ import { renderPage } from "../ui/page.mjs";
 import { createRateLimiter } from "./ratelimit.mjs";
 
 export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false }) {
-  // индексы собираются один раз; при изменении данных сервер пересоздаётся (MVP)
+  // indexes are built once; when the data changes the server is recreated (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
   const eventsByMint = new Map();
@@ -22,30 +22,32 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     eventsByMint.get(e.mint).push(e);
   }
   const timelines = new Map();
-  const excludedByMint = new Map(); // mint → причина исключения (TimelineError)
+  const excludedByMint = new Map(); // mint → exclusion reason (TimelineError)
   for (const [mint, evts] of eventsByMint) {
     const mult = evts.filter((e) => e.type === "MULTIPLIER_CHANGE");
     if (mult.length === 0) continue;
     try {
       timelines.set(mint, new MultiplierTimeline(mult));
     } catch (err) {
-      // Кривая цепочка одного минта (например, история не от "1") не должна валить сервер:
-      // TimelineError при построении раньше убивал процесс на старте, а запись с ядом
-      // персистилась в журнале → вечный boot-loop. Честная деградация: токен исключается
-      // из витрины ЦЕЛИКОМ — выдача событий без таймлайна молча показывала множитель 1.
-      // Причина запоминается: /summary, /lots и /health помечают исключённые токены —
-      // голая «1» без пометки неотличима от честного «событий не было».
-      console.warn(`[api] токен ${byMint.get(mint)?.symbol ?? mint} исключён из витрины: ${err.message}`);
+      // A broken chain for one mint (e.g. history not starting at "1") must not take the
+      // server down: TimelineError at build time used to kill the process at startup while
+      // the poisoned record persisted in the journal → an eternal boot-loop. Honest
+      // degradation: the token is excluded from the showcase WHOLE — serving events without
+      // a timeline silently showed multiplier 1. The reason is remembered: /summary, /lots
+      // and /health mark excluded tokens — a bare "1" without the mark is indistinguishable
+      // from an honest "no events ever happened".
+      console.warn(`[api] token ${byMint.get(mint)?.symbol ?? mint} excluded from the showcase: ${err.message}`);
       eventsByMint.delete(mint);
       excludedByMint.set(mint, err.message);
     }
   }
 
-  // Гейт дат query — тот же строгий парсер, что ниже по стеку (schema/isodate.mjs).
-  // Раньше здесь были форма-регекс + Date.parse, но Date.parse("2026-02-30") НЕ даёт NaN —
-  // он перекатывает на 2026-03-02: мусорная дата проходила гейт, шла реальным RPC-вызовом
-  // в ридер /onchain (грела кэш), а затем бросала TimelineError в multiplierAt → 500
-  // вместо 400. Строгий парсер отвергает перекаты и наивные времена ДО любого I/O.
+  // Query date gate — the same strict parser used further down the stack (schema/isodate.mjs).
+  // This used to be a shape regex + Date.parse, but Date.parse("2026-02-30") does NOT give
+  // NaN — it rolls over to 2026-03-02: a garbage date passed the gate, went as a real RPC
+  // call into the /onchain reader (warming the cache), then threw TimelineError inside
+  // multiplierAt → 500 instead of 400. The strict parser rejects rollovers and naive
+  // times BEFORE any I/O.
   const validQueryDate = isValidIsoDate;
 
   const json = (res, status, body, extra = {}) => {
@@ -54,17 +56,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     res.end(payload);
   };
 
-  // Дорогие эндпоинты (/lots, /accruals — скан кошелька; /onchain, /crosscheck —
-  // RPC/цены) ограничены на клиентский ключ. rateLimits: null|false — лимиты
-  // выключены (локальные эксперименты); дефолт включён: демка публична, а квота
-  // RPC конечна. Ключ = ПОСЛЕДНИЙ элемент X-Forwarded-For при trustProxy — тот,
-  // что дописал наш доверенный прокси (funnel). ПЕРВЫЙ элемент в appending-цепочке
-  // контролирует клиент: ключевание по нему позволяло ротацией заголовка плодить
-  // себе безлимитные корзины (ROUND7 №8). Прямое подключение с поддельным XFF
-  // здесь не бывает (единственный публичный путь — funnel), иначе — адрес сокета.
-  // Частичная конфигурация ({} или один ключ) — внятный отказ конфигурации, а не
-  // TypeError из деструктуризации лимитёра (волна B): rateLimits — либо полный,
-  // либо null/false.
+  // Expensive endpoints (/lots, /accruals — wallet scan; /onchain, /crosscheck —
+  // RPC/prices) are limited per client key. rateLimits: null|false — limits off
+  // (local experiments); the default is on: the demo is public and the RPC quota
+  // is finite. The key = the LAST element of X-Forwarded-For under trustProxy — the
+  // one appended by our trusted proxy (the funnel). The FIRST element of an appending
+  // chain is client-controlled: keying on it let a client rotate the header and mint
+  // itself unlimited buckets (round 7 fix 8). A direct connection with a spoofed XFF
+  // does not happen here (the only public path is the funnel); otherwise — the socket
+  // address. A partial config ({} or a single key) is a clear configuration refusal,
+  // not a TypeError from destructuring the limiter (wave B): rateLimits is either
+  // complete, or null/false.
   if (rateLimits && (!rateLimits.scan || !rateLimits.rpc)) {
     throw new RangeError("rateLimits requires both buckets: { scan: {windowMs,max}, rpc: {windowMs,max} } (or null to disable)");
   }
@@ -74,17 +76,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     const xff = req.headers["x-forwarded-for"];
     if (trustProxy && typeof xff === "string" && xff.trim() !== "") {
       const parts = xff.split(",");
-      // пустой последний элемент (хвостовая запятая/пробел) — не ключ: общая корзина
-      // "" схлопывала разных клиентов (ROUND9 №6); честный фолбэк — сокет
+      // an empty last element (trailing comma/space) is not a key: the shared ""
+      // bucket collapsed distinct clients (round 9 fix 6); the honest fallback is the socket
       const key = parts[parts.length - 1].trim();
       if (key !== "") return key;
     }
     return req.socket?.remoteAddress ?? "unknown";
   };
-  // возвращает true, если запросу разрешён дорогой I/O; иначе сам отвечает 429.
-  // Токен сжигается ДО вызова источника: и 503 упавшего RPC тоже его жжёт —
-  // осознанный анти-ретрай-шторм (волна B проверила; иначе мёртвый источник
-  // размалывается бесконечными повторами), задокументировано здесь.
+  // returns true when the request may proceed with the expensive I/O; otherwise it
+  // answers 429 itself. The token is burned BEFORE the source call: a 503 from a
+  // failed RPC burns it too — a deliberate anti-retry-storm measure (wave B verified
+  // it; otherwise a dead source gets ground down by endless retries), documented here.
   const allow = (limiter, req, res) => {
     if (!limiter) return true;
     const { allowed, retryAfterMs } = limiter.check(clientKey(req));
@@ -94,41 +96,42 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     return false;
   };
 
-  // Список маршрутов для честного 404: одна константа, два потребителя (гвард «//x»
-  // ниже и финальный 404 роутера) — иначе списки разъезжаются при следующем маршруте.
+  // Route list for an honest 404: one constant, two consumers (the "//x" guard
+  // below and the router's final 404) — otherwise the lists drift apart on the next route.
   const ENDPOINTS = ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots", "/accruals", "/crosscheck"];
 
-  // Резолв только внутри реестра: неизвестный mint/symbol — 400, а не «пустые данные».
-  // До сих пор ?mint=<мусор> проходил насквозь: /events молча отдавал [], /multiplier — "1",
-  // /onchain гонял реальные RPC-запросы с произвольными ключами мимо кэша.
+  // Resolve only inside the registry: an unknown mint/symbol — 400, not "empty data".
+  // Until now ?mint=<garbage> passed straight through: /events silently returned [],
+  // /multiplier — "1", /onchain fired real RPC requests with arbitrary keys past the cache.
   const resolveMint = (q) =>
     byMint.get(q.get("mint") ?? "")?.mint ?? bySymbol.get(q.get("symbol") ?? "")?.mint ?? null;
-  let pageHtml = null; // рендерим один раз, страница статична (данные тянет с API)
+  let pageHtml = null; // rendered once, the page is static (it pulls data from the API)
 
   const server = createServer(async (req, res) => {
     try {
       let url;
-      // request-target с ведущим «//» — протокол-относительная форма: new URL съедает
-      // следующий сегмент как authority («//events?x» → host «events», pathname «/»,
-      // query выброшен), и маршрутизация молча отдавала ГЛАВНУЮ страницу вместо
-      // 404/данных (находка chaos-раунда). Отсекаем до парсинга: чужой authority нам
-      // не принадлежит, а канонизация «//events» в «/events» поощряла бы кривые
-      // request-target — честный 404, не «догадка за клиента».
+      // A request-target with a leading "//" is the protocol-relative form: new URL
+      // swallows the next segment as the authority ("//events?x" → host "events",
+      // pathname "/", query discarded), and routing silently served the MAIN page
+      // instead of 404/data (a chaos-round finding). Cut it off before parsing: a
+      // foreign authority is not ours, and canonizing "//events" into "/events" would
+      // reward malformed request-targets — an honest 404, not "guessing on the client's behalf".
       if (req.url.startsWith("//")) {
         return json(res, 404, { error: "not found", endpoints: ENDPOINTS });
       }
       try {
         url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
       } catch {
-        // краш-вектор, пойманный живьём: request-target вроде "http://:80/" бросает
-        // ERR_INVALID_URL и без ловли убивал процесс одним запросом
+        // crash vector caught live: a request-target like "http://:80/" throws
+        // ERR_INVALID_URL and, unchecked, killed the process with a single request
         return json(res, 400, { error: "malformed request target" });
       }
-      // HEAD — семантика GET с пустым телом (RFC 9110 §9.3.2): тело отбрасывает сам
-      // node (_hasBody=false для HEAD), заголовки уходят ровно как у GET — включая
-      // Content-Length от GET-выдачи. Раньше HEAD получал 405: HEAD-пробы мониторинга
-      // отказывались на живых маршрутах. Остальные методы — 405, и по RFC 9110
-      // §15.5.5 он ОБЯЗАН нести Allow (раньше не нёс — та же chaos-находка).
+      // HEAD — GET semantics with an empty body (RFC 9110 §9.3.2): node itself drops
+      // the body (_hasBody=false for HEAD), the headers go out exactly as for GET —
+      // including the Content-Length of the GET response. HEAD used to get a 405:
+      // monitoring HEAD probes were refused on live routes. The other methods get a
+      // 405, and per RFC 9110 §15.5.5 it MUST carry Allow (it used not to — the same
+      // chaos finding).
       const isHead = req.method === "HEAD";
       if (req.method !== "GET" && !isHead) {
         return json(res, 405, { error: "method not allowed" }, { Allow: "GET, HEAD" });
@@ -153,8 +156,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
             decimals: t.decimals,
             events: (eventsByMint.get(t.mint) ?? []).length,
             currentMultiplier: timelines.get(t.mint)?.multiplierAt(now) ?? "1",
-            // аддитивно: исключённый из витрины токен помечен — «1» без пометки
-            // выглядела вычисленной, хотя таймлайна у токена нет
+            // additive: a token excluded from the showcase is marked — a "1" without
+            // the mark looked computed, although the token has no timeline
             ...(reason ? { excluded: true, excludedReason: reason } : {}),
           };
         })
@@ -165,12 +168,13 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       const date = q.get("date") ?? new Date().toISOString();
-      // дата валидируется ДО ридера: мусорная дата не должна греть кэш реальным RPC
-      // и давать 503 вместо 400 при бросающем ридере
+      // the date is validated BEFORE the reader: a garbage date must not warm the cache
+      // with a real RPC call, nor yield 503 instead of 400 with a throwing reader
       if (!validQueryDate(date)) return json(res, 400, { error: "date must be ISO-8601 (YYYY-MM-DD, or with time + timezone)" });
-      // Исключённый токен (TimelineError на старте): план эмитента неизвестен, «?? "1"»
-      // фабриковал бы api:1 и вердикт без сверки двух реальных планов — честный отказ
-      // ДО ридера и лимитёра (квота RPC не горит), по конвенции /events.
+      // Excluded token (TimelineError at startup): the issuer plan is unknown, the
+      // "?? "1"" would fabricate api:1 and a verdict without comparing the two real
+      // plans — an honest refusal BEFORE the reader and the limiter (the RPC quota
+      // does not burn), per the /events convention.
       const onchainExcludedReason = excludedByMint.get(mint);
       if (onchainExcludedReason) {
         return json(res, 400, {
@@ -185,7 +189,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       try {
         parsed = await onchainReader(mint);
       } catch (err) {
-        // источник недоступен — fail-closed: отдаём статус, витрина показывает честную заглушку
+        // source unavailable — fail-closed: we return the status, the showcase shows an honest placeholder
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
       const api = timelines.get(mint)?.multiplierAt(date) ?? "1";
@@ -211,9 +215,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
       if (!allow(scanLimiter, req, res)) return;
-      // Ушедший клиент не должен дожигать RPC-квоту (волна B): abort прокидывается
-      // в сканер, скан останавливается между страницами/транзакциями; результат
-      // отменённого скана НЕ кэшируется (кэш-хелпер кэширует только успех).
+      // A client that walked away must not keep burning the RPC quota (wave B): abort
+      // is passed into the scanner, the scan stops between pages/transactions; the
+      // result of a cancelled scan is NOT cached (the cache helper only caches success).
       const abort = new AbortController();
       req.on("aborted", () => abort.abort());
       let scan;
@@ -222,31 +226,31 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
-      // отчёт собираем в сервере: тут живут таймлайны множителей
+      // the report is assembled in the server: this is where the multiplier timelines live
       const report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
-      // токены, чей таймлайн кривой: множитель в отчёте дефолтная «1» — помечаем честно
+      // tokens with a broken timeline: the multiplier in the report is the default "1" — mark honestly
       for (const tk of report.tokens) {
         const reason = excludedByMint.get(tk.mint);
         if (reason) {
           tk.excluded = true;
           tk.excludedReason = reason;
-          // контракт витрины: adjustedAvailable === false (вместе с excluded) → строка
-          // «adjusted — not computed»; иначе тождественный fallback (scaled=raw) выглядел
-          // бы посчитанным adjusted. rawBalance/netDeltaRaw не трогаем — сырое как сырое.
+          // showcase contract: adjustedAvailable === false (together with excluded) → the
+          // "adjusted — not computed" row; otherwise the identity fallback (scaled=raw) would
+          // look like a computed adjusted. rawBalance/netDeltaRaw are untouched — raw is raw.
           tk.adjustedAvailable = false;
         }
       }
       return json(res, 200, report);
     }
     if (url.pathname === "/accruals") {
-      // Движок начислений applyEvents подключён точечно: дивиденды ОДНОГО токена для
-      // ОДНОГО кошелька. Отдельный эндпоинт, а не поле в /lots: отчёт /lots —
-      // общекошелечный (symbol в его контракте нет), а его wire-форма пинится тестами
-      // (dividend-e2e GAP 2: строки «accrual» в /lots быть не должно).
+      // The applyEvents accrual engine is wired in pointwise: the dividends of ONE token
+      // for ONE wallet. A separate endpoint, not a field in /lots: the /lots report is
+      // wallet-wide (its contract has no symbol) and its wire shape is pinned by tests
+      // (dividend-e2e GAP 2: there must be no "accrual" rows in /lots).
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
-      // Исключённый токен (кривой таймлайн): события скрыты ЦЕЛИКОМ, тихий [] был бы
-      // неотличим от «дивидендов не было» — тот же честный отказ, что у /events.
+      // Excluded token (broken timeline): the events are hidden WHOLE; a silent [] would
+      // be indistinguishable from "no dividends" — the same honest refusal as /events.
       const excludedReason = excludedByMint.get(mint);
       if (excludedReason) {
         return json(res, 400, {
@@ -271,14 +275,15 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
       const token = report.tokens.find((t) => t.mint === mint);
       const dividends = (eventsByMint.get(mint) ?? []).filter((e) => e.type === "DIVIDEND_ACCRUAL");
-      // нет позиции по токену или нет дивидендных событий — начислений нет: честный []
+      // no position in the token or no dividend events — no accruals: an honest []
       if (!token || dividends.length === 0) return json(res, 200, []);
-      // Лоты отчёта без движкового контекста (mint/owner/basisRaw в лоте нет — стык
-      // задокументирован в round6-report-lots): достраиваем. acquiredDate: null (tx без
-      // blockTime — легитимная реальность Solana) ЯДОВИТ для applyEvents: движок бросает
-      // LotError «refusing to guess» и атомарностью роняет применение ВСЕЙ истории
-      // (контракт в шапке report.mjs). Такие лоты исключаем ДО движка: дата покупки
-      // неизвестна — угадывать «до или после экс-даты» движок отказывается, и мы не будем.
+      // Report lots lack the engine context (a lot carries no mint/owner/basisRaw — the
+      // seam is documented in round6-report-lots): we complete it. acquiredDate: null (a
+      // tx without blockTime is a legitimate Solana reality) is POISON to applyEvents: the
+      // engine throws LotError "refusing to guess" and its atomicity rolls back applying
+      // the WHOLE history (contract in the report.mjs header). Such lots are excluded
+      // BEFORE the engine: the acquisition date is unknown — the engine refuses to guess
+      // "before or after the ex-date", and so will we.
       const engineLots = token.lots
         .filter((l) => l.acquiredDate !== null && l.acquiredDate !== undefined)
         .map((l) => ({ ...l, mint, owner: report.owner, qtyRaw: BigInt(l.qtyRaw), basisRaw: 0n }));
@@ -286,19 +291,20 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       try {
         engine = applyEvents(engineLots, dividends);
       } catch (err) {
-        // кривое событие из стора не валит сервер: понятная причина вместо generic 500
+        // a broken event from the store does not take the server down: a clear reason instead of a generic 500
         return json(res, 500, { error: `accrual engine failed: ${err.message}` });
       }
       const symbol = byMint.get(mint)?.symbol ?? null;
-      // lotsConsidered — сколько лотов легло в базу события («строго раньше effectiveDate»,
-      // сравнение unix-ms): пара heldBefore в lots.mjs. Движок счётчик не отдаёт (accrual
-      // несёт только сумму qty), а витрине важно видеть «за счёт каких лотов». Парс здесь
-      // не может дать null: движок уже прогнал те же строки через тот же parseIsoDateMs —
-      // мусорная дата дошла бы до него LotError'ом выше.
+      // lotsConsidered — how many lots fed the event's base ("strictly earlier than
+      // effectiveDate", a unix-ms comparison): the heldBefore pair in lots.mjs. The engine
+      // does not return the counter (an accrual carries only the qty sum), but the showcase
+      // needs to see "which lots paid for it". The parse here cannot yield null: the engine
+      // already ran the same rows through the same parseIsoDateMs — a garbage date would
+      // have reached it as a LotError above.
       return json(res, 200, engine.accruals.map((a) => ({
         symbol,
         effectiveDate: a.event.effectiveDate,
-        amountPerUnitRaw: String(a.amountPerUnitRaw), // BigInt в JSON не сериализуется — наружу строками
+        amountPerUnitRaw: String(a.amountPerUnitRaw), // BigInt does not serialize in JSON — strings go out
         totalRaw: String(a.totalRaw),
         lotsConsidered: engineLots.filter((l) => parseIsoDateMs(l.acquiredDate) < parseIsoDateMs(a.event.effectiveDate)).length,
       })));
@@ -306,9 +312,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     if (url.pathname === "/crosscheck") {
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
-      // Исключённый токен: события скрыты целиком — тихий verdicts:[] был бы неотличим
-      // от «событий не было», а pool+candles жгли бы квоту провайдера впустую. Отказ с
-      // причиной ДО провайдера и лимитёра — конвенция /events.
+      // Excluded token: the events are hidden whole — a silent verdicts:[] would be
+      // indistinguishable from "no events", while pool+candles would burn the provider
+      // quota for nothing. A refusal with the reason BEFORE the provider and the limiter —
+      // the /events convention.
       const crosscheckExcludedReason = excludedByMint.get(mint);
       if (crosscheckExcludedReason) {
         return json(res, 400, {
@@ -322,7 +329,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       let pool = null;
       let candles = [];
       try {
-        pool = await priceProvider.pool(mint); // null = пула с нашим base нет — все вердикты no-price-data
+        pool = await priceProvider.pool(mint); // null = no pool with our base — every verdict is no-price-data
         if (pool) candles = await priceProvider.candles(pool.address);
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
@@ -331,10 +338,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       return json(res, 200, { mint, symbol: byMint.get(mint)?.symbol ?? null, pool, coverage, verdicts });
     }
     if (url.pathname === "/health") {
-      // journal: сколько событий реплеено из кэша и сколько токенов не прочитано из цепи —
-      // «29 событий» без этой строки неотличимо от «RPC лежал на старте».
-      // excluded: токены, чей таймлайн кривой и исключён из витрины — «1» у них дефолт,
-      // не расчёт; витрина и потребители API обязаны это видеть.
+      // journal: how many events replayed from the cache and how many tokens were not read
+      // from the chain — "29 events" without this line is indistinguishable from "the RPC
+      // was down at startup".
+      // excluded: tokens whose timeline is broken and which are excluded from the showcase —
+      // their "1" is a default, not a computation; the showcase and API consumers must see it.
       return json(res, 200, {
         ok: true,
         tokens: registry.length,
@@ -351,8 +359,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     if (url.pathname === "/tokens") {
       const issuer = q.get("issuer");
       if (issuer !== null) {
-        // ROUND13: тихий [] на ?issuer=Backed (README сам пишет «xStocks/Backed 16»)
-        // неотличим от «токенов нет» — конвенция symbol/mint: отказ со словарём.
+        // round 13: a silent [] on ?issuer=Backed (the README itself says "xStocks/Backed 16")
+        // is indistinguishable from "there are no tokens" — the symbol/mint convention: refuse with a dictionary.
         const known = new Set(registry.map((t) => t.issuer));
         if (!known.has(issuer)) {
           const dict = known.size ? `; valid: ${[...known].sort().join(", ")}` : "";
@@ -365,10 +373,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     if (url.pathname === "/events") {
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
-      // У исключённого минта события скрыты ЦЕЛИКОМ (частичная отдача без таймлайна врала
-      // бы), но тихий [] неотличим от «событий не было». Честный отказ с причиной — по
-      // конвенции ошибок эндпоинта (как у неизвестного symbol — 400 с {error}); поля
-      // excluded/excludedReason дублируют причину для программных потребителей.
+      // For an excluded mint the events are hidden WHOLE (a partial serve without a timeline
+      // would lie), but a silent [] is indistinguishable from "no events". An honest refusal
+      // with the reason — per the endpoint error convention (like an unknown symbol — a 400
+      // with {error}); the excluded/excludedReason fields duplicate the reason for
+      // programmatic consumers.
       const excludedReason = excludedByMint.get(mint);
       if (excludedReason) {
         return json(res, 400, {
@@ -380,8 +389,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const list = eventsByMint.get(mint) ?? [];
       const type = q.get("type");
       if (type !== null && !EVENT_TYPES.includes(type)) {
-        // ROUND13: тот же контракт, что у issuer — мусорный type тихим [] неотличим
-        // от «событий этого типа не было»
+        // round 13: the same contract as issuer — a garbage type with a silent [] is
+        // indistinguishable from "there were no events of this type"
         return json(res, 400, { error: `unknown type ${JSON.stringify(type)}; valid: ${EVENT_TYPES.join(", ")}` });
       }
       return json(res, 200, type ? list.filter((e) => e.type === type) : list);
@@ -390,21 +399,22 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       const date = q.get("date") ?? new Date().toISOString();
-      // даты и количества — валидный ввод или честный 400: строгий гейт дат (см. выше)
-      // отсекает перекаты ("2026-02-30") и наивные времена, а BigInt молча принимает "0x10" (=16)
+      // dates and quantities — valid input or an honest 400: the strict date gate (see above)
+      // cuts off rollovers ("2026-02-30") and naive times, while BigInt silently accepts "0x10" (=16)
       const raw = q.get("raw") ?? "100000000";
       if (!/^\d+$/.test(raw)) return json(res, 400, { error: "raw must be a non-negative integer in base units (digits only)" });
       if (!validQueryDate(date)) return json(res, 400, { error: "date must be ISO-8601 (YYYY-MM-DD, or with time + timezone)" });
       const tl = timelines.get(mint);
       if (!tl) {
-        // аддитивно, как в /summary: у исключённого минта (TimelineError на старте) «1» —
-        // дефолт без таймлайна, не вычисление; без пометки она неотличима от честного
-        // «событий не было» — тот же класс «голой 1», который раунд 5 убивал в /summary
+        // additive, as in /summary: for an excluded mint (TimelineError at startup) the "1"
+        // is a default without a timeline, not a computation; without the mark it is
+        // indistinguishable from an honest "no events" — the same "bare 1" class that
+        // round 5 hunted down in /summary
         const excludedReason = excludedByMint.get(mint);
         return json(res, 200, {
           mint, date,
           multiplier: "1",
-          events: 0, // событий не было
+          events: 0, // no events ever
           ...(excludedReason ? { excluded: true, excludedReason } : {}),
         });
       }
@@ -413,7 +423,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 200, {
           mint, date,
           multiplier: tl.multiplierAt(date),
-          // BigInt в JSON не сериализуется — отдаём строками
+          // BigInt does not serialize in JSON — serve as strings
           sampleScaledQty: {
             exact: s.exact,
             whole: String(s.whole),
@@ -428,13 +438,13 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     }
     return json(res, 404, { error: "not found", endpoints: ENDPOINTS });
     } catch (err) {
-      // страховка: любое необработанное исключение — 500, процесс живёт
+      // safety net: any unhandled exception — a 500, the process lives on
       return json(res, 500, { error: "internal error" });
     }
   });
 
   return new Promise((resolve, reject) => {
-    server.once("error", reject); // занятый порт и т.п. — reject вместо сырого краша
+    server.once("error", reject); // a busy port and the like — reject instead of a raw crash
     server.listen(port, host, () => resolve(server));
   });
 }

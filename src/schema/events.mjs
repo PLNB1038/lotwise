@@ -1,13 +1,13 @@
-// Каноническая схема корпоративных событий Lotwise.
-// Единый формат для всего пайплайна: источники эмитентов и on-chain дельты
-// нормализуются в эти объекты; движок лотов ест только их.
+// Canonical schema of Lotwise corporate events.
+// A single format for the whole pipeline: issuer sources and on-chain deltas
+// are normalized into these objects; the lots engine eats only these.
 //
-// КОНТРАКТ (осознанный, подтверждён фаззером — не «чинить» одну сторону пары):
-// MERGER без exchange-полей ВАЛИДЕН по схеме — это информационное событие
-// (переэмиссия/смена минта, обмен не заявлен); при этом applyEvents (lots.mjs)
-// на MERGER без exchange-полей бросает LotError «refusing to guess».
-// То есть схемный валидатор и движок лотов расходятся НАМЕРЕННО: история может
-// содержать такие события, но применять их к лотам без коэффициента отказываемся.
+// CONTRACT (deliberate, confirmed by the fuzzer — do not "fix" one side of the pair):
+// MERGER without exchange fields is VALID per the schema — an informational event
+// (reissuance/mint change, no exchange declared); meanwhile applyEvents (lots.mjs)
+// throws a LotError "refusing to guess" on a MERGER without exchange fields.
+// That is, the schema validator and the lots engine diverge ON PURPOSE: history may
+// contain such events, but we refuse to apply them to lots without a ratio.
 import { isValidIsoDate } from "./isodate.mjs";
 
 export const EVENT_TYPES = [
@@ -21,10 +21,10 @@ export const EVENT_TYPES = [
 
 const DECIMAL_RE = /^\d+(\.\d+)?$/;
 
-// Каноническая запись десятичной строки множителя: «05»→«5», «5.0»→«5», «1.10»→«1.1».
-// Единая точка для журнала, scaled-ui-парсера и reconcile (ROUND7 №16, ROUND9 №15):
-// репрезентация зависит от источника, а все сравнения ниже — строковые. Вызывать
-// ПОСЛЕ regex-гварда: форма уже гарантирована. Значащие цифры не трогаются.
+// Canonical form of a multiplier decimal string: "05"→"5", "5.0"→"5", "1.10"→"1.1".
+// A single spot for the journal, the scaled-ui parser and reconcile (ROUND7 fix 16, ROUND9 fix 15):
+// the representation depends on the source, while every comparison below is a string one. Call
+// AFTER the regex guard: the shape is already guaranteed. Significant digits are not touched.
 export function canonicalDecimalString(s) {
   const [int = "0", frac = ""] = s.split(".");
   const canonInt = int.replace(/^0+(?=\d)/, "");
@@ -32,20 +32,20 @@ export function canonicalDecimalString(s) {
   return canonFrac ? `${canonInt}.${canonFrac}` : canonInt;
 }
 
-// Статус доверия событию: цепочка источников подтверждает друг друга или нет.
+// Trust status of an event: whether the source chain corroborates itself or not.
 export const EVENT_STATUSES = ["confirmed", "unverified"];
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-// Нулевой множитель не существует: MULTIPLIER_CHANGE «1»→«0» молча обнулял бы
-// скорректированную позицию, а crosscheck получал expectedRatio=Infinity.
-// «0.5» валиден — проверяем числовое равенство нулю в ЛЮБОЙ записи («0», «00»,
-// «0.00», «00.0»: ведущие нули допускаются самим DECIMAL_RE — ROUND7 №3).
+// A zero multiplier does not exist: MULTIPLIER_CHANGE "1"→"0" would silently zero out
+// the adjusted position, and crosscheck would get expectedRatio=Infinity.
+// "0.5" is valid — we check numeric equality to zero in ANY representation ("0", "00",
+// "0.00", "00.0": leading zeros are allowed by DECIMAL_RE itself — ROUND7 fix 3).
 const ZERO_MULTIPLIER_RE = /^0+(\.0+)?$/;
 
-// Кап дробной точности множителя — ПАРА с timeline.mjs (decimalToRatio отвергает >30).
-// Контракт должен совпадать в обеих сторонах; менять только вместе.
+// Cap on multiplier fraction precision — a PAIR with timeline.mjs (decimalToRatio rejects >30).
+// The contract must match on both sides; change only together.
 const MAX_MULTIPLIER_FRACTION_DIGITS = 30;
 
 export class EventValidationError extends Error {
@@ -64,7 +64,7 @@ function requireFields(e, fields) {
   }
 }
 
-// Валидация одного события. Бросает EventValidationError с именем поля.
+// Validation of a single event. Throws EventValidationError carrying the field name.
 export function validateEvent(e) {
   if (!e || typeof e !== "object") throw new EventValidationError("event must be an object");
   requireFields(e, ["type", "mint", "effectiveDate", "status", "sources"]);
@@ -73,10 +73,10 @@ export function validateEvent(e) {
     throw new EventValidationError(`unknown type "${e.type}", expected one of ${EVENT_TYPES.join("|")}`, "type");
   }
   if (!MINT_RE.test(e.mint)) throw new EventValidationError("mint must be a base58 Solana pubkey", "mint");
-  // Дата — не только форма, но семантика: реальный календарь и обязательная
-  // таймзона у datetime (src/schema/isodate.mjs, находки раундов 2–3).
-  // Журнал-реплей и xstocks-история проходят ТОЛЬКО эту проверку — мусорная дата
-  // эмитента иначе доезжала бы до Date.parse как NaN и падала 500-м на /summary.
+  // A date is not only shape but semantics: a real calendar and a mandatory
+  // timezone on datetimes (src/schema/isodate.mjs, round 2–3 findings).
+  // Journal replay and xstocks history pass ONLY this check — a garbage issuer
+  // date would otherwise reach Date.parse as NaN and fall with a 500 on /summary.
   if (!isValidIsoDate(e.effectiveDate)) {
     throw new EventValidationError(
       "effectiveDate must be canonical ISO-8601: YYYY-MM-DD or YYYY-MM-DDTHH:mm[:ss[.fff]](Z|±HH:MM)",
@@ -102,8 +102,8 @@ export function validateEvent(e) {
           !Number.isInteger(e.ratioDenominator) || e.ratioDenominator <= 0) {
         throw new EventValidationError("split ratio must be two positive integers (e.g. 3/1)", "ratioNumerator");
       }
-      // Потолок safe-integer — тот же аргумент, что у amountPerUnitRaw (волна B):
-      // выше 2^53 JSON-граница молча округляет, а движок считает точно
+      // The safe-integer ceiling — the same argument as for amountPerUnitRaw (wave B):
+      // above 2^53 the JSON boundary rounds silently, while the engine counts exactly
       if (e.ratioNumerator > Number.MAX_SAFE_INTEGER || e.ratioDenominator > Number.MAX_SAFE_INTEGER) {
         throw new EventValidationError("split ratio exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "ratioNumerator");
       }
@@ -113,8 +113,8 @@ export function validateEvent(e) {
       if (!Number.isInteger(e.amountPerUnitRaw) || e.amountPerUnitRaw <= 0) {
         throw new EventValidationError("amountPerUnitRaw must be a positive integer in raw units", "amountPerUnitRaw");
       }
-      // Потолок safe-integer (ROUND9 №14): выше 2^53 JSON-граница молча округляет —
-      // dividends.mjs ссылается на этот потолок как на «потолок самой схемы»
+      // The safe-integer ceiling (ROUND9 fix 14): above 2^53 the JSON boundary rounds silently —
+      // dividends.mjs refers to this ceiling as "the ceiling of the schema itself"
       if (e.amountPerUnitRaw > Number.MAX_SAFE_INTEGER) {
         throw new EventValidationError("amountPerUnitRaw exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "amountPerUnitRaw");
       }
@@ -144,19 +144,19 @@ export function validateEvent(e) {
       }
       break;
     case "REDEEM":
-      // redemption закрывает токен: обмен на базовый актив/стейбл, доп-полей не требует,
-      // но ссылка на условия обязана быть в sources (проверено выше)
+      // a redemption closes the token: an exchange for the underlying asset/stable, no extra fields required,
+      // but a link to the terms must be in sources (checked above)
       break;
     case "MULTIPLIER_CHANGE":
-      // xStocks-модель: raw-баланс не меняется, scaled = raw × multiplier.
-      // Множители — ТОЧНЫЕ десятичные строки («1.005714560286254»), float запрещён.
+      // the xStocks model: the raw balance does not change, scaled = raw × multiplier.
+      // Multipliers are EXACT decimal strings ("1.005714560286254"), float is forbidden.
       requireFields(e, ["multiplierFrom", "multiplierTo"]);
       for (const f of ["multiplierFrom", "multiplierTo"]) {
         if (typeof e[f] !== "string" || !DECIMAL_RE.test(e[f])) {
           throw new EventValidationError(`${f} must be a decimal string like "1.0057" (no float)`, f);
         }
         if (ZERO_MULTIPLIER_RE.test(e[f])) {
-          throw new EventValidationError(`${f} must be positive — нулевой множитель не существует (позиция обнулилась бы молча)`, f);
+          throw new EventValidationError(`${f} must be positive — a zero multiplier does not exist (the position would be zeroed silently)`, f);
         }
         const frac = e[f].split(".")[1] ?? "";
         if (frac.length > MAX_MULTIPLIER_FRACTION_DIGITS) {

@@ -1,6 +1,6 @@
-// Fail-closed сверка двух независимых источников правды (два RPC-эндпоинта).
-// Принцип: расхождение НИКОГДА не разрешается угадыванием — affected записи
-// помечаются и выбрасываются из верифицированного набора.
+// Fail-closed reconciliation of two independent sources of truth (two RPC endpoints).
+// Principle: a divergence is NEVER resolved by guessing — affected entries
+// are flagged and dropped from the verified set.
 const COMPARE_FIELDS = ["slot", "deltaRaw", "owner", "mint"];
 
 export function reconcileSnapshots(a, b) {
@@ -35,17 +35,17 @@ export function reconcileSnapshots(a, b) {
   };
 }
 
-// ok = полная двойная идентичность; partial = односторонние пропуски;
-// unverified = любые конфликты — весь вердикт понижается, fail-closed.
+// ok = full double agreement; partial = one-sided gaps;
+// unverified = any conflicts — the whole verdict is downgraded, fail-closed.
 export function verdict(result) {
   if (result.conflicts.length > 0) return "unverified";
   if (result.onlyA.length > 0 || result.onlyB.length > 0) return "partial";
   return "ok";
 }
 
-// В потребление уходят ТОЛЬКО дважды подтверждённые записи.
-// Односторонние и конфликтные выбрасываются — сознательный трейд-офф:
-// недосчитать честнее, чем показать придуманное.
+// Only twice-confirmed entries go to consumption.
+// One-sided and conflicting ones are dropped — a deliberate trade-off:
+// undercounting is more honest than showing something made up.
 export function mergeVerified(result) {
   return [...result.agreed];
 }

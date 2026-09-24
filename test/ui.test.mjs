@@ -19,7 +19,7 @@ const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { sym
 const onchainFixture = JSON.parse(readFileSync(path.join(dir, "onchain-spyx-mint.json"), "utf8"));
 
 async function withServer(opts, fn) {
-  if (typeof opts === "function") fn = opts; // withServer(fn) — без опций
+  if (typeof opts === "function") fn = opts; // withServer(fn) — no options
   const { onchainReader = null } = typeof opts === "object" && opts !== null ? opts : {};
   const registry = await loadRegistry("data/tokens.json");
   const server = await createApiServer({ registry, events, onchainReader });
@@ -31,7 +31,7 @@ async function withServer(opts, fn) {
   }
 }
 
-test("/ отдаёт самодостаточную витрину-страницу", async () => {
+test("/ serves a self-sufficient vitrine page", async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/`);
     assert.equal(res.status, 200);
@@ -41,19 +41,19 @@ test("/ отдаёт самодостаточную витрину-страни�
     assert.ok(html.includes('id="tokens"'));
     assert.ok(html.includes("/summary"));
     assert.ok(html.includes("/onchain"));
-    // самодостаточность: никаких внешних ресурсов, всё — относительные fetch к своему API
+    // self-sufficiency: no external resources, everything — relative fetches to its own API
     assert.ok(!html.includes('src="http'));
     assert.ok(!html.includes('href="http'));
-    // шаблонный литерал вычислен полностью, без остатков
+    // the template literal is computed fully, without leftovers
     assert.ok(!html.includes("${"));
   });
 });
 
-test("/summary: строка на каждый токен реестра, сортировка событиями, множитель сегодня у SPYx", async () => {
+test("/summary: a row per registry token, sorted by events, the today multiplier for SPYx", async () => {
   await withServer(async (base) => {
     const rows = await (await fetch(`${base}/summary`)).json();
     assert.equal(rows.length, (await loadRegistry("data/tokens.json")).length);
-    // событийные токены впереди, дальше по алфавиту
+    // event-bearing tokens first, then alphabetically
     assert.equal(rows[0].symbol, "SPYx");
     assert.equal(rows[0].events, 4);
     assert.equal(rows[0].currentMultiplier, "1.005714560286254");
@@ -66,7 +66,7 @@ test("/summary: строка на каждый токен реестра, сор
   });
 });
 
-test("/onchain без ридера — 503 с понятной причиной", async () => {
+test("/onchain without a reader — 503 with a clear reason", async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/onchain?symbol=SPYx`);
     assert.equal(res.status, 503);
@@ -75,7 +75,7 @@ test("/onchain без ридера — 503 с понятной причиной"
   });
 });
 
-test("/onchain: живой план SPYx (active 1.0039 + pending 1.0057) сегодня сходится через pending-правило", async () => {
+test("/onchain: the live SPYx plan (active 1.0039 + pending 1.0057) today converges via the pending rule", async () => {
   const parsed = parseScaledUiAmount(onchainFixture.result.value);
   await withServer({ onchainReader: async () => parsed }, async (base) => {
     const res = await fetch(`${base}/onchain?symbol=SPYx`);
@@ -83,26 +83,26 @@ test("/onchain: живой план SPYx (active 1.0039 + pending 1.0057) сег
     const b = await res.json();
     assert.equal(b.onChain.active, "1.003909240011759");
     assert.equal(b.onChain.pending, "1.005714560286254");
-    // поле active в цепи до сих пор не ротировано, но pending эффективен с 18.06.2026 —
-    // наше правило pending-после-таймстампа даёт effective = API current
+    // the active field on chain has not rotated yet, but the pending is effective since 18.06.2026 —
+    // our pending-after-timestamp rule gives effective = the API current
     assert.equal(b.onChainEffective, "1.005714560286254");
     assert.equal(b.api, "1.005714560286254");
     assert.equal(b.verdict, "ok");
   });
 });
 
-test("/onchain: внутри окна активации (до таймстампа pending) оба плана ещё на 1.0039 — согласовано", async () => {
+test("/onchain: inside the activation window (before the pending timestamp) both plans are still at 1.0039 — agreed", async () => {
   const parsed = parseScaledUiAmount(onchainFixture.result.value);
   await withServer({ onchainReader: async () => parsed }, async (base) => {
     const b = await (await fetch(`${base}/onchain?symbol=SPYx&date=2026-06-01T00:00:00Z`)).json();
     assert.equal(b.api, "1.003909240011759");
-    assert.equal(b.onChainEffective, "1.003909240011759"); // pending ещё не эффективен -> active
+    assert.equal(b.onChainEffective, "1.003909240011759"); // the pending is not effective yet -> active
     assert.equal(b.verdict, "ok");
   });
 });
 
-test("/onchain: расхождение планов ловится — цепь без pending, API уже применил событие", async () => {
-  // наивное чтение цепи (только active, pending не назначен) против API current
+test("/onchain: a divergence of plans is caught — the chain without a pending, the API already applied the event", async () => {
+  // a naive chain read (only active, no pending assigned) against the API current
   const staleChain = {
     program: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
     decimals: 8,
@@ -120,7 +120,7 @@ test("/onchain: расхождение планов ловится — цепь 
   });
 });
 
-test("/onchain: источник недоступен — fail-closed 503 с kind, витрина не врёт", async () => {
+test("/onchain: the source is unavailable — a fail-closed 503 with kind, the vitrine does not lie", async () => {
   const err = new Error("HTTP 429");
   err.kind = "rate-limit";
   await withServer({ onchainReader: async () => { throw err; } }, async (base) => {
@@ -132,7 +132,7 @@ test("/onchain: источник недоступен — fail-closed 503 с kin
   });
 });
 
-test("/onchain без mint/symbol — понятная 400", async () => {
+test("/onchain without mint/symbol — a clear 400", async () => {
   await withServer({ onchainReader: async () => parseScaledUiAmount(onchainFixture.result.value) }, async (base) => {
     const res = await fetch(`${base}/onchain`);
     assert.equal(res.status, 400);
@@ -140,7 +140,7 @@ test("/onchain без mint/symbol — понятная 400", async () => {
   });
 });
 
-// --- регрессии раунда ревью 19.09 ---
+// --- regressions of the 19.09 review round ---
 
 function rawRequest(port, reqline) {
   return new Promise((resolve, reject) => {
@@ -154,20 +154,20 @@ function rawRequest(port, reqline) {
   });
 }
 
-test("краш-вектор request-target (http://:80/) — 400, сервер жив (регрессия живого краша)", async () => {
+test("the request-target crash vector (http://:80/) — 400, the server alive (a regression of a live crash)", async () => {
   await withServer(async (base) => {
     const { port } = new URL(base);
     const res = await rawRequest(
       Number(port),
       "GET http://:80/ HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
     );
-    assert.match(res, /400 Bad Request/); // раньше: ERR_INVALID_URL убивал процесс одним запросом
+    assert.match(res, /400 Bad Request/); // before: ERR_INVALID_URL killed the process with one request
     const after = await fetch(`${base}/health`);
-    assert.equal(after.status, 200); // сервер пережил крафтовый запрос
+    assert.equal(after.status, 200); // the server survived the crafted request
   });
 });
 
-test("не-GET методы — 405, POST больше не выполняет GET-логику", async () => {
+test("non-GET methods — 405, POST no longer executes GET logic", async () => {
   await withServer({ onchainReader: async () => parseScaledUiAmount(onchainFixture.result.value) }, async (base) => {
     for (const path of ["/", "/onchain?symbol=SPYx", "/summary"]) {
       const res = await fetch(`${base}${path}`, { method: "POST" });
@@ -176,30 +176,30 @@ test("не-GET методы — 405, POST больше не выполняет G
   });
 });
 
-test("mint/symbol вне реестра — 400 на всех трёх маршрутах, в цепь не идём", async () => {
+test("a mint/symbol outside the registry — 400 on all three routes, we do not go to the chain", async () => {
   let readerCalls = 0;
   await withServer({ onchainReader: async () => { readerCalls++; return parseScaledUiAmount(onchainFixture.result.value); } }, async (base) => {
     const unknown = "?mint=NotInRegistry1111111111111111111111111111";
     for (const route of ["/events", "/multiplier", "/onchain"]) {
       const res = await fetch(`${base}${route}${unknown}`);
-      assert.equal(res.status, 400, route); // раньше /events молча [] и "1", /onchain гонял RPC с мусором
+      assert.equal(res.status, 400, route); // before: /events silently [] and "1", /onchain ran RPC with garbage
     }
     const sym = await fetch(`${base}/events?symbol=NOSUCHx`);
     assert.equal(sym.status, 400);
-    assert.equal(readerCalls, 0); // ридер не дёргался ни разу
+    assert.equal(readerCalls, 0); // the reader was not hit once
   });
 });
 
-test("клиентский скрипт страницы компилируется (escape-регрессии шаблона)", async () => {
+test("the page client script compiles (template escape regressions)", async () => {
   await withServer(async (base) => {
     const html = await (await fetch(`${base}/`)).text();
     const m = html.match(/<script>([\s\S]*?)<\/script>/);
-    assert.ok(m, "script block на месте");
-    new vm.Script(m[1]); // синтаксис как есть в браузере, упадёт если \\-эскейпы разъехались
+    assert.ok(m, "script block is in place");
+    new vm.Script(m[1]); // the syntax as it is in the browser; it will fall if the \\-escapes diverged
   });
 });
 
-test("занятый порт — createApiServer reject'ит, а не роняет процесс", async () => {
+test("a busy port — createApiServer rejects, does not kill the process", async () => {
   const blocker = net.createServer();
   await new Promise((r) => blocker.listen(0, "127.0.0.1", r));
   const busyPort = blocker.address().port;
@@ -208,9 +208,9 @@ test("занятый порт — createApiServer reject'ит, а не роня�
   blocker.close();
 });
 
-// ---- регрессии раунда 4: клиентский скрипт гоняется в vm с DOM-стабом ----
+// ---- round 4 regressions: the client script runs in vm with a DOM stub ----
 
-// route(url) -> {ok, status, body} | Promise<{...}> | undefined (запрос висит вечно)
+// route(url) -> {ok, status, body} | Promise<{...}> | undefined (the request hangs forever)
 function runClient(route) {
   const els = new Map();
   const makeEl = (id) => ({
@@ -222,12 +222,12 @@ function runClient(route) {
   const sb = {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
-      querySelectorAll: () => [], // строки таблицы токенов в этих тестах не гоняются
+      querySelectorAll: () => [], // the token table rows are not exercised in these tests
     },
     fetch: (url) => {
       const hit = route(url);
       const p = hit instanceof Promise ? hit : Promise.resolve(hit);
-      // нет маршрута — запрос висит: несущественные цепочки (/onchain, /multiplier) молчат
+      // no route — the request hangs: irrelevant chains (/onchain, /multiplier) stay silent
       return p.then((res) => res === undefined
         ? new Promise(() => {})
         : { ok: res.ok, status: res.status, json: async () => res.body });
@@ -235,14 +235,14 @@ function runClient(route) {
   };
   vm.createContext(sb);
   const m = renderPage().match(/<script>([\s\S]*?)<\/script>/);
-  assert.ok(m, "script block на месте");
-  new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb); // var/функции — глобали sb
+  assert.ok(m, "script block is in place");
+  new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb); // vars/functions — sb globals
   return { sb, els };
 }
 
 const flush = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
 
-// строго base58 (как в wallet.test.mjs), различимы в отчёте
+// strictly base58 (as in wallet.test.mjs), distinguishable in the report
 const ADDR_A = "Wa11etBuyer" + "a".repeat(32);
 const ADDR_B = "Wa11etSe11er" + "b".repeat(32);
 
@@ -263,28 +263,28 @@ const SUMMARY_TWO = [
 ];
 const EVENTS_ONE = [{ effectiveDate: "2025-01-01", type: "DIVIDEND", multiplierFrom: "1", multiplierTo: "2", reason: "dividend" }];
 
-test("гонка кошельковых отчётов: дозревший ответ старого адреса не перезаписывает свежий", async () => {
+test("the wallet-report race: a late-arriving response of the old address does not overwrite the fresh one", async () => {
   let resolveA;
-  const slowA = new Promise((r) => { resolveA = r; }); // скан A «долго идёт по цепи»
+  const slowA = new Promise((r) => { resolveA = r; }); // scan A "takes long over the chain"
   const { sb, els } = runClient((url) => {
     if (!url.startsWith("/lots?")) return undefined;
     return url.includes(ADDR_A) ? slowA : { ok: true, status: 200, body: repB };
   });
   els.get("addr-in").value = ADDR_A;
   sb.scanWalletUi();
-  els.get("addr-in").value = ADDR_B; // пользователь не дождался и сканирует B
+  els.get("addr-in").value = ADDR_B; // the user did not wait and scans B
   sb.scanWalletUi();
   await flush();
   const out = els.get("wallet-out");
-  assert.ok(out.innerHTML.includes(ADDR_B), "свежий отчёт B отрендерился");
-  assert.ok(!out.innerHTML.includes(ADDR_A), "до дозревания A отчёта A нет");
-  resolveA({ ok: true, status: 200, body: repA }); // медленный ответ A дозревает при адресе B
+  assert.ok(out.innerHTML.includes(ADDR_B), "the fresh report B rendered");
+  assert.ok(!out.innerHTML.includes(ADDR_A), "before A ripens there is no report A");
+  resolveA({ ok: true, status: 200, body: repA }); // the slow A response ripens while the address is B
   await flush();
-  assert.ok(out.innerHTML.includes(ADDR_B), "после дозревания A отчёт B на месте");
-  assert.ok(!out.innerHTML.includes(ADDR_A), "устаревший ответ A не перезаписал");
+  assert.ok(out.innerHTML.includes(ADDR_B), "after A ripens, report B is in place");
+  assert.ok(!out.innerHTML.includes(ADDR_A), "the stale A response did not overwrite");
 });
 
-test("гонка кошельковых отчётов: ошибка устаревшего запроса тоже не перезаписывает", async () => {
+test("the wallet-report race: an error of a stale request does not overwrite either", async () => {
   let rejectA;
   const slowA = new Promise((_, r) => { rejectA = r; });
   const { sb, els } = runClient((url) =>
@@ -294,44 +294,44 @@ test("гонка кошельковых отчётов: ошибка устар�
   els.get("addr-in").value = ADDR_B;
   sb.scanWalletUi();
   await flush();
-  rejectA(new Error("HTTP 429")); // старый запрос упал уже после рендера B
+  rejectA(new Error("HTTP 429")); // the old request failed after B was already rendered
   await flush();
   const out = els.get("wallet-out");
-  assert.ok(out.innerHTML.includes(ADDR_B), "отчёт B не тронут");
-  assert.ok(!out.innerHTML.includes("429"), "чужая ошибка не показана");
+  assert.ok(out.innerHTML.includes(ADDR_B), "report B untouched");
+  assert.ok(!out.innerHTML.includes("429"), "a foreign error is not shown");
 });
 
-test("отчёт кошелька показывает владельца (owner) в шапке — чужие числа атрибутируемы", async () => {
+test("the wallet report shows the owner in the header — foreign numbers are attributable", async () => {
   const { sb, els } = runClient((url) =>
     url.startsWith("/lots?") ? { ok: true, status: 200, body: repA } : undefined);
   els.get("addr-in").value = ADDR_A;
   sb.scanWalletUi();
   await flush();
   const html = els.get("wallet-out").innerHTML;
-  assert.ok(html.includes("owner"), "строка owner в шапке");
-  assert.ok(html.includes(ADDR_A), "владелец отрендерен");
-  assert.ok(html.includes("AAA"), "токены отчёта на месте");
+  assert.ok(html.includes("owner"), "the owner row in the header");
+  assert.ok(html.includes(ADDR_A), "the owner rendered");
+  assert.ok(html.includes("AAA"), "the report tokens in place");
 });
 
-test("loadEvents: рестарт сервера (fetch реджект) — err-заметка, чужой таймлайн вытеснен", async () => {
+test("loadEvents: a server restart (a fetch reject) — an err note, the foreign timeline displaced", async () => {
   const { sb, els } = runClient((url) => {
     if (url.startsWith("/health")) return { ok: true, status: 200, body: { tokens: 2, events: 3, journal: null } };
     if (url.startsWith("/summary")) return { ok: true, status: 200, body: SUMMARY_TWO };
     if (url.startsWith("/events?symbol=ONE")) return { ok: true, status: 200, body: EVENTS_ONE };
     if (url.startsWith("/events?symbol=TWO")) return Promise.reject(new Error("fetch failed — server restarted"));
-    return undefined; // /onchain, /crosscheck — не суть теста
+    return undefined; // /onchain, /crosscheck — irrelevant to the test
   });
-  await flush(); // бут: /health -> /summary -> select(ONE) -> события ONE
-  assert.ok(els.get("events").innerHTML.includes("2025-01-01"), "события ONE на месте");
-  sb.select("TWO"); // переключение токена при лежащем сервере
+  await flush(); // boot: /health -> /summary -> select(ONE) -> the ONE events
+  assert.ok(els.get("events").innerHTML.includes("2025-01-01"), "the ONE events in place");
+  sb.select("TWO"); // a token switch while the server is down
   await flush();
   const html = els.get("events").innerHTML;
-  assert.ok(html.includes("Event history unavailable"), "честная err-заметка");
-  assert.ok(html.includes("server restarted"), "причина видна");
-  assert.ok(!html.includes("2025-01-01"), "события ПРЕДЫДУЩЕГО токена вытеснены");
+  assert.ok(html.includes("Event history unavailable"), "an honest err note");
+  assert.ok(html.includes("server restarted"), "the reason is visible");
+  assert.ok(!html.includes("2025-01-01"), "the PREVIOUS token's events displaced");
 });
 
-test("loadEvents: не-массив ({error} от 500) — err-заметка, не замаскированная пустота", async () => {
+test("loadEvents: a non-array (an {error} from 500) — an err note, not a masked emptiness", async () => {
   const { sb, els } = runClient((url) => {
     if (url.startsWith("/health")) return { ok: true, status: 200, body: { tokens: 2, events: 3, journal: null } };
     if (url.startsWith("/summary")) return { ok: true, status: 200, body: SUMMARY_TWO };
@@ -343,12 +343,12 @@ test("loadEvents: не-массив ({error} от 500) — err-заметка, �
   sb.select("TWO");
   await flush();
   const html = els.get("events").innerHTML;
-  assert.ok(html.includes("Event history unavailable"), "честная err-заметка");
-  assert.ok(html.includes("500") && html.includes("internal error"), "статус и причина видны");
-  assert.ok(!html.includes("No normalized events"), "ошибка не выдаётся за пустую историю");
+  assert.ok(html.includes("Event history unavailable"), "an honest err note");
+  assert.ok(html.includes("500") && html.includes("internal error"), "the status and the reason are visible");
+  assert.ok(!html.includes("No normalized events"), "an error is not passed off as an empty history");
 });
 
-test("renderStats: journal.unavailable > 0 — честный баннер; 0/null — тишина", async () => {
+test("renderStats: journal.unavailable > 0 — an honest banner; 0/null — silence", async () => {
   const boot = (health) => runClient((url) => {
     if (url.startsWith("/health")) return { ok: true, status: 200, body: health };
     if (url.startsWith("/summary")) return { ok: true, status: 200, body: [] };
@@ -356,72 +356,72 @@ test("renderStats: journal.unavailable > 0 — честный баннер; 0/nu
   });
   let r = boot({ tokens: 26, events: 31, journal: { replayed: 0, unavailable: 3 } });
   await flush();
-  assert.ok(r.els.get("stats").innerHTML.includes("tokens unavailable at startup"), "баннер на месте");
-  assert.ok(r.els.get("stats").innerHTML.includes(">3<"), "число непрочитанных показано");
+  assert.ok(r.els.get("stats").innerHTML.includes("tokens unavailable at startup"), "the banner in place");
+  assert.ok(r.els.get("stats").innerHTML.includes(">3<"), "the number of unread shown");
   r = boot({ tokens: 26, events: 31, journal: { replayed: 31, unavailable: 0 } });
   await flush();
-  assert.ok(!r.els.get("stats").innerHTML.includes("tokens unavailable at startup"), "unavailable 0 — без баннера");
+  assert.ok(!r.els.get("stats").innerHTML.includes("tokens unavailable at startup"), "unavailable 0 — no banner");
   r = boot({ tokens: 26, events: 31, journal: null });
   await flush();
-  assert.ok(!r.els.get("stats").innerHTML.includes("tokens unavailable at startup"), "journal null (без stats) — без баннера");
+  assert.ok(!r.els.get("stats").innerHTML.includes("tokens unavailable at startup"), "journal null (no stats) — no banner");
 });
 
-test("fmtUi: decimals null — сырые base units с пометкой, а не «.»; известные decimals не сломаны", () => {
+test("fmtUi: decimals null — raw base units with a note, not \".\"; known decimals not broken", () => {
   const { sb } = runClient(() => undefined);
   const out = sb.fmtUi("12345", null);
-  assert.ok(!out.includes("."), "точка из slice(0, -null) не рендерится");
-  assert.ok(out.includes("12345"), "сырые base units видны");
-  assert.ok(out.includes("base units") && out.includes("decimals unknown"), "пометка честности");
+  assert.ok(!out.includes("."), "the dot from slice(0, -null) is not rendered");
+  assert.ok(out.includes("12345"), "the raw base units are visible");
+  assert.ok(out.includes("base units") && out.includes("decimals unknown"), "the honesty note");
   assert.equal(sb.fmtUi("12345", 4), "1.2345");
   assert.equal(sb.fmtUi("12345", 8), "0.00012345");
   assert.equal(sb.fmtUi("0", 8), "0.00000000");
   assert.equal(sb.fmtUi("-100", 2), "-1.00");
 });
 
-test("calc: decimals null — честная заметка, подсчёт не притворяется 0-децимальным", async () => {
+test("calc: decimals null — an honest note, the computation does not pretend to be 0-decimal", async () => {
   let multiplierCalls = 0;
   const { sb, els } = runClient((url) => {
     if (url.startsWith("/health")) return { ok: true, status: 200, body: { tokens: 1, events: 0, journal: null } };
     if (url.startsWith("/summary")) return { ok: true, status: 200, body: [
       { symbol: "NULLD", name: "Token with null decimals", issuer: "Backed", mint: ADDR_A, decimals: null, events: 0, currentMultiplier: "1" },
     ] };
-    if (url.startsWith("/multiplier")) { multiplierCalls++; return undefined; } // висим, но считаем вызовы
+    if (url.startsWith("/multiplier")) { multiplierCalls++; return undefined; } // we hang, but count the calls
     return undefined;
   });
-  await flush(); // бут сам выбрал единственный токен и вызвал calc
-  assert.ok(els.get("calc-out").innerHTML.includes("decimals unknown for this token"), "заметка после бут-calc");
+  await flush(); // the boot itself picked the only token and called calc
+  assert.ok(els.get("calc-out").innerHTML.includes("decimals unknown for this token"), "the note after the boot calc");
   els.get("raw-in").value = "2.5";
   sb.calc();
-  assert.ok(els.get("calc-out").innerHTML.includes("decimals unknown for this token"), "заметка после ручного calc");
-  assert.ok(els.get("calc-out").innerHTML.includes("2.5"), "ввод показан как есть");
-  assert.ok(!els.get("calc-out").innerHTML.includes("multiplier at"), "расчёта с выдуманными decimals нет");
-  assert.equal(multiplierCalls, 0, "эндпоинт /multiplier с нулевыми-by-выдумкой raw не дёргается");
+  assert.ok(els.get("calc-out").innerHTML.includes("decimals unknown for this token"), "the note after a manual calc");
+  assert.ok(els.get("calc-out").innerHTML.includes("2.5"), "the input shown as is");
+  assert.ok(!els.get("calc-out").innerHTML.includes("multiplier at"), "no computation with invented decimals");
+  assert.equal(multiplierCalls, 0, "the /multiplier endpoint is not hit with an invented-raw");
 });
 
-// ---- раунд 7: логотип — инлайн-знак в шапке, самодостаточность как у страницы ----
+// ---- round 7: the logo — an inline mark in the header, self-sufficiency like the page's ----
 
-test("логотип: знак Lotwise в шапке — самодостаточный инлайн-SVG (viewBox, без внешних ссылок и скриптов)", () => {
+test("the logo: the Lotwise mark in the header — a self-sufficient inline SVG (viewBox, no external links or scripts)", () => {
   const html = renderPage();
   const m = html.match(/<svg class="brand-mark"[\s\S]*?<\/svg>/);
-  assert.ok(m, "инлайн-знак с классом brand-mark присутствует");
+  assert.ok(m, "the inline mark with the brand-mark class is present");
   const svg = m[0];
-  assert.ok(svg.includes("viewBox="), "viewBox обязателен");
-  assert.ok(!/\b(src|href)\s*=/i.test(svg), "никаких src/href — знак ничем не ссылается наружу");
-  assert.ok(!/<script/i.test(svg) && !/javascript:/i.test(svg), "без скриптов");
-  assert.ok(!/url\(/i.test(svg), "без url() — никаких внешних подгрузок");
-  // Раунд 18: знак переведён на монограмму «L» (та же геометрия, что фавиконка и
-  // README): ствол-ось + акцентная нога + точка-событие; 2 rect вместо стека полос
-  assert.equal((svg.match(/<rect\b/g) || []).length, 2, "монограмма L: ствол и акцентная нога");
-  assert.ok(/<circle/.test(svg), "точка-событие на стволе");
-  assert.ok(svg.includes("accent"), "нога-лот помечена акцентным классом");
-  assert.ok(html.indexOf("brand-mark") < html.indexOf("<h1"), "знак стоит в шапке, перед заголовком");
+  assert.ok(svg.includes("viewBox="), "viewBox is mandatory");
+  assert.ok(!/\b(src|href)\s*=/i.test(svg), "no src/href — the mark does not link anywhere");
+  assert.ok(!/<script/i.test(svg) && !/javascript:/i.test(svg), "no scripts");
+  assert.ok(!/url\(/i.test(svg), "no url() — no external loads");
+  // Round 18: the mark moved to the "L" monogram (the same geometry as the favicon and
+  // README): the trunk-axis + the accent leg + the event dot; 2 rects instead of a stack of bars
+  assert.equal((svg.match(/<rect\b/g) || []).length, 2, "the L monogram: the trunk and the accent leg");
+  assert.ok(/<circle/.test(svg), "the event dot on the trunk");
+  assert.ok(svg.includes("accent"), "the lot leg is marked with the accent class");
+  assert.ok(html.indexOf("brand-mark") < html.indexOf("<h1"), "the mark stands in the header, before the title");
 });
 
-// ---- раунд 8: дивидендные вердикты кросс-чека в таймлайне токена ----
-// /crosscheck отдаёт вердикты блоками (контракт src/events/crosscheck.mjs): сначала все
-// MULTIPLIER_CHANGE в порядке событий, затем DIVIDEND_ACCRUAL с type-меткой в хвосте.
-// Бейдж дивиденда — своя подпись «dividend: …» (отличима от ребейзной «price: …»),
-// цвета — тот же набор классов по verdict; доли падения — компактно в тултипе.
+// ---- round 8: the dividend verdicts of the cross-check in the token timeline ----
+// /crosscheck serves verdicts in blocks (the contract of src/events/crosscheck.mjs): first all
+// MULTIPLIER_CHANGE in event order, then DIVIDEND_ACCRUAL with a type label at the tail.
+// The dividend badge — its own "dividend: …" signature (distinguishable from the rebase "price: …"),
+// the colors — the same class set by verdict; the drop fractions — compactly in the tooltip.
 
 const MULT_EV = {
   effectiveDate: "2026-06-18T04:00:00.000Z", type: "MULTIPLIER_CHANGE",
@@ -449,32 +449,32 @@ const bootTimeline = (events, verdicts) => runClient((url) => {
 
 const rowOf = (html, frag) => html.split("<li>").find((s) => s.includes(frag)) ?? "";
 
-test("дивидендный вердикт — dividend-бейдж отдельной строкой, ребейзный price-бейдж рядом, порядок блоков не перепутан", async () => {
-  // события в /events идут по датам (дивиденд раньше), вердикты — блоками по контракту:
-  // ребейзный первым, дивидендный в хвосте; склейка обязана сойтись по (тип, seq)
+test("a dividend verdict — the dividend badge on its own line, the rebase price-badge next to it, the block order not mixed up", async () => {
+  // the events in /events go by dates (the dividend earlier), the verdicts — in blocks by contract:
+  // the rebase first, the dividend at the tail; the join must converge by (type, seq)
   const { els } = bootTimeline([DIV_EV, MULT_EV], [MULT_VERDICT, DIV_VERDICT]);
-  await flush(); // бут: /health → /summary → select(ONE) → события + кросс-чек
+  await flush(); // boot: /health → /summary → select(ONE) → events + cross-check
   const html = els.get("events").innerHTML;
   const divRow = rowOf(html, "dividend accrual");
   const multRow = rowOf(html, "rebase");
-  assert.ok(divRow.includes("dividend: consistent"), "дивидендный вердикт рендерится со своей dividend-подписью");
-  assert.ok(divRow.includes("verdict ok"), "цвет consistent — тот же класс ok");
-  assert.ok(divRow.includes("2.000000 per unit"), "строка дивиденда показывает начисление, а не from → to");
-  assert.ok(!divRow.includes("&rarr;"), "дивиденд не смешан с multiplier-событием");
-  assert.ok(divRow.includes("expected -2.000% vs observed -2.000%"), "доли падения компактно в тултипе");
-  assert.ok(divRow.includes("n-div"), "note вердикта доступен в тултипе");
-  assert.ok(multRow.includes("price: consistent"), "ребейзный бейдж не потерял прежнюю подпись");
-  assert.ok(multRow.includes("&rarr;"), "ребейз по-прежнему строка from → to");
+  assert.ok(divRow.includes("dividend: consistent"), "the dividend verdict renders with its dividend signature");
+  assert.ok(divRow.includes("verdict ok"), "the consistent color — the same ok class");
+  assert.ok(divRow.includes("2.000000 per unit"), "the dividend row shows the accrual, not from → to");
+  assert.ok(!divRow.includes("&rarr;"), "the dividend is not mixed with a multiplier event");
+  assert.ok(divRow.includes("expected -2.000% vs observed -2.000%"), "the drop fractions compactly in the tooltip");
+  assert.ok(divRow.includes("n-div"), "the verdict note is available in the tooltip");
+  assert.ok(multRow.includes("price: consistent"), "the rebase badge did not lose the former signature");
+  assert.ok(multRow.includes("&rarr;"), "the rebase is still a from → to row");
   assert.ok(html.includes("dividend: consistent") && html.includes("price: consistent"),
-    "вердикты обоих типов сосуществуют в одном таймлайне");
+    "the verdicts of both types coexist in one timeline");
 });
 
-test("склейка не перепутана: ребейз и дивиденд в один день — каждому свой вердикт (префикс типа в ключе)", async () => {
+test("the join is not mixed up: a rebase and a dividend on one day — each gets its own verdict (a type prefix in the key)", async () => {
   const M2 = { ...MULT_EV, effectiveDate: DIV_EV.effectiveDate, multiplierFrom: "1.0015", multiplierTo: "1.002", reason: "second rebase" };
   const V_M1 = { effectiveDate: "2026-06-01T04:00:00.000Z", verdict: "consistent", note: "n1" };
   const V_M2 = { effectiveDate: DIV_EV.effectiveDate, verdict: "mismatch", note: "n2" };
   const V_D = { type: "DIVIDEND_ACCRUAL", effectiveDate: DIV_EV.effectiveDate, verdict: "suspicious", note: "n3" };
-  // порядок событий: M1, D, M2 (по датам D и M2 совпадают); вердикты — блоками: [M1, M2, D]
+  // the event order: M1, D, M2 (by date D and M2 coincide); the verdicts — in blocks: [M1, M2, D]
   const { els } = bootTimeline(
     [{ ...MULT_EV, effectiveDate: "2026-06-01T04:00:00.000Z", reason: "first rebase" }, DIV_EV, M2],
     [V_M1, V_M2, V_D],
@@ -484,14 +484,14 @@ test("склейка не перепутана: ребейз и дивиденд
   const first = rowOf(html, "first rebase");
   const second = rowOf(html, "second rebase");
   const div = rowOf(html, "dividend accrual");
-  assert.ok(first.includes("price: consistent"), "первый ребейз — свой вердикт");
-  assert.ok(second.includes("price: mismatch"), "второй ребейз (индекс 1 блока) — свой вердикт, не дивидендный");
-  assert.ok(div.includes("dividend: suspicious"), "дивиденд из хвоста вердиктов — свой бейдж");
-  assert.ok(!second.includes("dividend:"), "дивидендный вердикт не прилип к ребейзу в тот же день");
-  assert.ok(!div.includes("price:"), "ребейзный вердикт не прилип к дивиденду в тот же день");
+  assert.ok(first.includes("price: consistent"), "the first rebase — its own verdict");
+  assert.ok(second.includes("price: mismatch"), "the second rebase (index 1 of the block) — its own verdict, not the dividend one");
+  assert.ok(div.includes("dividend: suspicious"), "the dividend from the verdict tail — its own badge");
+  assert.ok(!second.includes("dividend:"), "the dividend verdict did not stick to the rebase on the same day");
+  assert.ok(!div.includes("price:"), "the rebase verdict did not stick to the dividend on the same day");
 });
 
-test("дивиденд без ценовой истории — dividend: no data, тултип без «expected null» и без NaN", async () => {
+test("a dividend without a price history — dividend: no data, a tooltip without \"expected null\" and without NaN", async () => {
   const NO_DATA = {
     type: "DIVIDEND_ACCRUAL", effectiveDate: DIV_EV.effectiveDate, verdict: "no-price-data",
     expectedDropFraction: null, observedDropFraction: null,
@@ -500,8 +500,70 @@ test("дивиденд без ценовой истории — dividend: no dat
   const { els } = bootTimeline([DIV_EV], [NO_DATA]);
   await flush();
   const div = rowOf(els.get("events").innerHTML, "dividend accrual");
-  assert.ok(div.includes("dividend: no data"), "no-price-data рендерится с dividend-подписью");
-  assert.ok(div.includes("verdict unavailable"), "класс unavailable, как у ребейзного no-price-data");
-  assert.ok(!div.includes("expected null") && !div.includes("NaN"), "нечисловые доли в тултип не подставлены");
-  assert.ok(div.includes("candles do not reach back"), "причина из note видна в тултипе");
+  assert.ok(div.includes("dividend: no data"), "no-price-data renders with the dividend signature");
+  assert.ok(div.includes("verdict unavailable"), "the unavailable class, like the rebase no-price-data");
+  assert.ok(!div.includes("expected null") && !div.includes("NaN"), "non-numeric fractions are not substituted into the tooltip");
+  assert.ok(div.includes("candles do not reach back"), "the reason from note is visible in the tooltip");
+});
+
+// ---- round 19 (wave J): live filter over the Tracked tokens table ----
+// round 19: EN — a filter input (#token-filter) above the table; a live oninput handler
+// hides #tokens rows whose symbol+name does not contain the substring (case-insensitive).
+
+test("the page: #token-filter above the token table, the client script attaches a live oninput filter", () => {
+  const html = renderPage();
+  assert.ok(html.includes('id="token-filter"'), "the filter input is rendered");
+  assert.ok(html.includes('placeholder="Filter by symbol or name"'), "the placeholder names what is filtered");
+  assert.ok(html.indexOf("token-filter") < html.indexOf("<table"), "the filter stands ABOVE the table");
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.ok(script.includes("token-filter"), "the client script references the filter");
+  assert.match(script, /el\('token-filter'\)\.oninput = /, "the filter — a live oninput handler, without a button");
+  // round 19: the filter must not break the existing page contracts
+  assert.ok(script.includes("data-symbol"), "the rows still carry data-symbol (onclick/select)");
+});
+
+test("vm: the filter hides #tokens rows without the substring in symbol+name (case-insensitive), an empty input shows all", () => {
+  // a mini-DOM: two rendered rows; querySelectorAll serves them (unlike the common harness)
+  const mkRow = (sym, name) => ({
+    attrs: { "data-symbol": sym },
+    children: [{ textContent: sym }, { textContent: name }],
+    style: {},
+    getAttribute(n) { return this.attrs[n] ?? null; },
+  });
+  const spy = mkRow("SPYx", "S&P 500 Depositary Shares");
+  const ko = mkRow("KOx", "Coca-Cola Co");
+  const els = new Map();
+  const makeEl = (id) => ({
+    id, value: "", innerHTML: "", textContent: "", className: "", style: {}, attrs: {},
+    getAttribute(n) { return this.attrs[n] ?? null; },
+    scrollIntoView() {},
+  });
+  const sb = {
+    document: {
+      getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+      querySelectorAll: (sel) => (sel === "#tokens tr" ? [spy, ko] : []),
+    },
+    fetch: () => new Promise(() => {}), // the boot chains hang: the filter needs no network
+  };
+  vm.createContext(sb);
+  const m = renderPage().match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(m, "script block is in place");
+  new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb);
+  const input = els.get("token-filter");
+  assert.equal(typeof input.oninput, "function", "the filter handler is assigned to the input");
+
+  input.value = "spy"; // by symbol, in another case
+  input.oninput();
+  assert.equal(spy.style.display, "", "a match by symbol — the row is visible");
+  assert.equal(ko.style.display, "none", "no match — the row is hidden");
+
+  input.value = "coca"; // by name, not by symbol
+  input.oninput();
+  assert.equal(spy.style.display, "none", "SPYx does not match by KOx's name");
+  assert.equal(ko.style.display, "", "KOx found by name");
+
+  input.value = ""; // clearing returns all rows
+  input.oninput();
+  assert.equal(spy.style.display, "", "an empty filter — all rows visible");
+  assert.equal(ko.style.display, "", "an empty filter — all rows visible");
 });

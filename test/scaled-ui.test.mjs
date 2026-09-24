@@ -7,10 +7,10 @@ import { parseScaledUiAmount, reconcileMultiplier, ScaledUiError } from "../src/
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
-// ЖИВОЙ ответ mainnet для минта SPYx (18.09.2026): active 1.0039…, pending 1.0057… c 18.06
+// A LIVE mainnet response for the SPYx mint (18.09.2026): active 1.0039…, pending 1.0057… since 18.06
 const live = JSON.parse(readFileSync(path.join(dir, "onchain-spyx-mint.json"), "utf8")).result.value;
 
-test("живой on-chain SPYx: extension распарсен, оба множителя и дата активации", () => {
+test("the live on-chain SPYx: the extension parsed, both multipliers and the activation date", () => {
   const m = parseScaledUiAmount(live);
   assert.equal(m.hasExtension, true);
   assert.equal(m.decimals, 8);
@@ -21,7 +21,7 @@ test("живой on-chain SPYx: extension распарсен, оба множи�
   assert.equal(typeof m.authority, "string");
 });
 
-test("токен без scaledUiAmountConfig = множитель 1, hasExtension false", () => {
+test("a token without scaledUiAmountConfig = multiplier 1, hasExtension false", () => {
   const plain = { owner: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", data: { parsed: { info: { decimals: 6, extensions: [{ extension: "mintCloseAuthority" }] } } } };
   const m = parseScaledUiAmount(plain);
   assert.deepEqual(
@@ -30,108 +30,108 @@ test("токен без scaledUiAmountConfig = множитель 1, hasExtensio
   );
 });
 
-test("не-минт аккаунт даёт понятную ошибку", () => {
+test("a non-mint account gives a clear error", () => {
   assert.throws(() => parseScaledUiAmount({ data: {} }), ScaledUiError);
   assert.throws(() => parseScaledUiAmount(undefined), ScaledUiError);
 });
 
-test("РЕАЛЬНЫЙ КЕЙС: API-план (1.0057) vs on-chain (active 1.0039, effective 1.0057) на 18.09", () => {
+test("THE REAL CASE: the API plan (1.0057) vs on-chain (active 1.0039, effective 1.0057) on 18.09", () => {
   const onChain = parseScaledUiAmount(live);
   const r = reconcileMultiplier("1.005714560286254", onChain, "2026-09-18T00:00:00.000Z");
-  // pending уже должен был активироваться 18.06 → эффективный совпадает с API → ok
+  // the pending should have activated on 18.06 → the effective matches the API → ok
   assert.equal(r.onChainEffective, "1.005714560286254");
   assert.equal(r.verdict, "ok");
 });
 
-test("до активации pending: эффективный = active; расхождение с API видно", () => {
+test("before the pending activation: the effective = active; the divergence from the API is visible", () => {
   const onChain = parseScaledUiAmount(live);
   const before = reconcileMultiplier("1.005714560286254", onChain, "2026-06-01T00:00:00.000Z");
   assert.equal(before.onChainEffective, "1.003909240011759");
-  assert.equal(before.verdict, "planes-disagree"); // API уже перешёл, цепь ещё нет — ловим
+  assert.equal(before.verdict, "planes-disagree"); // the API already moved, the chain not yet — we catch it
   const matched = reconcileMultiplier("1.003909240011759", onChain, "2026-06-01T00:00:00.000Z");
   assert.equal(matched.verdict, "ok");
 });
 
-// ---- раунд-2: свертка планов на границе дат ----
+// ---- round 2: the reconcile of the plans on the date boundary ----
 
-test("pending активируется В ДЕНЬ своей даты даже date-only запросом", () => {
+test("the pending activates ON the day of its date even by a date-only query", () => {
   const onChain = {
     activeMultiplier: "1.003909240011759",
     pendingMultiplier: "1.005714560286254",
     pendingEffectiveDate: "2026-06-18T00:00:00.000Z",
     pendingTs: null, authority: null, hasExtension: true,
   };
-  // до фикса строковое сравнение считало pending неактивным ровно в день активации
+  // before the fix a string comparison considered the pending inactive exactly on the activation day
   const r = reconcileMultiplier("1.005714560286254", onChain, "2026-06-18");
   assert.equal(r.onChainEffective, "1.005714560286254");
   assert.equal(r.verdict, "ok");
 });
 
-test("мусорная дата свертки — ScaledUiError, а не тихое сравнение строк", () => {
+test("a garbage reconcile date — ScaledUiError, not a quiet string comparison", () => {
   assert.throws(
     () => reconcileMultiplier("1", { activeMultiplier: "1", pendingMultiplier: null, pendingEffectiveDate: null }, "not-a-date"),
     ScaledUiError,
   );
 });
 
-// ---- раунд-4: гварды парсера on-chain состояния ----
+// ---- round 4: the guards of the on-chain state parser ----
 
-// Синтетический минт с scaledUiAmountConfig в заданным state.
+// A synthetic mint with scaledUiAmountConfig in the given state.
 const mintWith = (state) => ({
   owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
   data: { parsed: { info: { decimals: 8, extensions: [{ extension: "scaledUiAmountConfig", state }] } } },
 });
-const T0 = String(Math.floor(Date.parse("2026-01-01T00:00:00Z") / 1000)); // прошедший
-const T1 = String(Math.floor(Date.parse("2027-01-01T00:00:00Z") / 1000)); // будущий
+const T0 = String(Math.floor(Date.parse("2026-01-01T00:00:00Z") / 1000)); // past
+const T1 = String(Math.floor(Date.parse("2027-01-01T00:00:00Z") / 1000)); // future
 
-test("P1: newMultiplier «0» из цепи = pending сброшен, а не нулевой множитель", () => {
-  // Конвенция эмитента (xstocks.mjs: Number(pending) !== 0, живая фикстура
-  // xstocks-spyx-current.json): 0 в new_multiplier — способ снять pending. Строка "0"
-  // truthy и раньше проезжала как настоящий множитель → журнал эмитил 5→0, витрина
-  // молча показывала нулевые балансы.
+test("P1: a newMultiplier \"0\" from the chain = the pending reset, not a zero multiplier", () => {
+  // The issuer's convention (xstocks.mjs: Number(pending) !== 0, the live fixture
+  // xstocks-spyx-current.json): 0 in new_multiplier — a way to lift the pending. The string "0"
+  // is truthy and used to ride through as a real multiplier → the journal emitted 5→0, the vitrine
+  // silently showed zero balances.
   for (const ts of [T0, T1]) {
     const m = parseScaledUiAmount(mintWith({ multiplier: "5", newMultiplier: "0", newMultiplierEffectiveTimestamp: ts }));
     assert.equal(m.activeMultiplier, "5");
     assert.equal(m.pendingMultiplier, null);
-    // дата обнуляется ВМЕСТЕ с pending: пара (pending, date) атомарна, дата без
-    // pending — мусор в ответе; форма ответа не меняется
+    // the date is zeroed TOGETHER with the pending: the (pending, date) pair is atomic, a date without
+    // a pending — garbage in the response; the response shape unchanged
     assert.equal(m.pendingEffectiveDate, null);
   }
-  // числовой 0 и вовсе отсутствующее поле — тот же вектор
+  // a numeric 0 and an absent field altogether — the same vector
   assert.equal(parseScaledUiAmount(mintWith({ multiplier: "5", newMultiplier: 0, newMultiplierEffectiveTimestamp: 1 })).pendingMultiplier, null);
   assert.equal(parseScaledUiAmount(mintWith({ multiplier: "5" })).pendingMultiplier, null);
 });
 
-test("P3: active не десятичная строка — честный ScaledUiError, а не «undefined» в дальние слои", () => {
-  // отсутствующий multiplier раньше давал String(undefined) = "undefined" и падал
-  // где-то в валидации с невнятным сообщением
+test("P3: the active is not a decimal string — an honest ScaledUiError, not an \"undefined\" into the lower layers", () => {
+  // a missing multiplier used to give String(undefined) = "undefined" and fell
+  // somewhere in the validation with a cryptic message
   assert.throws(() => parseScaledUiAmount(mintWith({ newMultiplier: "2" })), (e) =>
     e instanceof ScaledUiError && /decimal string/.test(e.message));
   assert.throws(() => parseScaledUiAmount(mintWith({ multiplier: "abc", newMultiplier: "2" })), ScaledUiError);
   assert.throws(() => parseScaledUiAmount(mintWith({ multiplier: "1.2.3", newMultiplier: "2" })), ScaledUiError);
   assert.throws(() => parseScaledUiAmount(mintWith({ multiplier: null, newMultiplier: "2" })), ScaledUiError);
-  // валидные формы проходят: целая и дробная десятичная строка
+  // the valid forms pass: an integer and a fractional decimal string
   assert.equal(parseScaledUiAmount(mintWith({ multiplier: "5", newMultiplier: "0" })).activeMultiplier, "5");
   assert.equal(parseScaledUiAmount(mintWith({ multiplier: "1.25", newMultiplier: "0" })).activeMultiplier, "1.25");
 });
 
-test("P3: pending жив, а таймстамп мусор — ScaledUiError вместо молча null-даты", () => {
-  // до фикса: Number("abc") = NaN → ts > 0 false → дата null → pending "6" тихо
-  // игнорировался нижележащими слоями
+test("P3: the pending alive but the timestamp garbage — ScaledUiError instead of silently nulling the date", () => {
+  // before the fix: Number("abc") = NaN → ts > 0 false → the date null → the pending "6" was silently
+  // ignored by the underlying layers
   assert.throws(
     () => parseScaledUiAmount(mintWith({ multiplier: "5", newMultiplier: "6", newMultiplierEffectiveTimestamp: "abc" })),
     (e) => e instanceof ScaledUiError && /timestamp/i.test(e.message),
   );
 });
 
-test("P3: pending нет — мусорный таймстамп значения не имеет, не бросаем", () => {
+test("P3: no pending — a garbage timestamp has no value, we do not throw", () => {
   const m = parseScaledUiAmount(mintWith({ multiplier: "5", newMultiplier: "0", newMultiplierEffectiveTimestamp: "abc" }));
   assert.equal(m.activeMultiplier, "5");
   assert.equal(m.pendingMultiplier, null);
   assert.equal(m.pendingEffectiveDate, null);
 });
 
-test("здоровый on-chain state с целым множителем — без регрессий", () => {
+test("a healthy on-chain state with an integer multiplier — no regressions", () => {
   const m = parseScaledUiAmount(mintWith({
     multiplier: "5",
     newMultiplier: "10",
@@ -141,8 +141,8 @@ test("здоровый on-chain state с целым множителем — б�
     { activeMultiplier: m.activeMultiplier, pendingMultiplier: m.pendingMultiplier, pendingEffectiveDate: m.pendingEffectiveDate },
     { activeMultiplier: "5", pendingMultiplier: "10", pendingEffectiveDate: new Date(1782000000 * 1000).toISOString() },
   );
-  // pending без объявленной даты (ts отсутствует) — прежнее поведение: дата null,
-  // сам pending не выбрасывается
+  // a pending without a declared date (no ts) — the previous behavior: the date null,
+  // the pending itself is not thrown away
   const m2 = parseScaledUiAmount(mintWith({ multiplier: "5", newMultiplier: "10" }));
   assert.equal(m2.pendingMultiplier, "10");
   assert.equal(m2.pendingEffectiveDate, null);

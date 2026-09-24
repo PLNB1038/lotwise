@@ -1,24 +1,24 @@
-// Отчёт по кошельку из скана: FIFO-лоты, реализация, гэпы скана,
-// скорректированная позиция = raw × множитель(now) через MultiplierTimeline.
-// Чистая функция: никакой сети, только данные скана + реестр + таймлайны.
+// Wallet report from a scan: FIFO lots, realized, scan gaps,
+// adjusted position = raw × multiplier(now) via MultiplierTimeline.
+// Pure function: no network, only scan data + registry + timelines.
 //
-// Семантика балансов (честные имена): rawBalance/netDeltaRaw — это НЕТТО-ДЕЛЬТА
-// ОКНА СКАНА (Σ дельт tx внутри окна), а не обязательно баланс на цепи: при
-// неполном окне (complete: false) она может быть отрицательной. Баланс на цепи —
-// onchainNow; нетто-дельта равна ему только при reconciles: true. Витрина обязана
-// подписывать поле соответственно, а не «raw balance (on-chain)».
+// Balance semantics (honest names): rawBalance/netDeltaRaw is the NET DELTA of
+// the SCAN WINDOW (Σ of tx deltas inside the window), not necessarily the on-chain balance: with
+// an incomplete window (complete: false) it can be negative. The on-chain balance is
+// onchainNow; the net delta equals it only when reconciles: true. The UI must
+// label the field accordingly, not "raw balance (on-chain)".
 //
-// adjustedAvailable: поле ставится ТОЛЬКО как false — когда таймлайна для минта
-// не было и adjusted посчитан тождественным fallback (scaled=raw); тогда совпадение
-// с raw НЕ доказывает, что множитель равен 1 (например, исключённый токен — таймлайн
-// кривой). У токенов с таймлайном поле отсутствует (adjusted реально посчитан).
-// Витрина показывает «adjusted not computed» при adjustedAvailable === false || excluded.
+// adjustedAvailable: the field is set ONLY as false — when there was no timeline for the mint
+// and adjusted was computed as an identity fallback (scaled=raw); then agreement
+// with raw does NOT prove the multiplier is 1 (e.g. an excluded token — a broken timeline).
+// For tokens with a timeline the field is absent (adjusted was actually computed).
+// The UI shows "adjusted not computed" when adjustedAvailable === false || excluded.
 //
-// Лоты с acquiredDate: null (tx без blockTime — легитимная реальность Solana)
-// доезжают до JSON как есть (см. iso()), но НЕПРИГОДНЫ для applyEvents: движок
-// событий на таком лоте бросает LotError «refusing to guess» и за счёт атомарности
-// роняет применение ВСЕЙ истории. Потребитель /lots обязан отфильтровать такие
-// лоты или обработать LotError; датная семантика — см. шапку src/lots/lots.mjs.
+// Lots with acquiredDate: null (a tx without blockTime — a legitimate Solana reality)
+// reach JSON as-is (see iso()), but are UNUSABLE for applyEvents: the event
+// engine throws LotError "refusing to guess" on such a lot and, by atomicity,
+// crashes the application of the ENTIRE history. The /lots consumer must filter such
+// lots out or handle LotError; date semantics — see the header of src/lots/lots.mjs.
 export class ReportError extends Error {
   constructor(msg) {
     super(msg);
@@ -30,8 +30,8 @@ const iso = (blockTime) => (typeof blockTime === "number" ? new Date(blockTime *
 
 /**
  * @param {{owner:string, txs:Array, skipped:Array, truncated:boolean, signatures:number, fetched:number}} scan
- * @param {object} opts — registry (реестр), timelines (Map mint→MultiplierTimeline), now (ISO)
- * @returns полный отчёт: по токену raw-баланс, лоты FIFO, реализация, гэпы, adjusted
+ * @param {object} opts — registry (the registry), timelines (Map mint→MultiplierTimeline), now (ISO)
+ * @returns the full report: per token raw balance, FIFO lots, realized, gaps, adjusted
  */
 export function buildWalletReport(scan, { registry, timelines = new Map(), now = new Date().toISOString() }) {
   if (!scan || typeof scan !== "object" || !Array.isArray(scan.txs)) {
@@ -40,7 +40,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const owner = scan.owner;
 
-  // состояние по минтам: очередь открытых лотов, реализация, гэпы, raw-баланс
+  // per-mint state: queue of open lots, realized, gaps, raw balance
   const st = new Map(); // mint → {queue:[], realized:[], gaps:[], rawBalance:bigint, lotSeq:number}
   const stateOf = (mint) => {
     let s = st.get(mint);
@@ -53,15 +53,15 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
 
   for (const tx of scan.txs) {
     const date = iso(tx.blockTime);
-    // дельты чужих владельцев не трогаем: скан по адресу — отчёт по адресу
+    // other owners' deltas are untouched: scan by address — report by address
     const mine = tx.deltas.filter((d) => d.owner === owner && byMint.has(d.mint) && d.deltaRaw !== 0n);
     for (const d of mine) {
       const s = stateOf(d.mint);
       s.rawBalance += d.deltaRaw;
       if (d.deltaRaw > 0n) {
-        // id = весь минт +_seq: 6-символьный префикс коллизирует у разных минтов
-        // (фаззер ловил одинаковые id), а mint уникален по построению. Техническое
-        // поле — длина не критична, зато коллизий нет по построению.
+        // id = full mint + _seq: a 6-char prefix collides across different mints
+        // (the fuzzer caught identical ids), while mint is unique by construction. Technical
+        // field — length is not critical, and there are no collisions by construction.
         s.queue.push({ id: `${d.mint}-${++s.lotSeq}`, qtyRaw: d.deltaRaw, acquiredDate: date });
       } else {
         let due = -d.deltaRaw;
@@ -74,8 +74,8 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
           if (lot.qtyRaw === 0n) s.queue.shift();
         }
         if (due > 0n) {
-          // расход без покрытия: до начала окна скана у владельца уже была позиция —
-          // это не ноль и не выдуманный лот, это дыра с датой и размером
+          // spend without coverage: the owner already held a position before the scan window started —
+          // it is not zero and not an invented lot, it is a hole with a date and a size
           s.gaps.push({ date, missingQtyRaw: due });
         }
       }
@@ -83,7 +83,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
   }
 
   const tokens = [];
-  // сверка с цепью: аккаунты из скана (Map или объект); нет аккаунта = баланс должен быть 0
+  // reconciliation with the chain: accounts from the scan (Map or object); no account = balance must be 0
   const accts = scan.accounts instanceof Map ? Object.fromEntries(scan.accounts) : (scan.accounts ?? {});
   const seenMints = new Set(st.keys());
 
@@ -102,12 +102,12 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       name: t.name,
       mint,
       decimals: t.decimals,
-      rawBalance: String(s.rawBalance), // легаси-имя; значение — нетто-дельта окна (см. netDeltaRaw)
-      netDeltaRaw: String(s.rawBalance), // честное имя того же числа: Σ дельт окна скана, не баланс
-      onchainNow, // настоящий баланс на цепи сейчас — отдельно от нетто-дельты окна
-      reconciles, // дельты скана сходятся с живым балансом цепи — главный знак честности
+      rawBalance: String(s.rawBalance), // legacy name; the value is the net delta of the window (see netDeltaRaw)
+      netDeltaRaw: String(s.rawBalance), // honest name of the same number: Σ of window deltas, not a balance
+      onchainNow, // the actual on-chain balance right now — separate from the window's net delta
+      reconciles, // scan deltas agree with the live chain balance — the main sign of honesty
       multiplier: { now: mult, events: tl ? tl.steps.length - 1 : 0 },
-      // BigInt в JSON не сериализуется — наружу строками
+      // BigInt is not JSON-serializable — strings go out
       adjusted: {
         exact: scaled.exact,
         whole: String(scaled.whole),
@@ -119,13 +119,13 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       realizedQtyRaw: String(s.realized.reduce((acc, r) => acc + r.qtyRaw, 0n)),
       gaps: s.gaps.map((g) => ({ ...g, missingQtyRaw: String(g.missingQtyRaw) })),
     };
-    // честная пометка только на fallback-ветке: отсутствие поля = adjusted посчитан
-    if (!tl) row.adjustedAvailable = false; // identity-fallback (см. шапку): adjusted==raw не доказан
+    // honest flag only on the fallback branch: absence of the field = adjusted was computed
+    if (!tl) row.adjustedAvailable = false; // identity-fallback (see the header): adjusted==raw is unproven
     tokens.push(row);
   };
 
   for (const [mint, s] of st) pushToken(mint, s);
-  // токен есть на цепи, но дельт нет: баланс старее окна скана — показываем, не прячем
+  // the token exists on-chain but has no deltas: the balance predates the scan window — shown, not hidden
   for (const mint of Object.keys(accts)) {
     if (seenMints.has(mint)) continue;
     pushToken(mint, { queue: [], realized: [], gaps: [], rawBalance: 0n, lotSeq: 0 });
@@ -144,7 +144,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       relevantTxs: scan.txs.length,
       skipped: scan.skipped.length,
     },
-    truncated: Boolean(scan.truncated), // окно скана обрезано потолком — лоты могли не покрыться
+    truncated: Boolean(scan.truncated), // the scan window was cut by the cap — lots may not be fully covered
     complete: !scan.truncated && !hasGaps && allReconcile,
     tokens,
   };

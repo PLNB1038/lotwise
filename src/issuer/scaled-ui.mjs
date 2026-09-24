@@ -1,5 +1,5 @@
-// Чтение множителя из цепи: Token-2022 Scaled UI Amount Extension (getAccountInfo jsonParsed).
-// On-chain план данных: active multiplier + pending multiplier с таймстампом активации.
+// Reading the multiplier from the chain: Token-2022 Scaled UI Amount Extension (getAccountInfo jsonParsed).
+// On-chain data plan: active multiplier + pending multiplier with an activation timestamp.
 export class ScaledUiError extends Error {
   constructor(msg) {
     super(msg);
@@ -8,13 +8,13 @@ export class ScaledUiError extends Error {
 }
 
 /**
- * @param {object} accountInfoValue — result.value ответа getAccountInfo (jsonParsed)
+ * @param {object} accountInfoValue — the result.value of a getAccountInfo response (jsonParsed)
  * @returns {{program: string, decimals: number, activeMultiplier: string, pendingMultiplier: string|null, pendingEffectiveDate: string|null, authority: string}}
  */
-// Каноническая запись — общая точка схемы (ROUND9 №15): «05»→«5», «5.0»→«5»,
-// «1.10»→«1.1». Репрезентация зависит от источника (RPC/эмитент-API), а сравнения
-// строковые: дифф журнала и reconcile лгали на дрейфе репрезентации (ROUND7 №16,
-// Jev R3). Значащие цифры не трогаются; вызов после regex-гварда.
+// Canonical form is the schema's common ground (round 9 fix 15): "05"→"5", "5.0"→"5",
+// "1.10"→"1.1". The representation depends on the source (RPC/issuer API) while comparisons
+// are string-based: the journal diff and reconcile lied on representation drift (round 7 fix 16,
+// Jev R3). Significant digits are untouched; called after the regex guard.
 import { canonicalDecimalString as canonicalDecimal } from "../schema/events.mjs";
 
 export function parseScaledUiAmount(accountInfoValue) {
@@ -28,7 +28,7 @@ export function parseScaledUiAmount(accountInfoValue) {
   }
   const ext = (info.extensions ?? []).find((e) => e.extension === "scaledUiAmountConfig");
   if (!ext) {
-    // токен без механизма множителя — это факт, а не ошибка
+    // a token without a multiplier mechanism is a fact, not an error
     return {
       program: accountInfoValue.owner,
       decimals: info.decimals,
@@ -40,9 +40,9 @@ export function parseScaledUiAmount(accountInfoValue) {
     };
   }
   const st = ext.state ?? {};
-  // active обязан быть десятичной строкой: String(undefined) = "undefined" не должен
-  // ехать дальше и падать где-то в валидации с невнятным сообщением. Fail-closed
-  // с ЧЕСТНОЙ ошибкой (тихая ложь хуже падения).
+  // active must be a decimal string: String(undefined) = "undefined" must not travel further
+  // and fail somewhere in validation with an obscure message. Fail-closed with an HONEST
+  // error (a quiet lie is worse than a crash).
   const active = String(st.multiplier);
   if (!/^\d+(\.\d+)?$/.test(active)) {
     throw new ScaledUiError(
@@ -50,17 +50,17 @@ export function parseScaledUiAmount(accountInfoValue) {
     );
   }
   const activeCanonical = canonicalDecimal(active);
-  // «0» в newMultiplier — это pending СБРОШЕН, а не настоящий нулевой множитель:
-  // конвенция эмитента (xstocks.mjs fetchCurrentMultiplier гвардит Number(pending) !== 0,
-  // живая фикстура xstocks-spyx-current.json несёт newMultiplier: 0) — записать 0 в
-  // new_multiplier и есть естественный способ снять pending. Строка "0" truthy, поэтому
-  // гвардим числом, симметрично эмитентскому клиенту.
+  // A "0" in newMultiplier means the pending was RESET, not a real zero multiplier:
+  // issuer convention (xstocks.mjs fetchCurrentMultiplier guards Number(pending) !== 0;
+  // the live fixture xstocks-spyx-current.json carries newMultiplier: 0) — writing 0 into
+  // new_multiplier is the natural way to clear a pending. The string "0" is truthy, so we
+  // guard by number, symmetric with the issuer client.
   const pendingRaw = st.newMultiplier;
   const pendingReset = pendingRaw === undefined || pendingRaw === null || Number(pendingRaw) === 0;
-  // pending валидируется СИММЕТРИЧНО active (ROUND7 №15): раньше любой не-нулевой
-  // мусор («abc») ехал в публичный /onchain payload и в будущий фантомный
-  // planes-disagree; журнал ниже по потоку падает валидацией, но мусор в ответе
-  // ридера — это шум диагностики, которого быть не должно.
+  // pending is validated SYMMETRICALLY to active (round 7 fix 15): previously any non-zero
+  // garbage ("abc") went into the public /onchain payload and into a future phantom
+  // planes-disagree; the journal further downstream fails validation anyway, but garbage in
+  // a reader's response is diagnostic noise that should not exist.
   const pendingStr = pendingReset ? null : String(pendingRaw);
   if (pendingStr !== null && !/^\d+(\.\d+)?$/.test(pendingStr)) {
     throw new ScaledUiError(
@@ -68,23 +68,23 @@ export function parseScaledUiAmount(accountInfoValue) {
     );
   }
   const pending = pendingStr !== null ? canonicalDecimal(pendingStr) : null;
-  // Дата активации без живого pending бессмысленна — обнуляем пару АТОМАРНО (а не
-  // «оставляем как есть»): пара (pending, date) — один факт, дата без pending это мусор
-  // в публичном ответе и приманка для будущих потребителей; симметрично xstocks.mjs,
-  // где activationDateTime гвардится вместе с newMultiplier. Форма ответа не меняется.
+  // An activation date without a live pending is meaningless — we zero the pair ATOMICALLY
+  // (not "leave as is"): the (pending, date) pair is a single fact; a date without pending is
+  // garbage in the public response and bait for future consumers; symmetric with xstocks.mjs,
+  // where activationDateTime is guarded together with newMultiplier. The response shape is unchanged.
   const tsRaw = st.newMultiplierEffectiveTimestamp ?? 0;
   const ts = Number(tsRaw);
   if (pending !== null && Number.isNaN(ts)) {
-    // pending жив, а таймстамп — мусор: до фикса NaN тихо давал дату null и pending
-    // молча игнорировался нижележащими слоями. Честная ошибка лучше тихой лжи.
-    // При НЕЖИВОМ pending (null выше) мусорный таймстамп значения не имеет — не бросаем.
+    // pending is live but the timestamp is garbage: before the fix NaN quietly produced a null
+    // date and pending was silently ignored by downstream layers. An honest error beats a quiet lie.
+    // With a NON-live pending (null above) a garbage timestamp does not matter — no throw.
     throw new ScaledUiError(
       `scaledUiAmountConfig: newMultiplierEffectiveTimestamp is not a number: ${JSON.stringify(tsRaw)} (pending ${pending} without a valid activation date)`,
     );
   }
-  // Волна E (фаззинг ×10): конечный, но за ±8.64e15 мс — toISOString() кидал ГОЛЫЙ
-  // RangeError мимо типизированной ошибки модуля; на /onchain это 503 kind:null
-  // с утечкой внутреннего текста наружу. Граница включительна: 8_640_000_000_000 — валидно.
+  // Wave E (fuzzing ×10): finite but beyond ±8.64e15 ms — toISOString() threw a BARE
+  // RangeError bypassing the module's typed error; on /onchain that meant a 503 kind:null
+  // leaking internal text to the outside. The boundary is inclusive: 8_640_000_000_000 is valid.
   if (pending !== null && (!Number.isFinite(ts) || Math.abs(ts * 1000) > 8.64e15)) {
     throw new ScaledUiError(
       `scaledUiAmountConfig: newMultiplierEffectiveTimestamp is outside the representable date range: ${JSON.stringify(tsRaw)} (pending ${pending} without a representable activation date)`,
@@ -101,23 +101,23 @@ export function parseScaledUiAmount(accountInfoValue) {
   };
 }
 
-/** Сверка планов: множитель эмитента (API) против on-chain на момент date. */
+/** Reconcile the planes: the issuer (API) multiplier against on-chain as of date. */
 export function reconcileMultiplier(apiMultiplier, onChain, date = new Date().toISOString()) {
-  // Даты — числом через Date.parse: строковое сравнение путает "Z"/".000Z"/date-only
-  // и теряло pending ровно в день его активации (ложное planes-disagree на витрине).
+  // Dates compared numerically via Date.parse: string comparison confuses "Z"/".000Z"/date-only
+  // and lost the pending exactly on its activation day (a false planes-disagree on the dashboard).
   const ts = Date.parse(String(date));
   if (Number.isNaN(ts)) {
     throw new ScaledUiError(`not a parseable date: ${JSON.stringify(date)}`);
   }
   const pendingTs = onChain.pendingEffectiveDate !== null ? Date.parse(onChain.pendingEffectiveDate) : null;
-  // On-chain "эффективный" множитель: pending активируется после своего таймстампа
+  // The on-chain "effective" multiplier: pending activates once its timestamp has passed
   const effectiveOnChain =
     pendingTs !== null && !Number.isNaN(pendingTs) && pendingTs <= ts && onChain.pendingMultiplier !== null
       ? onChain.pendingMultiplier
       : onChain.activeMultiplier;
-  // Сравнение — канонически, отображение — как пришло: «1.10» (API) против «1.1»
-  // (цепь) — та же величина, ложный planes-disagree на дрейфе репрезентации
-  // был бы ровно тем классом тихой лжи, который канонизация убивает (Jev R3).
+  // Compare canonically, display as received: "1.10" (API) vs "1.1" (chain) is the same value;
+  // a false planes-disagree on representation drift would be exactly the class of quiet lie
+  // that canonicalization kills (Jev R3).
   const agree = canonicalDecimal(String(apiMultiplier)) === canonicalDecimal(String(effectiveOnChain));
   return {
     api: apiMultiplier,

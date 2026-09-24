@@ -1,7 +1,7 @@
-// Тесты источника эмитента PreStocks (prestocks.com, pre-IPO токены).
-// БЕЗ СЕТИ: ответы живого эндпоинта /metadata/{symbol}.json сохранены как
-// фикстуры (prestocks-openai.json, prestocks-spacex.json, сняты 2026-09-22)
-// и все сценарии гоняются через инжектируемый fetcher.
+// Tests of the PreStocks issuer source (prestocks.com, pre-IPO tokens).
+// NO NETWORK: the responses of the live /metadata/{symbol}.json endpoint are saved as
+// fixtures (prestocks-openai.json, prestocks-spacex.json, captured 2026-09-22)
+// and all the scenarios run through an injectable fetcher.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,12 +15,12 @@ const FIX = (name) => JSON.parse(readFileSync(path.join(dir, name), "utf8"));
 
 const okRes = (payload) => ({ ok: true, status: 200, json: async () => payload });
 
-// Реальные минты из data/tokens.json (реестр проекта) — для проверки привязки.
+// Real mints from data/tokens.json (the project registry) — for the binding check.
 const OPENAI_MINT = "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF";
 
-// ---------- Клиент: парсинг фикстур ----------
+// ---------- The client: parsing the fixtures ----------
 
-test("openai: identity-метаданные парсятся, все поля — строки", async () => {
+test("openai: the identity metadata parses, all the fields — strings", async () => {
   const m = await fetchTokenMetadata("OPENAI", { fetcher: async () => okRes(FIX("prestocks-openai.json")) });
   assert.equal(m.name, "OpenAI PreStocks");
   assert.equal(m.symbol, "OPENAI");
@@ -28,19 +28,19 @@ test("openai: identity-метаданные парсятся, все поля �
   assert.equal(m.image, "https://prestocks.com/logos/openai.png");
   assert.equal(m.externalUrl, "https://prestocks.com/openai");
   assert.equal(m.terms, "https://url.prestocks.com/terms-of-service");
-  // Контракт «числа — строками»: в схеме метаданных чисел нет вообще,
-  // ни одно поле не имеет права приехать числом/float-ом.
+  // The contract "numbers — as strings": the metadata schema has no numbers at all,
+  // no field has the right to arrive as a number/float.
   for (const v of Object.values(m)) assert.ok(v === null || typeof v === "string");
 });
 
-test("spacex: символ совпадает с запрошенным, поля читаются", async () => {
+test("spacex: the symbol matches the requested one, the fields read", async () => {
   const m = await fetchTokenMetadata("SPACEX", { fetcher: async () => okRes(FIX("prestocks-spacex.json")) });
   assert.equal(m.symbol, "SPACEX");
   assert.equal(m.externalUrl, "https://prestocks.com/spacex");
   assert.equal(m.terms, "https://url.prestocks.com/terms-of-service");
 });
 
-test("URL строится из символа в нижнем регистре (OpenAI -> openai.json)", async () => {
+test("the URL is built from the lowercased symbol (OpenAI -> openai.json)", async () => {
   let seen;
   await fetchTokenMetadata("OpenAI", {
     fetcher: async (url) => {
@@ -51,16 +51,16 @@ test("URL строится из символа в нижнем регистре 
   assert.equal(seen, "https://prestocks.com/metadata/openai.json");
 });
 
-// ---------- Клиент: отказы ----------
+// ---------- The client: refusals ----------
 
-test("расхождение символа (спросили OPENAI, отдали SPACEX) — IssuerError", async () => {
+test("a symbol divergence (we asked for OPENAI, it served SPACEX) — IssuerError", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("OPENAI", { fetcher: async () => okRes(FIX("prestocks-spacex.json")) }),
     (err) => err instanceof IssuerError && /symbol mismatch/.test(err.message),
   );
 });
 
-test("битый payload без name/symbol отклоняется понятной ошибкой", async () => {
+test("a broken payload without name/symbol is rejected with a clear error", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("OPENAI", { fetcher: async () => okRes({ wrong: true }) }),
     /unexpected metadata payload/,
@@ -71,21 +71,21 @@ test("битый payload без name/symbol отклоняется понятн�
   );
 });
 
-test("HTTP-ошибка классифицируется со статусом", async () => {
+test("an HTTP error is classified with the status", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("NOPE", { fetcher: async () => ({ ok: false, status: 404, json: async () => ({}) }) }),
     (err) => err instanceof IssuerError && err.status === 404,
   );
 });
 
-test("отказ сети оборачивается в IssuerError", async () => {
+test("a network failure is wrapped into an IssuerError", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("OPENAI", { fetcher: async () => { throw new Error("ECONNREFUSED"); } }),
     (err) => err instanceof IssuerError && /network: ECONNREFUSED/.test(err.message),
   );
 });
 
-test("битый JSON (res.json кидает) — IssuerError, не сырой SyntaxError", async () => {
+test("a broken JSON (res.json throws) — an IssuerError, not a raw SyntaxError", async () => {
   await assert.rejects(
     () =>
       fetchTokenMetadata("OPENAI", {
@@ -95,28 +95,28 @@ test("битый JSON (res.json кидает) — IssuerError, не сырой S
   );
 });
 
-test("мусорный символ режется до похода в сеть", async () => {
+test("a garbage symbol is cut before going to the network", async () => {
   for (const bad of ["", "../etc/passwd", "OPEN AI", 42, null]) {
     await assert.rejects(
-      () => fetchTokenMetadata(bad, { fetcher: async () => { throw new Error("не должен вызываться"); } }),
+      () => fetchTokenMetadata(bad, { fetcher: async () => { throw new Error("must not be called"); } }),
       (err) => err instanceof IssuerError && /bad symbol/.test(err.message),
     );
   }
 });
 
-// ---------- Нормализация: план эмитента -> события ----------
+// ---------- Normalization: the issuer plan -> events ----------
 
-test("openai: identity-схема честно даёт НОЛЬ событий (полей событий нет)", () => {
+test("openai: the identity schema honestly gives ZERO events (no event fields)", () => {
   const events = metadataToEvents(FIX("prestocks-openai.json"));
   assert.deepEqual(events, []);
 });
 
-test("spacex: аналогично ноль событий", () => {
+test("spacex: likewise zero events", () => {
   const events = metadataToEvents(FIX("prestocks-spacex.json"), { sourceUrl: "https://prestocks.com/metadata/spacex.json" });
   assert.deepEqual(events, []);
 });
 
-test("неизвестные ключи в метаданных НЕ теряются молча: warn оператору, результат прежний", () => {
+test("unknown keys in the metadata are NOT lost silently: a warn to the operator, the result unchanged", () => {
   const errors = [];
   const orig = console.error;
   console.error = (...args) => errors.push(args.join(" "));
@@ -131,34 +131,34 @@ test("неизвестные ключи в метаданных НЕ теряю�
   assert.match(errors[0], /splitRatio/);
 });
 
-test("мусор вместо метаданных — NormalizeError", () => {
+test("garbage instead of metadata — NormalizeError", () => {
   for (const garbage of [null, 42, "str", [], true]) {
     assert.throws(() => metadataToEvents(garbage), NormalizeError);
   }
   assert.throws(() => metadataToEvents({ name: "x" }), /missing a symbol/);
 });
 
-test("metadataSources: external_url и terms — легитимные ссылки-источники", () => {
+test("metadataSources: external_url and terms — the legitimate source links", () => {
   const m = FIX("prestocks-openai.json");
   assert.deepEqual(metadataSources(m), ["https://prestocks.com/openai", "https://url.prestocks.com/terms-of-service"]);
-  // клиентская форма (camelCase externalUrl — как отдаёт наш клиент) тоже доезжает (ROUND7 №6)
+  // the client shape (a camelCase externalUrl — as our client serves) also arrives (ROUND7 #6)
   assert.deepEqual(
     metadataSources({ externalUrl: "https://prestocks.com/openai", terms: "https://url.prestocks.com/terms-of-service" }),
     ["https://prestocks.com/openai", "https://url.prestocks.com/terms-of-service"],
   );
-  assert.deepEqual(metadataSources({ symbol: "X" }), []); // без ссылок — пусто, не падаем
+  assert.deepEqual(metadataSources({ symbol: "X" }), []); // no links — empty, we do not fall
   assert.throws(() => metadataSources(null), NormalizeError);
 });
 
-// ---------- Привязка минта (снаружи) и схема ----------
+// ---------- The mint binding (external) and the schema ----------
 
-test("пустой план даёт пустую привязку: [] минтом не помечается", () => {
+test("an empty plan gives an empty binding: [] is not marked with the mint", () => {
   assert.deepEqual(bindMintAndValidate(metadataToEvents(FIX("prestocks-openai.json")), OPENAI_MINT), []);
 });
 
-test("канал привязки жив: синтетическое REDEEM (модель будущего, не факт эмитента) проходит схему с минтом", () => {
-  // Это проверка ПЛОМБИРОВКИ канала (bind + validate), а не утверждение, что
-  // эмитент такое событие отдал: реальных полей событий в схеме метаданных нет.
+test("the binding channel is alive: a synthetic REDEEM (a model of the future, not an issuer fact) passes the schema with the mint", () => {
+  // This is a check of the PLUMBING of the channel (bind + validate), not a statement that
+  // the issuer served such an event: there are no real event fields in the metadata schema.
   const modeled = [
     {
       type: "REDEEM",
@@ -173,12 +173,12 @@ test("канал привязки жив: синтетическое REDEEM (м�
   assert.equal(bound[0].type, "REDEEM");
 });
 
-test("битый минт на bind-этапе — NormalizeError со ссылкой на схему", () => {
+test("a broken mint at the bind stage — NormalizeError referencing the schema", () => {
   assert.throws(
     () =>
       bindMintAndValidate(
         [{ type: "REDEEM", effectiveDate: "2026-01-15T00:00:00Z", status: "unverified", sources: ["https://x"] }],
-        "не-бейз58",
+        "not-base58",
       ),
     (err) => err instanceof NormalizeError && /failed schema/.test(err.message),
   );

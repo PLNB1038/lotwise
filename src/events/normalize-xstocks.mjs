@@ -1,6 +1,6 @@
-// Нормализация наблюдений xStocks multiplier API в канонические события Lotwise.
-// API-план эмитента = первичный источник; on-chain ScaledUI-подтверждение —
-// отдельный шаг недели 2 (сверка планов через reconcile).
+// Normalization of xStocks multiplier API observations into canonical Lotwise events.
+// The issuer's API plan is the primary source; on-chain ScaledUI confirmation is
+// a separate week-2 step (cross-checking the plans via reconcile).
 import { validateEvent } from "../schema/events.mjs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 
@@ -12,16 +12,16 @@ export class NormalizeError extends Error {
   }
 }
 
-// Граница данных: узлы могут прийти числами (сырой JSON API) или строками
-// (наш клиент). Число → строка точно (JSON-число парсится в double,
-// shortest-round-trip сохраняет все значащие цифры); мусор — ошибка.
+// Data boundary: nodes may arrive as numbers (the raw API JSON) or as strings
+// (our client). A number → string exactly (a JSON number parses into a double,
+// shortest-round-trip preserves all significant digits); garbage — an error.
 function toDecimalString(v, field, node) {
   if (typeof v === "number" && Number.isFinite(v)) {
     const s = String(v);
     if (!/e/i.test(s)) return s;
-    // Экспоненциальная запись не проходит DECIMAL_RE и роняла ВСЮ историю токена
-    // NormalizeError'ом «not a decimal» (ROUND7 №13). Значащие цифры те же —
-    // сдвигаем точку: 1e-7 → "0.0000001", 5e21 → "5000000000000000000000".
+    // Exponential notation fails DECIMAL_RE and used to crash the WHOLE token history
+    // with a NormalizeError "not a decimal" (ROUND7 fix 13). The significant digits are
+    // the same — we shift the point: 1e-7 → "0.0000001", 5e21 → "5000000000000000000000".
     const m = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/i.exec(s);
     if (!m) throw new NormalizeError(`field ${field} is not a decimal: ${JSON.stringify(v)}`, node);
     const [, sign, int, frac = "", exp] = m;
@@ -31,17 +31,17 @@ function toDecimalString(v, field, node) {
       point <= 0 ? `0.${"0".repeat(-point)}${digits}`
       : point >= digits.length ? `${digits}${"0".repeat(point - digits.length)}`
       : `${digits.slice(0, point)}.${digits.slice(point)}`;
-    return sign ? `-${positional}` : positional; // отрицательное отвергнет схема, с её сообщением
+    return sign ? `-${positional}` : positional; // a negative value will be rejected by the schema, with its own message
   }
   if (typeof v === "string" && /^\d+(\.\d+)?$/.test(v)) return v;
   throw new NormalizeError(`field ${field} is not a decimal: ${JSON.stringify(v)}`, node);
 }
 
-// Уникальный ключ узла истории. id — идентичность узла в API эмитента (uuid):
-// один и тот же узел, пришедший на двух страницах (page-drift офсетной пагинации),
-// обязан схлопнуться в одно событие. Узлы без id дедупятся только при полном
-// совпадении содержимого: разные события в один день — реальность (сплит и
-// дивиденд одной датой), схлопывать их по дате нельзя.
+// Unique key of a history node. id is the node identity in the issuer's API (uuid):
+// the same node arriving on two pages (page-drift of offset pagination) must collapse
+// into a single event. Nodes without an id are deduped only on a full content match:
+// different events on one day are a reality (a split and a dividend sharing a date),
+// collapsing them by date is not allowed.
 function nodeKey(n) {
   if (n !== null && typeof n === "object" && typeof n.id === "string" && n.id !== "") {
     return `id:${n.id}`;
@@ -51,45 +51,45 @@ function nodeKey(n) {
 
 /**
  * @param {Array<{id, reason, multiplier, previousMultiplier, activationDateTime: string}>} historyNodes
- *   — как отдаёт fetchMultiplierHistory (строки) ИЛИ сырой JSON API (числа); новые сверху.
- *   Дубликаты узлов (page-drift: узел на границе двух страниц) схлопываются по
- *   уникальному ключу ДО проверки цепочки — иначе повтор события рвёт
- *   MultiplierTimeline ("chain discontinuity") и токен целиком исключается с витрины
+ *   — as fetchMultiplierHistory returns (strings) OR the raw API JSON (numbers); newest first.
+ *   Duplicate nodes (page-drift: a node on the boundary of two pages) collapse by
+ *   the unique key BEFORE the chain check — otherwise a repeated event breaks
+ *   MultiplierTimeline ("chain discontinuity") and the token is excluded from the vitrine entirely
  * @param {{symbol: string, network: string}} ctx
- * @returns {Array<object>} канонические MULTIPLIER_CHANGE, отсортированные по времени (старые → новые)
+ * @returns {Array<object>} canonical MULTIPLIER_CHANGE, sorted by time (old → new)
  */
 export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Ethereum" }) {
-  // Гвард формы (волна B): не-массив — NormalizeError, не голый TypeError ниже по
-  // потоку; зеркально dividendsFromDeclarations (клиент уже гвардит, вход-сторона
-  // может быть любой).
+  // Shape guard (wave B): a non-array is a NormalizeError, not a bare TypeError further
+  // down the stream; mirrors dividendsFromDeclarations (the client already guards, the
+  // input side can be anything).
   if (!Array.isArray(historyNodes)) {
     throw new NormalizeError(`history nodes must be an array, got ${historyNodes === null ? "null" : typeof historyNodes}`);
   }
   const sourceUrl = `https://api.xstocks.fi/api/v2/public/assets/${symbol}/multiplier/history?network=${network}`;
-  // Дедуп до разбора дат и сортa: повтор узла = повтор события с тем же
-  // multiplierFrom, на котором таймлайн падает. Первое вхождение выигрывает.
-  const seen = new Map(); // key → первый узел с этим ключом (он же победитель дедупа)
+  // Dedup before date parsing and sorting: a repeated node = a repeated event with the same
+  // multiplierFrom, the one the timeline falls over. The first occurrence wins.
+  const seen = new Map(); // key → the first node with this key (also the dedup winner)
   const deduped = historyNodes.filter((n) => {
     const key = nodeKey(n);
     const first = seen.get(key);
     if (first !== undefined) {
-      // Раунд 6, LW2_dedup_id_collision_silent_divergence: тот же id с РАЗНЫМ
-      // содержимым (эмитент поправил узел на свежей странице / переиспользовал id).
-      // Семантика «первое вхождение выигрывает» не меняется (id — идентичность узла,
-      // сознательный трейд-офф), но раньше расхождение терялось МОЛЧА — ни оператор,
-      // ни /health об этом не узнавали. Один однострочный warn — наблюдаемость.
+      // Round 6, LW2_dedup_id_collision_silent_divergence: the same id with DIFFERENT
+      // content (the issuer fixed a node on a fresh page / reused an id).
+      // The "first occurrence wins" semantics stays (id is the node identity, a deliberate
+      // trade-off), but the divergence used to be lost SILENTLY — neither the operator
+      // nor /health ever learned about it. One single-line warn — observability.
       if (JSON.stringify(first) !== JSON.stringify(n)) {
-        console.error(`[normalize-xstocks] ${symbol}: дедуп: узел ${key} схлопнут с ранее встреченным, но содержимое отличается — первое вхождение выигрывает, свежий вариант проигнорирован: ${JSON.stringify(n)}`);
+        console.error(`[normalize-xstocks] ${symbol}: dedup: node ${key} collapsed with an earlier-seen one but the content differs — the first occurrence wins, the fresh variant is ignored: ${JSON.stringify(n)}`);
       }
       return false;
     }
     seen.set(key, n);
     return true;
   });
-  // Сорт по МОМЕНТУ ВРЕМЕНИ (числом), а не localeCompare по строке даты:
-  // при смешанной точности ("…T00:00:00.500Z" vs "…T00:00:00Z") строковый сорт
-  // давал порядок, обратный хронологии. Непарсируемая дата — NormalizeError:
-  // fail-closed, как и во всём конвейере дат (находка раунда 3).
+  // Sort by MOMENT IN TIME (as a number), not localeCompare over the date string:
+  // with mixed precision ("…T00:00:00.500Z" vs "…T00:00:00Z") the string sort
+  // produced the reverse of chronology. An unparseable date is a NormalizeError:
+  // fail-closed, like the whole date pipeline (a round 3 finding).
   const stamped = deduped.map((n) => {
     const ts = parseIsoDateMs(String(n?.activationDateTime));
     if (ts === null) {
@@ -100,13 +100,13 @@ export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Eth
     }
     return { n, ts };
   });
-  stamped.sort((a, b) => a.ts - b.ts); // сорт V8 стабилен: равные моменты сохраняют порядок API
+  stamped.sort((a, b) => a.ts - b.ts); // the V8 sort is stable: equal moments keep the API order
   return stamped.map(({ n }) => {
     const e = {
       type: "MULTIPLIER_CHANGE",
-      // минт подставит вызывающий слой из реестра по символу — здесь символ в sourceUrl
+      // the calling layer fills in the mint from the registry by symbol — here the symbol is in the sourceUrl
       effectiveDate: n.activationDateTime,
-      status: "confirmed", // официальный API эмитента
+      status: "confirmed", // the issuer's official API
       sources: [`${sourceUrl}#node:${n.id}`],
       multiplierFrom: toDecimalString(n.previousMultiplier, "previousMultiplier", n),
       multiplierTo: toDecimalString(n.multiplier, "multiplier", n),
@@ -116,7 +116,7 @@ export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Eth
   });
 }
 
-/** Дополняет события минтом из реестра и прогоняет валидацию схемы; атомарно. */
+/** Fills in the events with the mint from the registry and runs schema validation; atomic. */
 export function bindMintAndValidate(events, mint) {
   const bound = events.map((e) => ({ ...e, mint }));
   for (const e of bound) {

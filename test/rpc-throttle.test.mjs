@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RpcClient } from "../src/ingest/rpc.mjs";
 
-// Настоящий таймер с мелким вводимым интервалом: регресс гоняет реальную
-// конкурентность, но весь тест укладывается в ~200мс вместо 350мс на вызов.
+// A real timer with a small injectable interval: the regression exercises real
+// concurrency, but the whole test fits into ~200ms instead of 350ms per call.
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const jsonRes = (result) => ({
@@ -11,7 +11,7 @@ const jsonRes = (result) => ({
   json: async () => ({ jsonrpc: "2.0", id: 1, result }),
 });
 
-test("конкурентные call разносятся минимум на minIntervalMs — очередь, а не залп", async () => {
+test("concurrent calls are spread by at least minIntervalMs — a queue, not a volley", async () => {
   const stamps = [];
   const c = new RpcClient({
     endpoint: "https://rpc.example",
@@ -20,21 +20,21 @@ test("конкурентные call разносятся минимум на min
     minIntervalMs: 40,
   });
   const N = 5;
-  // Как GET /lots из двух вкладок: N вызовов стартуют в один тик
+  // Like GET /lots from two tabs: N calls start in one tick
   const results = await Promise.all(Array.from({ length: N }, (_, i) => c.call("getSlot", [i])));
 
-  assert.deepEqual(results, [1, 2, 3, 4, 5], "каждый вызов получает результат своего запроса");
+  assert.deepEqual(results, [1, 2, 3, 4, 5], "each call receives the result of its own request");
   assert.equal(c.requestCount, N);
   assert.equal(stamps.length, N);
   for (let i = 1; i < stamps.length; i++) {
     const gap = stamps[i] - stamps[i - 1];
-    assert.ok(gap >= 40 - 1, `запросы ${i - 1}->${i} разнесены на ${gap}мс, нужно >= ~40мс (minIntervalMs)`);
+    assert.ok(gap >= 40 - 1, `the requests ${i - 1}->${i} spread by ${gap}ms, need >= ~40ms (minIntervalMs)`);
   }
   assert.ok(stamps[N - 1] - stamps[0] >= (N - 1) * 40 - 1,
-    `${N} одновременных запросов должны занять >= ${(N - 1) * 40}мс, а не уйти залпом`);
+    `${N} concurrent requests must take >= ${(N - 1) * 40}ms, not go out in a volley`);
 });
 
-test("простаивавший клиент не задерживает первый вызов очереди", async () => {
+test("an idle client does not delay the first call of the queue", async () => {
   const stamps = [];
   const c = new RpcClient({
     endpoint: "https://rpc.example",
@@ -44,5 +44,5 @@ test("простаивавший клиент не задерживает пер
   });
   const t0 = Date.now();
   await c.call("getSlot", []);
-  assert.ok(stamps[0] - t0 < 40, `после простоя первый запрос уходит сразу: прошло ${stamps[0] - t0}мс`);
+  assert.ok(stamps[0] - t0 < 40, `after an idle period the first request goes out immediately: ${stamps[0] - t0}ms passed`);
 });

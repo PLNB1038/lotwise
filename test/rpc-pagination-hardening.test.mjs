@@ -1,8 +1,9 @@
-// Регрессионные тесты раунда 9 — ночная волна A (ROUND9_FINDINGS).
-// Группы: флаги (№1), пагинация сигнатур (№2,3,12,13), журнал-массив (№4),
-// crosscheck-дивиденд (№5), clientKey (№6), esc (№7), SSRF-mapped (№8),
-// лок (№9), atomic-0600 (№10), rpc (№11), schema-потолок (№14),
-// канонизация журнала (№15).
+// formerly round9-hardening.test.mjs
+// Round 9 regression tests — the night wave A (ROUND9_FINDINGS).
+// Groups: flags (#1), signature pagination (#2,3,12,13), an array journal record (#4),
+// the dividend crosscheck (#5), clientKey (#6), esc (#7), SSRF-mapped (#8),
+// the lock (#9), atomic-0600 (#10), rpc (#11), the schema ceiling (#14),
+// journal canonicalization (#15).
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
@@ -30,25 +31,25 @@ const TOKEN = { mint: SPYx, symbol: "TESTx" };
 
 const sig = (n) => ({ signature: "s".repeat(43) + String(n), slot: n, blockTime: 1750000000 + n, err: null });
 
-// ---- R9-1: флаги — пустые значения и льготные числа ----
+// ---- R9-1: flags — empty values and lenient numbers ----
 
-test("flags: пустой --host/--rpc — отказ, а не listen на всех интерфейсах / бут в пустоту", () => {
+test("flags: an empty --host/--rpc — a refusal, not a listen on all interfaces / a boot into the void", () => {
   for (const argv of [["--host", ""], ["--host="], ["--rpc", ""], ["--rpc="]]) {
-    assert.throws(() => parseServeArgs(argv), (err) => err.message.includes(argv[0].replace(/=$/, "")), `${argv.join(" ")} должен отказать`);
+    assert.throws(() => parseServeArgs(argv), (err) => err.message.includes(argv[0].replace(/=$/, "")), `${argv.join(" ")} must be refused`);
   }
 });
 
-test("flags: port digits-only — 0x10/1e2 не проходят, как у /multiplier?raw", () => {
+test("flags: port digits-only — 0x10/1e2 do not pass, like /multiplier?raw", () => {
   assert.throws(() => parseServeArgs(["--port", "0x10"]), /port/);
   assert.throws(() => parseServeArgs(["--port", "1e2"]), /port/);
-  assert.equal(parseServeArgs(["--port", "08080"]).port, 8080, "ведущие нули у digits-only — ок");
+  assert.equal(parseServeArgs(["--port", "08080"]).port, 8080, "leading zeros are fine for digits-only");
 });
 
 function ServeArg(flag) {
   return (err) => err.message.includes(flag);
 }
 
-// ---- R9-2/3/12/13: пагинация сигнатур ----
+// ---- R9-2/3/12/13: signature pagination ----
 
 function clientWithRoute(routeOf, { cap = 50 } = {}) {
   let calls = 0;
@@ -59,7 +60,7 @@ function clientWithRoute(routeOf, { cap = 50 } = {}) {
       if (method === "getTransaction") return null;
       if (method === "getSignaturesForAddress") {
         calls++;
-        if (calls > cap) return []; // гарантия терминации ЛЮБОМУ коду
+        if (calls > cap) return []; // a termination guarantee against ANY code
         return routeOf(params[1]?.before);
       }
       throw new Error(`unexpected ${method}`);
@@ -68,32 +69,32 @@ function clientWithRoute(routeOf, { cap = 50 } = {}) {
   return client;
 }
 
-test("scan: элемент без signature на странице >1 — не ломает курсор, не крутится вечно", async () => {
+test("scan: an element without a signature on page >1 — does not break the cursor, does not spin forever", async () => {
   const client = clientWithRoute((before) => {
     if (before === undefined) return [sig(1), sig(2)];
-    if (before.endsWith("2")) return [{ slot: 99, blockTime: 1, err: null }, sig(3)]; // битый элемент ПОСЛЕДНИЙ
+    if (before.endsWith("2")) return [{ slot: 99, blockTime: 1, err: null }, sig(3)]; // the broken element is LAST
     return [sig(4)];
   });
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
-  assert.equal(scan.signatures, 4, "курсор от последнего ВАЛИДНОГО элемента, хвост доезжает");
+  assert.equal(scan.signatures, 4, "the cursor moves from the last VALID element, the tail arrives");
   assert.equal(scan.truncated, false);
 }, { timeout: 5000 });
 
-test("scan: null-элемент внутри страницы — skip, а не TypeError всего скана", async () => {
+test("scan: a null element inside a page — skip, not a TypeError of the whole scan", async () => {
   const client = clientWithRoute(() => [null, sig(1), undefined, { signature: 42, slot: 1, blockTime: 1, err: null }, sig(2)]);
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 5, maxTxs: 100 });
   assert.equal(scan.signatures, 2);
 }, { timeout: 5000 });
 
-test("scan: не-массивный ответ (result:null лежащего шлюза) — честная ошибка, не «пустой кошелёк»", async () => {
+test("scan: a non-array response (result:null of a lying gateway) — an honest error, not an \"empty wallet\"", async () => {
   const client = clientWithRoute(() => null);
   await assert.rejects(
     () => scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 10 }),
-    (err) => /signature|malformed|не массив|response/i.test(err.message),
+    (err) => /signature|malformed|not an array|response/i.test(err.message),
   );
 });
 
-test("scan: чередующиеся дубли-страницы с разными хвостами — терминация по K-нулевому прогрессу", async () => {
+test("scan: alternating duplicate pages with different tails — termination after K calls with no progress", async () => {
   let flip = false;
   const client = clientWithRoute(() => {
     flip = !flip;
@@ -101,10 +102,10 @@ test("scan: чередующиеся дубли-страницы с разным
   });
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
   assert.equal(scan.signatures, 4);
-  assert.ok(client.calls() <= 7, `после двух страниц без новых сигнатур — стоп (calls=${client.calls()})`);
+  assert.ok(client.calls() <= 7, `after two pages with no new signatures — stop (calls=${client.calls()})`);
 }, { timeout: 5000 });
 
-test("streamSignatures: те же гварды — null-элемент skip, не-массив бросает, чередование терминируется", async () => {
+test("streamSignatures: the same guards — a null element is skipped, a non-array throws, alternation terminates", async () => {
   const good = clientWithRoute((before) => (before === undefined ? [null, sig(1)] : []));
   const out = [];
   for await (const s of streamSignatures(good, SPYx, { limit: 2 })) out.push(s.signature);
@@ -120,7 +121,7 @@ test("streamSignatures: те же гварды — null-элемент skip, н�
   assert.ok(alt.calls() <= 7);
 }, { timeout: 5000 });
 
-// ---- R9-4: журнал-массив ----
+// ---- R9-4: an array journal record ----
 
 const rotationMint = () => ({
   owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
@@ -129,24 +130,24 @@ const rotationMint = () => ({
   } }] } } },
 });
 
-test("journal: массив-запись — та же порча, что примитив: corrupted:true, дубль не переизлучается", async () => {
+test("journal: an array record — the same corruption as a primitive: corrupted:true, the duplicate is not re-emitted", async () => {
   const { parseScaledUiAmount } = await import("../src/issuer/scaled-ui.mjs");
   const parsed = parseScaledUiAmount(rotationMint());
   for (const bad of [[1, 2, 3], []]) {
     const r = planJournalStep(TOKEN, bad, parsed);
-    assert.equal(r.corrupted, true, `запись-массив ${JSON.stringify(bad)} — порча`);
+    assert.equal(r.corrupted, true, `an array record ${JSON.stringify(bad)} — corruption`);
     assert.equal(r.event, null);
     assert.deepEqual(r.replay, []);
   }
 });
 
-// ---- R9-5: дивидендный crosscheck — вырожденный ПОСТ-экс close ----
+// ---- R9-5: the dividend crosscheck — a degenerate POST-ex close ----
 
-test("crosscheck: дивиденд с after.c <= 0 — inconclusive, а не «mismatch» на мёртвом пуле", async () => {
+test("crosscheck: a dividend with after.c <= 0 — inconclusive, not a \"mismatch\" on a dead pool", async () => {
   const candles = [
     { ts: Date.UTC(2026, 5, 16) / 1000, c: 100 },
     { ts: Date.UTC(2026, 5, 17) / 1000, c: 100 },
-    { ts: Date.UTC(2026, 5, 18) / 1000, c: 0 }, // after-свеча мёртвого пула
+    { ts: Date.UTC(2026, 5, 18) / 1000, c: 0 }, // the after-candle of a dead pool
   ];
   const v = crossCheckDividendAccrual({
     type: "DIVIDEND_ACCRUAL", mint: SPYx, effectiveDate: "2026-06-18T00:00:00.000Z",
@@ -156,9 +157,9 @@ test("crosscheck: дивиденд с after.c <= 0 — inconclusive, а не «m
   assert.equal(v.observedDropFraction, null);
 });
 
-// ---- R9-6: clientKey — пустой последний XFF-элемент ----
+// ---- R9-6: clientKey — an empty last XFF element ----
 
-test("ratelimit: XFF с пустым хвостом (запятая/пробел) — фолбэк на socket-корзину, не общая «»", async () => {
+test("ratelimit: XFF with an empty tail (a comma/space) — fallback to the socket bucket, not the shared \"\"", async () => {
   const registry = await loadRegistry("data/tokens.json");
   let scans = 0;
   const server = await createApiServer({
@@ -173,16 +174,16 @@ test("ratelimit: XFF с пустым хвостом (запятая/пробел
   const { port } = server.address();
   try {
     const go = (xff) => fetch(`http://127.0.0.1:${port}/lots?address=${OWNER}`, { headers: xff === null ? {} : { "x-forwarded-for": xff } });
-    assert.equal((await go("5.5.5.5, ")).status, 200); // пустой хвост → socket-корзина
-    assert.equal((await go(null)).status, 200); // прямой клиент — та же socket-корзина
-    assert.equal((await go("6.6.6.6,")).status, 429, "третий в socket-корзине — за пределами 2/мин (не отдельная «»-корзина)");
+    assert.equal((await go("5.5.5.5, ")).status, 200); // an empty tail → the socket bucket
+    assert.equal((await go(null)).status, 200); // a direct client — the same socket bucket
+    assert.equal((await go("6.6.6.6,")).status, 429, "the third in the socket bucket — beyond 2/min (not a separate \"\"-bucket)");
     assert.equal(scans, 2);
   } finally {
     server.close();
   }
 });
 
-// ---- R9-7: esc-хвосты витрины ----
+// ---- R9-7: esc tails of the vitrine ----
 
 function runClient() {
   const els = new Map();
@@ -204,15 +205,15 @@ function runClient() {
   return { sb, els };
 }
 
-test("vitrine: t.events из /summary эскейпится (недолет раунда 7)", () => {
+test("vitrine: t.events from /summary is escaped (the round-7 miss)", () => {
   const { sb, els } = runClient();
   sb.renderTokens([{ symbol: "TSTx", name: "T", issuer: "Backed", mint: SPYx, decimals: 8, events: "<img src=x onerror=alert(1)>", currentMultiplier: "1" }]);
   const html = els.get("tokens").innerHTML;
-  assert.ok(!html.includes("<img src=x"), "сырая инъекция не переживает");
+  assert.ok(!html.includes("<img src=x"), "the raw injection does not survive");
   assert.ok(html.includes("&lt;img"));
 });
 
-test("vitrine: dust калькулятора (remainder/den) эскейпится", async () => {
+test("vitrine: the calculator dust (remainder/den) is escaped", async () => {
   const { els, flush } = runClientCalc({
     multiplier: "1", date: "2026-07-01T00:00:00.000Z",
     sampleScaledQty: { exact: false, whole: "1", remainder: "<script>alert(2)</script>", den: "3" },
@@ -223,7 +224,7 @@ test("vitrine: dust калькулятора (remainder/den) эскейпитс�
   assert.ok(html.includes("&lt;script&gt;"));
 });
 
-test("vitrine: corruptionStat со строкой эскейпируется (возвращает разметку-строку)", () => {
+test("vitrine: corruptionStat with a string is escaped (returns a markup string)", () => {
   const { sb } = runClient();
   const html = sb.corruptionStat("<script>alert(3)</script>", "registry");
   assert.ok(!html.includes("<script>"));
@@ -261,32 +262,32 @@ function runClientCalc(multBody) {
 
 // ---- R9-8: SSRF — IPv4-mapped IPv6 ----
 
-test("подписки: ::ffff:127.0.0.1 и ::ffff:169.254.169.254 (metadata) отвергаются; публичный mapped — нет", () => {
+test("subscriptions: ::ffff:127.0.0.1 and ::ffff:169.254.169.254 (metadata) are rejected; a public mapped one — not", () => {
   for (const url of ["https://[::ffff:127.0.0.1]/hook", "https://[::ffff:a9fe:a9fe]/hook", "https://[0:0:0:0:0:ffff:7f00:1]/hook"]) {
-    assert.throws(() => sub(url), (err) => /url/.test(err.field ?? ""), `${url} должен быть отвергнут`);
+    assert.throws(() => sub(url), (err) => /url/.test(err.field ?? ""), `${url} must be rejected`);
   }
-  assert.doesNotThrow(() => sub("https://[::ffff:8.8.8.8]/hook"), "публичный embedded-v4 — легитимный адрес");
+  assert.doesNotThrow(() => sub("https://[::ffff:8.8.8.8]/hook"), "a public embedded-v4 — a legitimate address");
 });
 
 function sub(url) {
   return validateSubscription({ id: "wh_x", url, symbols: "*", secret: "s", createdAt: "2026-09-23T00:00:00.000Z", active: true });
 }
 
-// ---- R9-9: лок — живость владельца ----
+// ---- R9-9: the lock — the owner's liveness ----
 
-test("лок: ПРОТАХШИЙ по mtime лок с ЖИВЫМ pid НЕ ломается (SIGSTOP-владелец) — честный отказ", () => {
+test("lock: a lock STALE by mtime with a LIVE pid is NOT broken (a SIGSTOP owner) — an honest refusal", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-lock-r9-"));
   try {
     const store = path.join(dir, "webhooks.json");
-    // mtime старше staleMs, но pid — живой (мы): ломка по одному mtime = потеря
-    // обновления застрявшего владельца (TOCTOU из ROUND9 №9)
+    // mtime older than staleMs, but the pid is alive (ours): breaking on mtime alone = losing
+    // the update of a stuck owner (the TOCTOU of ROUND9 #9)
     writeFileSync(store + ".lock", JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
     utimesSync(store + ".lock", new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
     let mutated = false;
     assert.throws(
       () => withStoreLock(store, () => { mutated = true; return "mutated"; }, { staleMs: 10_000, attempts: 3, retryPauseMs: 1 }),
       (err) => /locked/i.test(err.message),
-      "живой владелец — ждём и отказываем, не ломаем",
+      "a live owner — we wait and refuse, not break",
     );
     assert.equal(mutated, false);
   } finally {
@@ -294,11 +295,11 @@ test("лок: ПРОТАХШИЙ по mtime лок с ЖИВЫМ pid НЕ лом
   }
 });
 
-test("лок: протухший лок с МЁРТВЫМ pid ломается и запись проходит", () => {
+test("lock: a stale lock with a DEAD pid is broken and the write goes through", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-lock2-r9-"));
   try {
     const store = path.join(dir, "webhooks.json");
-    // мёртвый pid: спавним и ждём выхода
+    // a dead pid: spawn one and wait for the exit
     const child = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
     assert.equal(child.status, 0);
     const deadPid = child.pid;
@@ -311,7 +312,7 @@ test("лок: протухший лок с МЁРТВЫМ pid ломается �
   }
 });
 
-test("лок: свежий чужой лок отпускается сам после staleMs (kill -9 сирота самоизлечивается)", () => {
+test("lock: a fresh foreign lock is released on its own after staleMs (a kill -9 orphan self-heals)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-lock3-r9-"));
   try {
     const store = path.join(dir, "webhooks.json");
@@ -320,15 +321,15 @@ test("лок: свежий чужой лок отпускается сам по�
     const t0 = Date.now();
     const out = withStoreLock(store, () => "ok", { staleMs: 100, attempts: 500, retryPauseMs: 5 });
     assert.equal(out, "ok");
-    assert.ok(Date.now() - t0 < 4000, "ждёт старения staleMs, не бесконечно");
+    assert.ok(Date.now() - t0 < 4000, "waits for staleMs aging, not forever");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-// ---- R9-10: atomic — 0600 на первой записи ----
+// ---- R9-10: atomic — 0600 on the first write ----
 
-test("atomic: новая запись секретного стора создаётся 0600 (Linux; win — без броска)", () => {
+test("atomic: a new secret-store write is created 0600 (Linux; win — no throw)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-atomic-r9-"));
   try {
     const target = path.join(dir, "state.json");
@@ -336,18 +337,18 @@ test("atomic: новая запись секретного стора созда
     const again = JSON.parse(readFileSync(target, "utf8"));
     assert.equal(again.a, 1);
     if (process.platform !== "win32") {
-      assert.equal(statSync(target).mode & 0o777, 0o600, "первая запись — 0600, не umask");
+      assert.equal(statSync(target).mode & 0o777, 0o600, "the first write — 0600, not the umask");
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-// ---- R9-11: rpc — тело-мусор и постоянные ошибки ----
+// ---- R9-11: rpc — a garbage body and persistent errors ----
 
 const jsonRpcRaw = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 
-test("rpc: HTTP 200 c JSON null/массивом — классифицированный network-ретрай, не голый TypeError/успех", async () => {
+test("rpc: HTTP 200 with JSON null/an array — a classified network retry, not a bare TypeError/success", async () => {
   for (const raw of ["null", "[]", "42"]) {
     let n = 0;
     const client = new RpcClient({
@@ -358,13 +359,13 @@ test("rpc: HTTP 200 c JSON null/массивом — классифициров�
     await assert.rejects(
       () => client.call("m", []),
       (err) => err instanceof RpcError && err.kind === "network",
-      `тело ${raw} — network-классификация`,
+      `the body ${raw} — network classification`,
     );
-    assert.equal(n, 2, "ретраится как сетевой мусор");
+    assert.equal(n, 2, "retried as network garbage");
   }
 });
 
-test("rpc: детерминированный код с rate-limit-текстом (-32602) — БЕЗ ретраев", async () => {
+test("rpc: a deterministic code with a rate-limit text (-32602) — WITHOUT retries", async () => {
   let n = 0;
   const client = new RpcClient({
     endpoint: "https://rpc.example",
@@ -375,7 +376,7 @@ test("rpc: детерминированный код с rate-limit-тексто�
   assert.equal(n, 1);
 });
 
-test("rpc: message-matched транзиент без кода — ретраится; исчерпание — kind rate-limit", async () => {
+test("rpc: a message-matched transient without a code — retried; exhaustion — kind rate-limit", async () => {
   let n = 0;
   const client = new RpcClient({
     endpoint: "https://rpc.example",
@@ -389,9 +390,9 @@ test("rpc: message-matched транзиент без кода — ретраит
   assert.equal(n, 2);
 });
 
-// ---- R9-14: schema-потолок amountPerUnitRaw ----
+// ---- R9-14: the schema ceiling of amountPerUnitRaw ----
 
-test("schema: amountPerUnitRaw выше MAX_SAFE_INTEGER — отказ (комментарии dividends.mjs становятся правдой)", () => {
+test("schema: amountPerUnitRaw above MAX_SAFE_INTEGER — refused (the comments of dividends.mjs become true)", () => {
   assert.throws(
     () => validateEvent({
       type: "DIVIDEND_ACCRUAL", mint: SPYx, effectiveDate: "2026-06-18T00:00:00.000Z",
@@ -401,9 +402,9 @@ test("schema: amountPerUnitRaw выше MAX_SAFE_INTEGER — отказ (ком�
   );
 });
 
-// ---- R9-15: канонизация legacy-журнала ----
+// ---- R9-15: legacy journal canonicalization ----
 
-test("journal: запись ДО канонизации (lastEffective «5.0») + цепь «5» — фантома НЕТ, запись канонизируется", async () => {
+test("journal: a record BEFORE canonicalization (lastEffective \"5.0\") + chain \"5\" — NO phantom, the record is canonicalized", async () => {
   const { parseScaledUiAmount } = await import("../src/issuer/scaled-ui.mjs");
   const settledFive = parseScaledUiAmount({
     owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
@@ -420,8 +421,8 @@ test("journal: запись ДО канонизации (lastEffective «5.0») 
     }],
   };
   const r = planJournalStep(TOKEN, legacy, settledFive);
-  assert.equal(r.event, null, "5.0 → 5 — та же величина, не событие");
-  assert.equal(r.entry.lastEffective, "5", "запись канонизирована при чтении");
+  assert.equal(r.event, null, "5.0 → 5 — the same value, not an event");
+  assert.equal(r.entry.lastEffective, "5", "the record is canonicalized on read");
   assert.equal(r.replay.length, 1);
-  assert.equal(r.replay[0].multiplierTo, "5", "история тоже канонизирована");
+  assert.equal(r.replay[0].multiplierTo, "5", "the history is canonicalized too");
 });

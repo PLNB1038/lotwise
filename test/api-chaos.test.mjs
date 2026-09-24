@@ -1,27 +1,27 @@
-// Adversarial/chaos-тесты HTTP API (src/api/server.mjs): добиваем сервер кривыми
-// входами и гонками. Контракт файла — каждый кейс пинит ФАКТИЧЕСКОЕ поведение
-// (статус / форма ответа / жив ли процесс), а не желаемое. Если поведение выглядит
-// странно, но определено и безопасно — оно пинится с пометкой «находка».
-// Таймаут-поведение (медленные внешние источники) сознательно НЕ тестируется:
-// в этом файле нет живых источников — все сторабы мгновенные.
+// Adversarial/chaos tests of the HTTP API (src/api/server.mjs): we drive the server into
+// broken inputs and races. The file's contract — every case pins the ACTUAL behavior
+// (status / response shape / is the process alive), not the desired one. If a behavior looks
+// strange but is defined and safe — it is pinned with a "finding" note.
+// Timeout behavior (slow external sources) is deliberately NOT tested:
+// there are no live sources in this file — all stubs are instant.
 //
-// Находки, зафиксированные здесь:
-//   1. [находка раунда N, исправлено и перепинено] `//events?...` парсился серверным
-//      new URL(req.url, base) как ПРОТОКОЛ-ОТНОСИТЕЛЬНАЯ ссылка: authority «events»
-//      выбрасывался, pathname становился «/», query терялся — клиент получал 200
-//      text/html главной страницы вместо 404/данных. Теперь ведущий «//» отсекается
-//      до парсинга: честный 404 JSON, но НЕ главная (пин в группе 2).
-//   2. [находка раунда N, исправлено и перепинено] 405 шёл без заголовка Allow (RFC 9110
-//      требует Allow в ответе 405) и HEAD получал 405 вместо семантики GET без тела —
-//      HEAD-пробы мониторинга отказывали на живых маршрутах. Теперь 405 несёт
-//      «Allow: GET, HEAD», HEAD на GET-маршруты — 200 с заголовками GET и пустым
-//      телом (пин в группе 2).
-//   3. `/%2e%2e/` и `/%2e%2e/health` — WHATWG URL нормализует сегменты «%2e%2e» до запроса
-//      к роутеру: traversal сводится к «/» и «/health», за корень не выйти (это хорошо и пинится).
-//   4. raw за пределами Number.MAX_SAFE_INTEGER (26 и 10240 цифр) считается ТОЧНО:
-//      в scaledQty BigInt-математика, строк тут нет — никакой потери точности.
-//   5. date=0000-01-01 принимается строгим парсером (год 0 — валидный канонический ISO
-//      проекта): неожиданно, но определено — множитель «1» (до всех событий).
+// Findings recorded here:
+//   1. [a finding of round N, fixed and re-pinned] `//events?...` was parsed by the server's
+//      new URL(req.url, base) as a PROTOCOL-RELATIVE reference: the authority "events"
+//      was discarded, pathname became "/", the query was lost — the client got 200
+//      text/html of the main page instead of 404/data. Now a leading "//" is cut off
+//      before parsing: an honest 404 JSON, but NOT the main page (the pin is in group 2).
+//   2. [a finding of round N, fixed and re-pinned] 405 went without the Allow header (RFC 9110
+//      requires Allow in a 405 response) and HEAD got 405 instead of GET semantics without a body —
+//      HEAD probes of monitoring failed on live routes. Now 405 carries
+//      "Allow: GET, HEAD", HEAD on GET routes — 200 with the GET headers and an empty
+//      body (the pin is in group 2).
+//   3. `/%2e%2e/` and `/%2e%2e/health` — WHATWG URL normalizes the "%2e%2e" segments before the
+//      router query: traversal reduces to "/" and "/health", you cannot escape the root (good, and pinned).
+//   4. raw beyond Number.MAX_SAFE_INTEGER (26 and 10240 digits) is computed EXACTLY:
+//      scaledQty is BigInt math, there are no strings here — no precision loss.
+//   5. date=0000-01-01 is accepted by the strict parser (year 0 — a valid canonical ISO
+//      of the project): unexpected, but defined — multiplier "1" (before all events).
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
@@ -34,18 +34,18 @@ import { fileURLToPath } from "node:url";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
-const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // валидный base58, как в round6-тестах
+const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // valid base58, as in the round6 tests
 
 const historyNodes = JSON.parse(readFileSync(path.join(dir, "xstocks-spyx-history-eth.json"), "utf8")).nodes;
 const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { symbol: "SPYx" }), SPYx);
 
-// Множитель SPYx на 2026-07-01: "1.005714560286254" → точная дробь (независимо от движка:
-// числа захардкожены, чтобы тест не доверял тем же функциям, что проверяет).
+// The SPYx multiplier on 2026-07-01: "1.005714560286254" → an exact fraction (regardless of the engine:
+// the numbers are hardcoded so the test does not trust the same functions it verifies).
 const NUM = 1005714560286254n;
 const DEN = 10n ** 15n;
 
-// Сервер с мгновенными сторабами внешних источников (живых источников в chaos-файле нет).
-// walletScanner/onchainReader при подстановке считают свои вызовы — это часть пинов.
+// A server with instant stubs of external sources (no live sources in the chaos file).
+// walletScanner/onchainReader count their calls when substituted — that is part of the pins.
 function makeStubs() {
   const stubs = {
     calls: { wallet: 0, onchain: 0 },
@@ -79,15 +79,15 @@ async function withServer(fn, optsFn = null) {
   }
 }
 
-// Сервер жив и отвечает контрактом /health — вызывается после каждой враждебной группы.
+// The server is alive and answers the /health contract — called after every hostile group.
 async function assertAlive(base) {
   const r = await fetch(`${base}/health`);
-  assert.equal(r.status, 200, "сервер жив после шторма");
+  assert.equal(r.status, 200, "the server is alive after the storm");
   assert.equal((await r.json()).ok, true);
 }
 
-// Сырой сокет для кейсов, которые fetch не отправит (кривой request-target, нет Host).
-// Читает статусную строку + заголовки (+ тело по Content-Length), затем рвёт соединение.
+// A raw socket for cases fetch will not send (a broken request-target, no Host).
+// Reads the status line + headers (+ the body by Content-Length), then tears the connection down.
 function rawRequest(port, payload) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -111,19 +111,19 @@ function rawRequest(port, payload) {
   });
 }
 
-// ---- группа 1: кривые query — symbol ----
+// ---- group 1: broken queries — symbol ----
 
-test("symbol с пробелами/юникодом/нуль-байтом — 400 «не трекается», без падения", async () => {
+test("a symbol with spaces/unicode/null-byte — 400 \"not tracked\", no crash", async () => {
   await withServer(async (base) => {
-    // все варианты — НЕ точное совпадение символа реестра → конвенция эндпоинтов: 400
+    // all variants are NOT an exact match of a registry symbol → the endpoints convention: 400
     const junk = ["%20", "SPYx%20", "%20SPYx", "%00", "SPYx%00", "%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82%F0%9F%94%A5", "SPY+x"];
     for (const s of junk) {
       assert.equal((await fetch(`${base}/events?symbol=${s}`)).status, 400, `/events symbol=${s}`);
       assert.equal((await fetch(`${base}/multiplier?symbol=${s}&raw=1000`)).status, 400, `/multiplier symbol=${s}`);
       assert.equal((await fetch(`${base}/onchain?symbol=${s}`)).status, 400, `/onchain symbol=${s}`);
     }
-    // поиск идёт ПО декодированному значению: «%78» — это «x», канонизация до lookup —
-    // обойти реестр процент-кодированием нельзя (и сломать lookup — тоже): честный 200
+    // the lookup goes over the DECODED value: "%78" is "x", canonicalization before the lookup —
+    // you cannot bypass the registry by percent-encoding (nor break the lookup): an honest 200
     const r = await fetch(`${base}/events?symbol=SPY%78`);
     assert.equal(r.status, 200);
     assert.equal((await r.json()).length, 4);
@@ -131,27 +131,27 @@ test("symbol с пробелами/юникодом/нуль-байтом — 40
   });
 });
 
-test("10KB-строка как symbol — 400, соединение и сервер живы", async () => {
+test("a 10KB string as symbol — 400, the connection and the server are alive", async () => {
   await withServer(async (base) => {
-    // 10240 символов: request-line ~10.3KB — под дефолтным капом заголовков node (16KB),
-    // так что добираемся до роутера: реестр не содержит такой символ → 400
+    // 10240 chars: a request-line ~10.3KB — under the default node header cap (16KB),
+    // so we reach the router: the registry contains no such symbol → 400
     const res = await fetch(`${base}/events?symbol=${"A".repeat(10240)}`);
     assert.equal(res.status, 400);
     await assertAlive(base);
   });
 });
 
-// ---- группа 1: кривые query — raw ----
+// ---- group 1: broken queries — raw ----
 
-test("raw: 0 валиден (точный ноль), нотации/пробелы/нуль-байт/пустое — 400", async () => {
+test("raw: 0 is valid (an exact zero), notations/spaces/null-byte/empty — 400", async () => {
   await withServer(async (base) => {
-    // «0» — валидные ноль базовых единиц: exact ноль, а не ошибка
+    // "0" — a valid zero of base units: an exact zero, not an error
     const r0 = await fetch(`${base}/multiplier?symbol=SPYx&raw=0&date=2026-07-01`);
     assert.equal(r0.status, 200);
     const j0 = await r0.json();
     assert.equal(j0.sampleScaledQty.exact, true);
     assert.equal(j0.sampleScaledQty.whole, "0");
-    // существующие тесты пинят 0x10/-5/abc/1.5; здесь классы, которых там нет:
+    // the existing tests pin 0x10/-5/abc/1.5; here are the classes missing there:
     for (const raw of ["1e10", "+5", "%205", "5%00", "5.0", ""]) {
       assert.equal(
         (await fetch(`${base}/multiplier?symbol=SPYx&raw=${raw}&date=2026-07-01`)).status,
@@ -163,45 +163,45 @@ test("raw: 0 валиден (точный ноль), нотации/пробел
   });
 });
 
-test("raw за Number.MAX_SAFE_INTEGER — точная BigInt-математика, потеря точности не наступает", async () => {
+test("raw beyond Number.MAX_SAFE_INTEGER — exact BigInt math, no precision loss occurs", async () => {
   await withServer(async (base) => {
-    // 26 девяток (~1e26, в 10 миллиардов раз больше MAX_SAFE_INTEGER ≈ 9e15):
-    // движок считает в BigInt (scaledQty) — ответ обязан совпасть с точным ожиданием
+    // 26 nines (~1e26, ten billion times more than MAX_SAFE_INTEGER ≈ 9e15):
+    // the engine computes in BigInt (scaledQty) — the answer must match the exact expectation
     const raw26 = "9".repeat(26);
     const r = await fetch(`${base}/multiplier?symbol=SPYx&raw=${raw26}&date=2026-07-01`);
     assert.equal(r.status, 200);
     const j = await r.json();
     const expected = (BigInt(raw26) * NUM) / DEN;
-    assert.equal(j.sampleScaledQty.whole, expected.toString()); // 99999999999999999999999999 × 1.0057… без округления float
+    assert.equal(j.sampleScaledQty.whole, expected.toString()); // 99999999999999999999999999 × 1.0057… without float rounding
     assert.equal(j.sampleScaledQty.den, DEN.toString());
 
-    // 10240 цифр: и точность, и отсутствие зависания на умножении больших чисел
+    // 10240 digits: both the precision and the absence of a hang on multiplying large numbers
     const rawBig = "9".repeat(10240);
     const rb = await fetch(`${base}/multiplier?symbol=SPYx&raw=${rawBig}&date=2026-07-01`);
     assert.equal(rb.status, 200);
     const jb = await rb.json();
     assert.equal(jb.sampleScaledQty.whole, ((BigInt(rawBig) * NUM) / DEN).toString());
-    assert.ok(jb.sampleScaledQty.whole.length > 10000); // ~10241 цифра — не свернулся в экспоненту/NaN
+    assert.ok(jb.sampleScaledQty.whole.length > 10000); // ~10241 digits — did not collapse into an exponent/NaN
     await assertAlive(base);
   });
 });
 
-// ---- группа 1: кривые query — date ----
+// ---- group 1: broken queries — date ----
 
-test("битые даты (перекаты, 24:00, 23:59:60, оффсет +99:99, нуль-байт, пустая) — 400, ридер не дёрган", async () => {
+test("broken dates (roll-overs, 24:00, 23:59:60, an offset +99:99, a null-byte, empty) — 400, the reader is not hit", async () => {
   await withServer(async (base, stubs) => {
-    // существующие тесты пинят garbage/2026-1-1/наивное время/2026-13-01; здесь остальные
-    // классы мусора, включая перекаты, которые Date.parse «перекатывал» молча
+    // the existing tests pin garbage/2026-1-1/naive time/2026-13-01; here the remaining
+    // garbage classes, including roll-overs that Date.parse "rolled over" silently
     const bad = [
-      "2026-02-30", // перекат на 2 марта
-      "2026-06-31", // перекат на 1 июля
-      "2027-02-29", // не високосный
-      "2026-06-18T24:00:00Z", // 24:00 — не время
-      "2026-06-18T23:59:60Z", // високосная секунда
-      "2026-06-18T12:00:00+99:99", // оффсет вне диапазона
-      "2026-07-01%00", // нуль-байт после валидной формы
-      "", // пустая — НЕ дефолт «сейчас», а честный 400
-      "%F0%9F%94%A5", // эмодзи
+      "2026-02-30", // rolled over to March 2
+      "2026-06-31", // rolled over to July 1
+      "2027-02-29", // not a leap year
+      "2026-06-18T24:00:00Z", // 24:00 — not a time
+      "2026-06-18T23:59:60Z", // a leap second
+      "2026-06-18T12:00:00+99:99", // an offset out of range
+      "2026-07-01%00", // a null-byte after a valid form
+      "", // empty — NOT the "now" default, but an honest 400
+      "%F0%9F%94%A5", // an emoji
     ];
     for (const d of bad) {
       assert.equal(
@@ -215,53 +215,53 @@ test("битые даты (перекаты, 24:00, 23:59:60, оффсет +99:9
         `/onchain date=${JSON.stringify(decodeURIComponent(d))}`,
       );
     }
-    assert.equal(stubs.calls.onchain, 0); // мусор не греет кэш реальными вызовами
+    assert.equal(stubs.calls.onchain, 0); // garbage does not warm the cache with real calls
     await assertAlive(base);
   });
 });
 
-test("граничные валидные даты не отвергаются: високос 2024-02-29, оффсет -05:00, год 0000", async () => {
+test("boundary valid dates are not rejected: the 2024-02-29 leap, the -05:00 offset, year 0000", async () => {
   await withServer(async (base) => {
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1000&date=2024-02-29`)).status, 200);
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1000&date=2026-06-18T12:00:00-05:00`)).status, 200);
-    // находка: год 0 — валидный канонический ISO проекта (setUTCFullYear(0)); определено,
-    // пусть и неожиданно: множитель «1» — до всех событий 2026 года
+    // a finding: year 0 — a valid canonical ISO of the project (setUTCFullYear(0)); defined,
+    // if unexpected: multiplier "1" — before all the 2026 events
     const r = await fetch(`${base}/multiplier?symbol=SPYx&date=0000-01-01`);
     assert.equal(r.status, 200);
     const j = await r.json();
     assert.equal(j.multiplier, "1");
-    assert.equal(j.date, "0000-01-01"); // ответ эхом отдаёт введённую дату как есть
+    assert.equal(j.date, "0000-01-01"); // the response echoes the input date as is
     await assertAlive(base);
   });
 });
 
-// ---- группа 1: дубли и пустые значения ----
+// ---- group 1: duplicates and empty values ----
 
-test("дубли параметров: URLSearchParams.get берёт ПЕРВОЕ вхождение", async () => {
+test("duplicate parameters: URLSearchParams.get takes the FIRST occurrence", async () => {
   await withServer(async (base) => {
-    // symbol: первый мусор, второй валидный → мусор побеждает → 400 (и наоборот → 200)
+    // symbol: the first garbage, the second valid → garbage wins → 400 (and the reverse → 200)
     assert.equal((await fetch(`${base}/events?symbol=NOPE&symbol=SPYx`)).status, 400);
     const ok = await fetch(`${base}/events?symbol=SPYx&symbol=NOPE`);
     assert.equal(ok.status, 200);
     assert.equal((await ok.json()).length, 4);
-    // raw: первый битый → 400, первый валидный → 200 (второй молча игнорируется — находка:
-    // «raw=abc&raw=1000» не ошибка парсинга, а отказ по первому; двойного ключа нет)
+    // raw: the first broken → 400, the first valid → 200 (the second is silently ignored — a finding:
+    // "raw=abc&raw=1000" is not a parse error but a refusal by the first; there is no double key)
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=abc&raw=1000`)).status, 400);
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1000&raw=abc`)).status, 200);
-    // date: то же первое вхождение
+    // date: the same first occurrence
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&date=2026-07-01&date=zzz`)).status, 200);
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&date=zzz&date=2026-07-01`)).status, 400);
     await assertAlive(base);
   });
 });
 
-test("пустые значения query и кривые адреса /lots — честные 400", async () => {
+test("empty query values and broken /lots addresses — honest 400s", async () => {
   await withServer(async (base) => {
     assert.equal((await fetch(`${base}/events?symbol=`)).status, 400);
     const noAddr = await fetch(`${base}/lots?address=`);
     assert.equal(noAddr.status, 400);
     assert.match((await noAddr.json()).error, /address required/);
-    // адресная валидация base58: пробел, 45 символов, не-base58 алфавит (O/0/I/l), юникод
+    // base58 address validation: a space, 45 chars, non-base58 alphabet (O/0/I/l), unicode
     for (const a of ["%20", `${OWNER}x`, "O".concat("0".repeat(43)), "%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82", "0".repeat(44)]) {
       assert.equal((await fetch(`${base}/lots?address=${a}`)).status, 400, `address=${decodeURIComponent(a).slice(0, 10)}…`);
     }
@@ -269,7 +269,7 @@ test("пустые значения query и кривые адреса /lots —
   });
 });
 
-test("/lots с валидным адресом и пустым сканом — 200 с пустым отчётом, сканер вызван ровно раз", async () => {
+test("/lots with a valid address and an empty scan — 200 with an empty report, the scanner called exactly once", async () => {
   await withServer(
     async (base, stubs) => {
       const r = await fetch(`${base}/lots?address=${OWNER}`);
@@ -283,31 +283,31 @@ test("/lots с валидным адресом и пустым сканом — 
   );
 });
 
-// ---- группа 2: методы и протокол ----
+// ---- group 2: methods and protocol ----
 
-test("методы ≠ GET — 405 с заголовком Allow (RFC 9110); HEAD — семантика GET без тела", async () => {
+test("methods ≠ GET — 405 with the Allow header (RFC 9110); HEAD — GET semantics without a body", async () => {
   await withServer(async (base) => {
-    // было находкой (Allow отсутствовал) — теперь 405 обязан его нести: клиент видит,
-    // какие методы допустимы, не перебирая их вслепую
+    // used to be a finding (Allow was missing) — now a 405 must carry it: the client sees
+    // which methods are allowed without blindly probing them
     for (const method of ["OPTIONS", "POST", "PUT", "PATCH", "DELETE"]) {
       const r = await fetch(`${base}/health`, { method });
       assert.equal(r.status, 405, method);
       const j = await r.json();
       assert.match(j.error, /method not allowed/);
-      assert.equal(r.headers.get("allow"), "GET, HEAD", `${method}: 405 без Allow — нарушение RFC 9110`);
+      assert.equal(r.headers.get("allow"), "GET, HEAD", `${method}: a 405 without Allow — an RFC 9110 violation`);
     }
-    // HEAD на GET-маршруты больше не 405: статус и заголовки как у GET, тела нет
-    // (node отбрасывает body у HEAD сам, Content-Length остаётся от GET-выдачи)
+    // HEAD on GET routes is no longer 405: the status and headers like GET, no body
+    // (node drops the body of HEAD itself, Content-Length stays from the GET output)
     const h = await fetch(`${base}/health`, { method: "HEAD" });
     assert.equal(h.status, 200);
     assert.match(h.headers.get("content-type"), /application\/json/);
-    assert.ok(Number(h.headers.get("content-length")) > 0, "Content-Length как у GET");
-    assert.equal((await h.text()).length, 0, "HEAD: тела нет");
+    assert.ok(Number(h.headers.get("content-length")) > 0, "Content-Length like GET");
+    assert.equal((await h.text()).length, 0, "HEAD: no body");
     const page = await fetch(`${base}/`, { method: "HEAD" });
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-type"), /text\/html/);
-    assert.equal((await page.text()).length, 0, "HEAD на «/»: тела нет");
-    // 404 под HEAD тоже жив: статус честный, тела нет
+    assert.equal((await page.text()).length, 0, "HEAD on \"/\": no body");
+    // 404 under HEAD is alive too: the status is honest, no body
     const nf = await fetch(`${base}/nope`, { method: "HEAD" });
     assert.equal(nf.status, 404);
     assert.equal((await nf.text()).length, 0);
@@ -315,55 +315,55 @@ test("методы ≠ GET — 405 с заголовком Allow (RFC 9110); HEA
   });
 });
 
-test("/health с query-мусором — 200 ok:true (query игнорируется); не-ASCII путь — 404 JSON", async () => {
+test("/health with query garbage — 200 ok:true (the query is ignored); a non-ASCII path — a 404 JSON", async () => {
   await withServer(async (base) => {
     const r = await fetch(`${base}/health?junk=1&x=%00&symbol=${"A".repeat(2048)}`);
     assert.equal(r.status, 200);
     assert.equal((await r.json()).ok, true);
-    const nf = await fetch(`${base}/${encodeURIComponent("привет🔥")}`);
+    const nf = await fetch(`${base}/${encodeURIComponent("hello🔥")}`);
     assert.equal(nf.status, 404);
     const nfBody = await nf.json();
     assert.match(nfBody.error, /not found/);
-    assert.ok(Array.isArray(nfBody.endpoints)); // форма 404 не деградировала
+    assert.ok(Array.isArray(nfBody.endpoints)); // the 404 shape did not degrade
     await assertAlive(base);
   });
 });
 
-test("//double//slash — протокол-относительный request-target: честный 404, НЕ главная (перепинено)", async () => {
+test("//double//slash — a protocol-relative request-target: an honest 404, NOT the main page (re-pinned)", async () => {
   await withServer(async (base) => {
-    // было: new URL("//events?symbol=SPYx", base) видел authority «events», pathname «/»,
-    // query терялся — клиент получал 200 text/html главной страницы. Стало: ведущий «//»
-    // отсекается ДО парсинга — это чужой authority (не наш хост), честный 404 JSON.
-    // Молча отдавать «/» — слепота маршрутизации; канонизировать в «/events» —
-    // поощрение кривых request-target, поэтому пиним именно 404.
+    // was: new URL("//events?symbol=SPYx", base) saw the authority "events", pathname "/",
+    // the query was lost — the client got 200 text/html of the main page. Now: the leading "//"
+    // is cut off BEFORE parsing — that is a foreign authority (not our host), an honest 404 JSON.
+    // Silently serving "/" is routing blindness; canonicalizing into "/events" would
+    // encourage broken request-targets, so we pin exactly the 404.
     const r = await fetch(`${base}//events?symbol=SPYx`);
     assert.equal(r.status, 404);
     assert.match(r.headers.get("content-type"), /application\/json/);
     const body = await r.json();
     assert.match(body.error, /not found/);
-    assert.ok(Array.isArray(body.endpoints)); // форма 404 не деградировала
-    // query в «//x»-форме не прощается ни для какого маршрута
+    assert.ok(Array.isArray(body.endpoints)); // the 404 shape did not degrade
+    // the query in the "//x" form is not forgiven for any route
     const r2 = await fetch(`${base}//multiplier?symbol=SPYx&raw=1000`);
     assert.equal(r2.status, 404);
     assert.match(r2.headers.get("content-type"), /application\/json/);
-    // обычные слэши ВНУТРИ пути не тронуты гвардом: маршрут по-прежнему отвечает
+    // ordinary slashes INSIDE the path are untouched by the guard: the route still answers
     const nested = await fetch(`${base}/health`);
     assert.equal(nested.status, 200);
     await assertAlive(base);
   });
 });
 
-test("/%2e%2e/ — WHATWG-нормализация до роутера: traversal не выходит за корень", async () => {
+test("/%2e%2e/ — WHATWG normalization before the router: traversal does not escape the root", async () => {
   await withServer(async (base) => {
-    // «%2e%2e» = «..» для WHATWG URL: «/%2e%2e/» → «/» (страница), «/%2e%2e/health» → «/health».
-    // Обхода на другой хост/путь нет — пиним нормализацию как защиту.
+    // "%2e%2e" = ".." for WHATWG URL: "/%2e%2e/" → "/" (the page), "/%2e%2e/health" → "/health".
+    // No escape to another host/path — we pin the normalization as a defense.
     const root = await fetch(`${base}/%2e%2e/`);
     assert.equal(root.status, 200);
     assert.match(root.headers.get("content-type"), /text\/html/);
     const h = await fetch(`${base}/%2e%2e/health`);
     assert.equal(h.status, 200);
     assert.equal((await h.json()).ok, true);
-    // «/../health» нормализует уже undici на клиенте — сервер видит «/health»
+    // "/../health" is normalized by undici on the client already — the server sees "/health"
     const dotdot = await fetch(`${base}/../health`);
     assert.equal(dotdot.status, 200);
     assert.equal((await dotdot.json()).ok, true);
@@ -371,15 +371,15 @@ test("/%2e%2e/ — WHATWG-нормализация до роутера: traversa
   });
 });
 
-test("raw socket: request-target «http://:80/» — 400 malformed target, процесс жив (краш-вектор из прошлого)", async () => {
+test("raw socket: the request-target \"http://:80/\" — a 400 malformed target, the process alive (a past crash vector)", async () => {
   await withServer(async (base) => {
     const { port } = new URL(base);
-    // fetch такой request-target не отправит — только сырой сокет. Ловля в server.mjs
-    // (ERR_INVALID_URL) раньше отсутствовала и роняла процесс одним запросом.
+    // fetch will not send such a request-target — only a raw socket. The catch in server.mjs
+    // (ERR_INVALID_URL) used to be missing and killed the process with a single request.
     const buf = await rawRequest(Number(port), "GET http://:80/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
     assert.match(buf, /^HTTP\/1\.1 400/);
-    assert.match(buf, /malformed request target/); // это наш handler-400, не парсер node
-    // HTTP/1.1 без обязательного Host — 400 от самого парсера node, соединение закрывается
+    assert.match(buf, /malformed request target/); // that is our handler-400, not the node parser
+    // HTTP/1.1 without the mandatory Host — a 400 from the node parser itself, the connection closes
     const noHost = await rawRequest(Number(port), "GET /health HTTP/1.1\r\n\r\n");
     assert.match(noHost, /^HTTP\/1\.1 400/);
     assert.match(noHost, /Connection: close/i);
@@ -387,9 +387,9 @@ test("raw socket: request-target «http://:80/» — 400 malformed target, пр�
   });
 });
 
-// ---- группа 3: конкурентность ----
+// ---- group 3: concurrency ----
 
-test("50 одновременных запросов по смешанным маршрутам — все отвечают ожидаемо, сервер жив после шторма", async () => {
+test("50 concurrent requests over mixed routes — all answer as expected, the server alive after the storm", async () => {
   await withServer(
     async (base) => {
       const plan = [
@@ -397,7 +397,7 @@ test("50 одновременных запросов по смешанным м�
         ["/summary", 200],
         ["/tokens?issuer=tessera", 200],
         [`/events?symbol=SPYx`, 200],
-        [`/events?symbol=SPYx&type=NOPE`, 400], // ROUND13: мусорный type — честный отказ, не тихий []
+        [`/events?symbol=SPYx&type=NOPE`, 400], // ROUND13: a garbage type — an honest refusal, not a silent []
         [`/events`, 400],
         [`/multiplier?symbol=SPYx&raw=100000000&date=2026-07-01`, 200],
         [`/multiplier?symbol=SPYx&raw=abc`, 400],
@@ -421,23 +421,23 @@ test("50 одновременных запросов по смешанным м�
         }),
       );
       for (const { url, expect, status } of results) {
-        assert.equal(status, expect, `${url} → ${status}, ожидалось ${expect}`);
+        assert.equal(status, expect, `${url} → ${status}, expected ${expect}`);
       }
-      await assertAlive(base); // после шторма сервер жив и отвечает контрактом
+      await assertAlive(base); // after the storm the server is alive and answers the contract
     },
     (stubs) => ({ walletScanner: stubs.walletScanner, onchainReader: stubs.onchainReader }),
   );
 });
 
-test("два одновременных запроса к одному ресурсу: первый рендер «/» и /multiplier — ответы идентичны, гонки кэша нет", async () => {
+test("two concurrent requests to one resource: the first render of \"/\" and /multiplier — identical responses, no cache races", async () => {
   await withServer(async (base) => {
-    // оба приходят ДО первого рендера: pageHtml ??= renderPage() синхронен, окна гонки нет —
-    // пиним отсутствие «stampede» (двойного рендера/расхождения тел)
+    // both arrive BEFORE the first render: pageHtml ??= renderPage() is synchronous, there is no race window —
+    // we pin the absence of a "stampede" (a double render/divergent bodies)
     const [a, b] = await Promise.all([fetch(`${base}/`), fetch(`${base}/`)]);
     assert.equal(a.status, 200);
     assert.equal(b.status, 200);
     assert.equal(await a.text(), await b.text());
-    // то же для кэшируемого вычисления — два параллельных /multiplier идентичны
+    // the same for the cacheable computation — two parallel /multiplier are identical
     const url = `${base}/multiplier?symbol=SPYx&raw=100000000&date=2026-07-01`;
     const [m1, m2] = await Promise.all([fetch(url), fetch(url)]);
     assert.equal(m1.status, 200);

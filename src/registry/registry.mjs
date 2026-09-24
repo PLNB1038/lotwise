@@ -1,4 +1,4 @@
-// Реестр отслеживаемых токенизированных акций (data/tokens.json).
+// Registry of tracked tokenized stocks (data/tokens.json).
 import { readFile } from "node:fs/promises";
 import { preserveCorruptedFile } from "../fs/atomic.mjs";
 
@@ -33,24 +33,24 @@ export async function loadRegistry(path = "data/tokens.json") {
   return validateRegistry(list);
 }
 
-// Бут с деградацией вместо смерти процесса (раунд 6, LW2_tokens_json_write_non_atomic).
-// Усечённый data/tokens.json (обрыв в окне записи enrich-decimals, диск)
-// вылетал RegistryError на top-level serve.mjs → unhandled rejection: процесс не
-// поднимался вообще, деградированного режима не существовало, класс «повреждён» не
-// различался (в отличие от журнала, где тот же класс чинился в раунде 5).
+// Boot with degradation instead of process death (round 6, LW2_tokens_json_write_non_atomic).
+// A truncated data/tokens.json (an interrupted write in the enrich-decimals window, disk)
+// crashed with RegistryError at top-level serve.mjs → unhandled rejection: the process
+// did not come up at all, no degraded mode existed, and the "corrupted" class was not
+// distinguished (unlike the journal, where the same class was fixed in round 5).
 
 /**
- * Загрузка реестра с различением «файла нет», «повреждён» и «здоров».
- * Повреждение — явное состояние по паттерну журнала (раунд 5): улика сохраняется
- * рядом (rename, при срыве — copy; см. preserveCorruptedFile), бут продолжается на
- * пустом реестре, corrupted-флаг уходит в /health (registry.corrupted).
+ * Registry load distinguishing "file absent", "corrupted" and "healthy".
+ * Corruption is an explicit state following the journal pattern (round 5): the evidence is
+ * preserved nearby (rename, falling back to copy on failure; see preserveCorruptedFile), boot
+ * continues on an empty registry, the corrupted flag goes to /health (registry.corrupted).
  * @param {string} path
  * @param {{nowMs?: number, attempts?: number, rename?: Function, copy?: Function}} [preserveOpts]
  * @returns {{ok: boolean, corrupted: boolean, registry: Array, reason: string|null,
  *            backup: string|null, preserveFailed: boolean}}
- *   файла нет (ENOENT) → corrupted=false: это не повреждение, реестр просто не собран;
- *   прочитан, но не парсится / не валиден → corrupted=true + улика рядом;
- *   нечитаем (EBUSY/права) → corrupted=true, улику сохранить обычно нечем.
+ *   file absent (ENOENT) → corrupted=false: this is not corruption, the registry is just not built yet;
+ *   read but unparseable / invalid → corrupted=true + evidence preserved nearby;
+ *   unreadable (EBUSY/permissions) → corrupted=true, usually no way to preserve the evidence.
  */
 export async function loadRegistrySafe(path = "data/tokens.json", preserveOpts = {}) {
   let raw;
@@ -103,7 +103,7 @@ export function validateRegistryEntry(entry) {
   return true;
 }
 
-// Строгая валидация всего списка: каждая запись корректна, минты и символы уникальны.
+// Strict validation of the whole list: every entry valid, mints and symbols unique.
 export function validateRegistry(list) {
   const mints = new Set();
   const symbols = new Set();

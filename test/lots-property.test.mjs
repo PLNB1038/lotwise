@@ -1,51 +1,51 @@
-// Property-тесты FIFO-движка отчёта (buildWalletReport, src/wallet/report.mjs).
+// Property tests of the FIFO engine of the report (buildWalletReport, src/wallet/report.mjs).
 //
-// ЗАМЕТКА ОБ ОБЛАСТИ: формально в задании назван src/lots/lots.mjs, но это движок
-// корпоративных действий (SPLIT/MERGER/REDEEM/...) — операций buy/sell там нет.
-// FIFO-движок покупок/продаж живёт в src/wallet/report.mjs (buildWalletReport);
-// его контракт и пины фактического поведения — «Группа 3. FIFO-движок отчёта»
-// в test/wallet-edge.test.mjs и FIFO-тесты в test/wallet.test.mjs. Покрытие ниже —
-// по этому движку.
+// A NOTE ON SCOPE: formally the assignment names src/lots/lots.mjs, but that is the engine
+// of corporate actions (SPLIT/MERGER/REDEEM/...) — there are no buy/sell operations there.
+// The FIFO engine of buys/sells lives in src/wallet/report.mjs (buildWalletReport);
+// its contract and pins of the actual behavior — "Group 3. The FIFO engine of the report"
+// in test/wallet-edge.test.mjs and the FIFO tests in test/wallet.test.mjs. The coverage below —
+// over that engine.
 //
-// Методика: seeded PRNG (mulberry32, без зависимостей) генерирует 200 сценариев
-// по 5–40 операций buy/sell/zero-qty: количества BigInt 1..1000n, монотонные
-// времена; ~25% продаж — целевой перерасход баланса (движок ест недостачу как гэп).
+// Method: a seeded PRNG (mulberry32, dependency-free) generates 200 scenarios
+// of 5–40 buy/sell/zero-qty operations: BigInt quantities 1..1000n, monotonic
+// times; ~25% of sells — a targeted overdraft of the balance (the engine eats the shortage as a gap).
 //
-// Фактическая семантика перерасхода, запиненная в wallet-edge («перерасход после
-// частичной продажи — гэп = недостача», buy 100 → sell 40 → sell 80: lots=0,
+// The actual overdraft semantics pinned in wallet-edge ("an overdraft after a
+// partial sale — a gap = the shortage", buy 100 → sell 40 → sell 80: lots=0,
 // realized=100, gap=20):
-//   продано  = реализовано + гэп;
-//   куплено  = реализовано + живые лоты;
-//   netDelta = куплено − продано (может быть отрицательным — так и задумано);
-//   куплено − продано + гэп = живые лоты.
+//   sold     = realized + gap;
+//   bought   = realized + live lots;
+//   netDelta = bought − sold (it may be negative — by design);
+//   bought − sold + gap = live lots.
 //
-// Инварианты (на каждом сценарии, BigInt-точно):
-//   1. сохранение: три формы выше + netDelta + производная complete;
-//   2. неотрицательность всех количеств; ноль-лотов в очереди не бывает
-//      (netDelta отрицательным быть может — документированная семантика окна);
-//   3. FIFO: выжившие лоты — непрерывный возрастающий суффикс номеров покупок,
-//      заканчивающийся последней покупкой; все лоты кроме, возможно, первого —
-//      нетронутые (qty и acquiredDate равны исходной покупке); дата лота —
-//      всегда дата его покупки;
-//   4. след каждой продажи: gaps ≤ nSells ≤ realizedCount + |gaps|;
-//      realizedCount>0 ⇔ realizedQty>0; гэпы > 0, даты гэпов — из продаж;
-//   5. zero-qty операции не меняют состояние: удаление их из потока даёт
-//      те же tokens (deep-equal);
-//   6. детерминизм: seed константой; повторный прогон — идентичный JSON;
-//      при падении ассерт печатает seed, номер сценария и всю последовательность.
+// Invariants (on every scenario, BigInt-exact):
+//   1. conservation: the three forms above + netDelta + the derived complete;
+//   2. non-negativity of all quantities; there are no zero lots in the queue
+//      (netDelta may be negative — the documented semantics of the window);
+//   3. FIFO: the surviving lots — a continuous increasing suffix of purchase numbers,
+//      ending with the last purchase; all lots except, possibly, the first —
+//      untouched (qty and acquiredDate equal the original purchase); a lot's date —
+//      always the date of its purchase;
+//   4. a trace of every sell: gaps ≤ nSells ≤ realizedCount + |gaps|;
+//      realizedCount>0 ⇔ realizedQty>0; gaps > 0, the gap dates — from sells;
+//   5. zero-qty operations do not change the state: removing them from the stream gives
+//      the same tokens (deep-equal);
+//   6. determinism: the seed is a constant; a repeated run — an identical JSON;
+//      on a failure the assert prints the seed, the scenario number and the whole sequence.
 //
-// Если инвариант ловит баг движка — src НЕ правится: последовательность
-// минимизируется и фиксируется явным регрессионным кейсом внизу этого файла
-// (см. шаблон в хвосте; сейчас найденных багов нет — секция пуста).
+// If an invariant catches an engine bug — src is NOT edited: the sequence
+// is minimized and recorded as an explicit regression case at the bottom of this file
+// (see the template at the tail; there are no found bugs now — the section is empty).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildWalletReport } from "../src/wallet/report.mjs";
 
 // ---------------------------------------------------------------------------
-// Seeded PRNG (mulberry32) и генератор сценариев
+// The seeded PRNG (mulberry32) and the scenario generator
 // ---------------------------------------------------------------------------
 
-const SEED = 0x1a7be3f; // константа: при падении инварианта сценарий воспроизводим
+const SEED = 0x1a7be3f; // a constant: on an invariant failure the scenario is reproducible
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -57,7 +57,7 @@ function mulberry32(seed) {
   };
 }
 
-// строго base58-подобные минты без «-» (id лота = `${mint}-${№покупки}`)
+// strictly base58-like mints without "-" (a lot id = `${mint}-<purchase #>`)
 const MINTS = [
   "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
   "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
@@ -72,15 +72,15 @@ const REG = [
 const rndInt = (rng, lo, hi) => lo + Math.floor(rng() * (hi - lo + 1));
 const isoOf = (blockTime) => new Date(blockTime * 1000).toISOString();
 
-// Сценарий: 1–2 минта, 5–40 операций buy/sell/zero-qty, монотонные времена.
-// op.over = целевой перерасход (продажа больше текущего баланса окна).
+// A scenario: 1–2 mints, 5–40 buy/sell/zero-qty operations, monotonic times.
+// op.over = a targeted overdraft (a sell larger than the current window balance).
 function makeScenario(index, rng) {
   const nMints = rng() < 0.5 ? 1 : 2;
   const first = Math.floor(rng() * MINTS.length);
   const mintList = nMints === 2 ? [first, 1 - first] : [first];
   const nOps = rndInt(rng, 5, 40);
   let t = 1_700_000_000 + index;
-  const bal = new Array(nMints).fill(0n); // текущий нетто-баланс окна по минту
+  const bal = new Array(nMints).fill(0n); // the current net window balance per mint
   const ops = [];
   for (let i = 0; i < nOps; i++) {
     const mintIdx = Math.floor(rng() * mintList.length);
@@ -91,7 +91,7 @@ function makeScenario(index, rng) {
     if (kind === "buy") {
       qty = BigInt(rndInt(rng, 1, 1000));
     } else if (kind === "sell") {
-      // 25% продаж — гарантированный перерасход: баланс + хвост (движок ест как гэп)
+      // 25% of sells — a guaranteed overdraft: the balance + a tail (the engine eats it as a gap)
       if (bal[mintIdx] > 0n && rng() < 0.25) {
         qty = bal[mintIdx] + BigInt(rndInt(rng, 1, 500));
         over = true;
@@ -99,7 +99,7 @@ function makeScenario(index, rng) {
         qty = BigInt(rndInt(rng, 1, 1000));
       }
     }
-    t += rndInt(rng, 1, 7200); // монотонное время, строго возрастает
+    t += rndInt(rng, 1, 7200); // monotonic time, strictly increasing
     ops.push({ mintIdx, kind, qty, over, blockTime: t });
     if (kind === "buy") bal[mintIdx] += qty;
     else if (kind === "sell") bal[mintIdx] -= qty;
@@ -111,7 +111,7 @@ const RNG = mulberry32(SEED);
 const SCENARIOS = Array.from({ length: 200 }, (_, i) => makeScenario(i, RNG));
 
 // ---------------------------------------------------------------------------
-// Прогон сценария через движок и независимая модель из операций генератора
+// Running a scenario through the engine and an independent model from the generator's operations
 // ---------------------------------------------------------------------------
 
 const deltaRawOf = (op) => (op.kind === "buy" ? op.qty : op.kind === "sell" ? -op.qty : 0n);
@@ -128,15 +128,15 @@ const scanOf = (txs) => ({
   owner: OWNER, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, accounts: {},
 });
 
-// now фиксирован: buildWalletReport по умолчанию ставит new Date().toISOString()
-// (параметр opts, не детерминизм движка); с фиксированным now отчёт — чистая
-// функция от скана.
+// now is fixed: buildWalletReport by default sets new Date().toISOString()
+// (an opts parameter, not engine determinism); with a fixed now the report is a pure
+// function of the scan.
 const NOW = "2026-09-22T00:00:00.000Z";
 const reportOf = (sc) => buildWalletReport(scanOf(opsToTxs(sc)), { registry: REG, now: NOW });
 
-// Модель считается ТОЛЬКО из сгенерированных операций (не повторяет логику FIFO):
-// агрегаты куплено/продано, список покупок в порядке очерёдности (это будущие
-// лоты с номерами 1..nBuys) и множество дат продаж.
+// The model is computed ONLY from the generated operations (it does not repeat the FIFO logic):
+// the bought/sold aggregates, the purchase list in queue order (these are the future
+// lots with numbers 1..nBuys) and the set of sell dates.
 function modelOf(sc) {
   const per = new Map();
   for (const op of sc.ops) {
@@ -156,36 +156,36 @@ function modelOf(sc) {
   return per;
 }
 
-// Контекст падения: seed + номер сценария + вся последовательность операций —
-// падение воспроизводимо однозначно.
+// The failure context: the seed + the scenario number + the whole operation sequence —
+// a failure is reproducible unambiguously.
 const fmtOps = (sc) =>
   JSON.stringify(sc.ops.map((o, i) => ({ n: i, mint: o.mintIdx, op: o.kind, qty: o.qty.toString(), over: o.over, t: o.blockTime })));
-const ctx = (sc, extra = "") => `seed=${SEED} сценарий #${sc.index} ${extra}\nоперации: ${fmtOps(sc)}`;
+const ctx = (sc, extra = "") => `seed=${SEED} scenario #${sc.index} ${extra}\noperations: ${fmtOps(sc)}`;
 
 const rowOf = (rep, mint) => rep.tokens.find((t) => t.mint === mint);
 const sumLots = (row) => row.lots.reduce((a, l) => a + BigInt(l.qtyRaw), 0n);
 const sumGaps = (row) => row.gaps.reduce((a, g) => a + BigInt(g.missingQtyRaw), 0n);
 
 // ---------------------------------------------------------------------------
-// 0. Санитарность генератора: монотонные времена, размеры, покрытие не вакуумно
+// 0. Generator sanity: monotonic times, sizes, the coverage is not a vacuum
 // ---------------------------------------------------------------------------
 
-test(`генератор: 200 сценариев по 5–40 операций, времена монотонны (seed=${SEED})`, () => {
+test(`generator: 200 scenarios of 5–40 operations, the times are monotonic (seed=${SEED})`, () => {
   assert.equal(SCENARIOS.length, 200);
   for (const sc of SCENARIOS) {
     assert.ok(sc.ops.length >= 5 && sc.ops.length <= 40, ctx(sc));
     for (let i = 1; i < sc.ops.length; i++) {
-      assert.ok(sc.ops[i].blockTime > sc.ops[i - 1].blockTime, `времена строго монотонны\n${ctx(sc)}`);
+      assert.ok(sc.ops[i].blockTime > sc.ops[i - 1].blockTime, `the times are strictly monotonic\n${ctx(sc)}`);
     }
     for (const op of sc.ops) {
       if (op.kind === "zero") assert.equal(op.qty, 0n, ctx(sc));
-      else if (op.over) assert.ok(op.qty >= 1n && op.qty <= 41_000n, `целевой перерасход ≤ maxBal(40×1000)+500\n${ctx(sc)}`);
-      else assert.ok(op.qty >= 1n && op.qty <= 1000n, `базовые количества 1..1000\n${ctx(sc)}`);
+      else if (op.over) assert.ok(op.qty >= 1n && op.qty <= 41_000n, `a targeted overdraft ≤ maxBal(40×1000)+500\n${ctx(sc)}`);
+      else assert.ok(op.qty >= 1n && op.qty <= 1000n, `base quantities 1..1000\n${ctx(sc)}`);
     }
   }
 });
 
-test(`покрытие не вакуумно: гэпы, реализации, перерасходы, zero-ops реально встречаются (seed=${SEED})`, (t) => {
+test(`the coverage is not a vacuum: gaps, realizations, overdrafts, zero-ops really occur (seed=${SEED})`, (t) => {
   let gapScen = 0;
   let realizedScen = 0;
   let overshootOps = 0;
@@ -204,99 +204,99 @@ test(`покрытие не вакуумно: гэпы, реализации, п
     zeroOps += sc.ops.filter((o) => o.kind === "zero").length;
   }
   const summary =
-    `seed=${SEED}: операций=${totalOps}; сценариев с гэпами=${gapScen}, с реализацией=${realizedScen}, ` +
-    `с отрицательным netDelta=${negativeNet}, мульти-минт=${multiMint}, ` +
-    `целевых перерасходов=${overshootOps}, zero-ops=${zeroOps}`;
-  t.diagnostic(summary); // сводка покрытия видна и на зелёном прогоне
+    `seed=${SEED}: operations=${totalOps}; scenarios with gaps=${gapScen}, with realization=${realizedScen}, ` +
+    `with a negative netDelta=${negativeNet}, multi-mint=${multiMint}, ` +
+    `targeted overdrafts=${overshootOps}, zero-ops=${zeroOps}`;
+  t.diagnostic(summary); // the coverage summary is visible on a green run too
   assert.ok(
     gapScen >= 1 && realizedScen >= 1 && negativeNet >= 1 && multiMint >= 1 && overshootOps >= 20 && zeroOps >= 20,
-    `генератор обязан покрывать все ветви движка, а не только happy-path\n${summary}`,
+    `the generator must cover all engine branches, not only the happy path\n${summary}`,
   );
 });
 
 // ---------------------------------------------------------------------------
-// 1. Сохранение: куплено = реализовано + живые лоты; продано = реализовано + гэп;
-//    netDelta = куплено − продано; complete производен от гэпов и сверки
+// 1. Conservation: bought = realized + live lots; sold = realized + gap;
+//    netDelta = bought − sold; complete is derived from the gaps and the reconcile
 // ---------------------------------------------------------------------------
 
-test("сохранение: куплено/продано/гэп/лоты сходятся BigInt-точно в каждом сценарии", () => {
+test("conservation: bought/sold/gap/lots converge BigInt-exactly in every scenario", () => {
   for (const sc of SCENARIOS) {
     const rep = reportOf(sc);
     for (const [mint, m] of modelOf(sc)) {
       const row = rowOf(rep, mint);
       const hasFlow = m.bought > 0n || m.sold > 0n;
-      assert.equal(row !== undefined, hasFlow, `токен-строка существует ⇔ была ненулевая дельта\n${ctx(sc, mint)}`);
+      assert.equal(row !== undefined, hasFlow, `a token row exists ⇔ there was a non-zero delta\n${ctx(sc, mint)}`);
       if (!row) continue;
       const lotsSum = sumLots(row);
       const realizedQty = BigInt(row.realizedQtyRaw);
       const gapQty = sumGaps(row);
-      assert.equal(realizedQty + gapQty, m.sold, `продано = реализовано + гэп\n${ctx(sc, mint)}`);
-      assert.equal(realizedQty + lotsSum, m.bought, `куплено = реализовано + живые лоты\n${ctx(sc, mint)}`);
-      assert.equal(m.bought - m.sold + gapQty, lotsSum, `сохранение: куплено − продано + гэп = живые лоты\n${ctx(sc, mint)}`);
-      assert.equal(BigInt(row.netDeltaRaw), m.bought - m.sold, `netDelta = куплено − продано\n${ctx(sc, mint)}`);
-      assert.equal(BigInt(row.rawBalance), m.bought - m.sold, "rawBalance — legacy-алиас того же числа");
-      assert.ok(lotsSum <= m.bought && gapQty <= m.sold, `лоты и гэп не превосходят потоков\n${ctx(sc, mint)}`);
+      assert.equal(realizedQty + gapQty, m.sold, `sold = realized + gap\n${ctx(sc, mint)}`);
+      assert.equal(realizedQty + lotsSum, m.bought, `bought = realized + live lots\n${ctx(sc, mint)}`);
+      assert.equal(m.bought - m.sold + gapQty, lotsSum, `conservation: bought − sold + gap = live lots\n${ctx(sc, mint)}`);
+      assert.equal(BigInt(row.netDeltaRaw), m.bought - m.sold, `netDelta = bought − sold\n${ctx(sc, mint)}`);
+      assert.equal(BigInt(row.rawBalance), m.bought - m.sold, "rawBalance — a legacy alias of the same number");
+      assert.ok(lotsSum <= m.bought && gapQty <= m.sold, `the lots and the gap do not exceed the flows\n${ctx(sc, mint)}`);
     }
-    // accounts:{} → reconciles ⇔ netDelta 0; complete = нет гэпов и всё сошлось
+    // accounts:{} → reconciles ⇔ netDelta 0; complete = no gaps and everything converged
     const expectComplete = rep.tokens.every((t) => t.gaps.length === 0 && BigInt(t.rawBalance) === 0n);
-    assert.equal(rep.complete, expectComplete, `complete производен: без гэпов и с нулевым нетто\n${ctx(sc)}`);
+    assert.equal(rep.complete, expectComplete, `complete is derived: no gaps and a zero net\n${ctx(sc)}`);
   }
 });
 
 // ---------------------------------------------------------------------------
-// 2. Неотрицательность: количества не отрицательны, ноль-лотов не бывает;
-//    netDelta может быть отрицательным (задокументированная семантика окна)
+// 2. Non-negativity: the quantities are not negative, there are no zero lots;
+//    netDelta may be negative (the documented semantics of the window)
 // ---------------------------------------------------------------------------
 
-test("неотрицательность: qty лотов, гэпы, реализация — строго > 0 где существуют", () => {
+test("non-negativity: lot qtys, gaps, the realization — strictly > 0 where they exist", () => {
   for (const sc of SCENARIOS) {
     const rep = reportOf(sc);
     for (const row of rep.tokens) {
       for (const lot of row.lots) {
-        const q = BigInt(lot.qtyRaw); // мусор в строке уронил бы BigInt — тоже красные
-        assert.ok(q > 0n, `в очереди нет ноль-лотов и отрицательных qty\n${ctx(sc, row.mint)}`);
+        const q = BigInt(lot.qtyRaw); // garbage in the string would crash BigInt — also red
+        assert.ok(q > 0n, `the queue has no zero lots or negative qtys\n${ctx(sc, row.mint)}`);
       }
       for (const g of row.gaps) {
-        assert.ok(BigInt(g.missingQtyRaw) > 0n, `гэп — положительная недостача\n${ctx(sc, row.mint)}`);
+        assert.ok(BigInt(g.missingQtyRaw) > 0n, `a gap — a positive shortage\n${ctx(sc, row.mint)}`);
       }
       const realizedQty = BigInt(row.realizedQtyRaw);
-      assert.ok(realizedQty >= 0n, `реализация неотрицательна\n${ctx(sc, row.mint)}`);
-      assert.equal(row.realizedCount > 0, realizedQty > 0n, `счётчик реализаций согласован с количеством\n${ctx(sc, row.mint)}`);
+      assert.ok(realizedQty >= 0n, `the realization is non-negative\n${ctx(sc, row.mint)}`);
+      assert.equal(row.realizedCount > 0, realizedQty > 0n, `the realization counter agrees with the quantity\n${ctx(sc, row.mint)}`);
       assert.ok(row.realizedCount >= 0 && Number.isInteger(row.realizedCount), ctx(sc, row.mint));
     }
   }
 });
 
 // ---------------------------------------------------------------------------
-// 3. FIFO-порядок: выжившие лоты — непрерывный суффикс покупок, хвост нетронут,
-//    дата лота — дата его покупки; подрезана может быть только голова очереди
+// 3. FIFO order: the surviving lots — a continuous suffix of purchases, the tail untouched,
+//    a lot's date — the date of its purchase; only the head of the queue may be trimmed
 // ---------------------------------------------------------------------------
 
-test("FIFO: выжившие лоты — непрерывный суффикс покупок, хвост очереди нетронут", () => {
+test("FIFO: the surviving lots — a continuous suffix of purchases, the queue tail untouched", () => {
   for (const sc of SCENARIOS) {
     const rep = reportOf(sc);
     for (const [mint, m] of modelOf(sc)) {
       const row = rowOf(rep, mint);
-      if (!row) continue; // нет строки ⇔ не было ненулевых операций (проверено в «сохранении»)
+      if (!row) continue; // no row ⇔ no non-zero operations (verified in "conservation")
       const seqs = row.lots.map((lot) => {
-        assert.ok(lot.id.startsWith(`${mint}-`), `id лота = mint-<№покупки>\n${ctx(sc, mint)}`);
+        assert.ok(lot.id.startsWith(`${mint}-`), `a lot id = mint-<purchase #>\n${ctx(sc, mint)}`);
         return Number(lot.id.slice(mint.length + 1));
       });
       for (let j = 0; j < seqs.length; j++) {
-        assert.ok(seqs[j] >= 1 && seqs[j] <= m.nBuys, `номер покупки в границах 1..${m.nBuys}\n${ctx(sc, mint)}`);
-        if (j > 0) assert.equal(seqs[j], seqs[j - 1] + 1, `суффикс номеров непрерывен (FIFO ест спереди, дыр не оставляет)\n${ctx(sc, mint)}`);
+        assert.ok(seqs[j] >= 1 && seqs[j] <= m.nBuys, `the purchase number within 1..${m.nBuys}\n${ctx(sc, mint)}`);
+        if (j > 0) assert.equal(seqs[j], seqs[j - 1] + 1, `the suffix of numbers is continuous (the FIFO eats from the front, leaves no holes)\n${ctx(sc, mint)}`);
       }
       if (seqs.length > 0) {
-        assert.equal(seqs[seqs.length - 1], m.nBuys, `последний выживший — самая поздняя покупка (#${m.nBuys})\n${ctx(sc, mint)}`);
+        assert.equal(seqs[seqs.length - 1], m.nBuys, `the last survivor — the latest purchase (#${m.nBuys})\n${ctx(sc, mint)}`);
       }
       for (let j = 0; j < seqs.length; j++) {
-        const origin = m.buys[seqs[j] - 1]; // №покупки → операция генератора
-        assert.equal(row.lots[j].acquiredDate, origin.iso, `дата лота = дата его покупки\n${ctx(sc, mint)}`);
+        const origin = m.buys[seqs[j] - 1]; // the purchase # → the generator operation
+        assert.equal(row.lots[j].acquiredDate, origin.iso, `a lot's date = the date of its purchase\n${ctx(sc, mint)}`);
         const q = BigInt(row.lots[j].qtyRaw);
         if (j === 0) {
-          assert.ok(q >= 1n && q <= origin.qty, `голова очереди может быть подрезана, но не сильнее своей покупки\n${ctx(sc, mint)}`);
+          assert.ok(q >= 1n && q <= origin.qty, `the head of the queue may be trimmed, but not more than its purchase\n${ctx(sc, mint)}`);
         } else {
-          assert.equal(q, origin.qty, `хвост очереди нетронут: подрезана только голова (FIFO)\n${ctx(sc, mint)}`);
+          assert.equal(q, origin.qty, `the queue tail untouched: only the head is trimmed (FIFO)\n${ctx(sc, mint)}`);
         }
       }
     }
@@ -304,61 +304,61 @@ test("FIFO: выжившие лоты — непрерывный суффикс 
 });
 
 // ---------------------------------------------------------------------------
-// 4. След каждой продажи и семантика перерасхода (гэп)
+// 4. A trace of every sell and the overdraft semantics (the gap)
 // ---------------------------------------------------------------------------
 
-test("перерасход: каждая продажа оставляет след, гэпы честны и датированы продажами", () => {
+test("overdraft: every sell leaves a trace, the gaps are honest and dated by sells", () => {
   for (const sc of SCENARIOS) {
     const rep = reportOf(sc);
     for (const [mint, m] of modelOf(sc)) {
       const row = rowOf(rep, mint);
       if (!row) continue;
-      assert.ok(row.gaps.length <= m.nSells, `гэп — максимум один на продажу\n${ctx(sc, mint)}`);
+      assert.ok(row.gaps.length <= m.nSells, `a gap — at most one per sell\n${ctx(sc, mint)}`);
       assert.ok(
         m.nSells <= row.realizedCount + row.gaps.length,
-        `каждая продажа оставляет след: реализация или гэп\n${ctx(sc, mint)}`,
+        `every sell leaves a trace: a realization or a gap\n${ctx(sc, mint)}`,
       );
       const sellIsos = new Set(m.sells);
       let prevDate = "";
       for (const g of row.gaps) {
         assert.ok(BigInt(g.missingQtyRaw) > 0n, ctx(sc, mint));
-        assert.ok(sellIsos.has(g.date), `дата гэпа — дата какой-то продажи\n${ctx(sc, mint)}`);
-        assert.ok(g.date >= prevDate, `гэпы хронологичны (поток монотонен)\n${ctx(sc, mint)}`);
+        assert.ok(sellIsos.has(g.date), `a gap's date — the date of some sell\n${ctx(sc, mint)}`);
+        assert.ok(g.date >= prevDate, `the gaps are chronological (the stream is monotonic)\n${ctx(sc, mint)}`);
         prevDate = g.date;
       }
       if (row.gaps.length > 0) {
-        assert.equal(rep.complete, false, `гэп делает отчёт неполным (трункации нет)\n${ctx(sc, mint)}`);
+        assert.equal(rep.complete, false, `a gap makes the report incomplete (there is no truncation)\n${ctx(sc, mint)}`);
       }
     }
   }
 });
 
 // ---------------------------------------------------------------------------
-// 5. Zero-qty операции не меняют состояние
+// 5. Zero-qty operations do not change the state
 // ---------------------------------------------------------------------------
 
-test("zero-qty: удаление нулевых операций из потока не меняет tokens ни в чём", () => {
+test("zero-qty: removing the zero operations from the stream changes tokens in nothing", () => {
   for (const sc of SCENARIOS) {
     const withZeros = reportOf(sc).tokens;
     const filtered = { index: sc.index, mintList: sc.mintList, ops: sc.ops.filter((o) => o.kind !== "zero") };
-    assert.deepEqual(reportOf(filtered).tokens, withZeros, `zero-qty — no-op для FIFO\n${ctx(sc)}`);
+    assert.deepEqual(reportOf(filtered).tokens, withZeros, `zero-qty — a no-op for the FIFO\n${ctx(sc)}`);
   }
 });
 
 // ---------------------------------------------------------------------------
-// 6. Детерминизм: тот же seed — тот же отчёт
+// 6. Determinism: the same seed — the same report
 // ---------------------------------------------------------------------------
 
-test(`детерминизм: повторный прогон первых 25 сценариев — идентичный JSON (seed=${SEED})`, () => {
+test(`determinism: a repeated run of the first 25 scenarios — an identical JSON (seed=${SEED})`, () => {
   const snapshot = () => SCENARIOS.slice(0, 25).map((sc) => JSON.stringify(reportOf(sc)));
   const first = snapshot();
-  assert.deepEqual(snapshot(), first, `seed=${SEED} обязан давать байт-в-байт одинаковые отчёты`);
+  assert.deepEqual(snapshot(), first, `seed=${SEED} must give byte-for-byte identical reports`);
 });
 
 // ===========================================================================
-// Регрессионные кейсы (протокол): если property-инвариант выше ловит баг
-// движка — src НЕ правится. Последовательность минимизируется до маленького
-// явного кейса и фиксируется здесь тестом с комментарием «найдено property-тестом,
-// seed=…, сценарий #…, инвариант …», пинящим ФАКТИЧЕСКОЕ поведение.
-// Сейчас таких кейсов нет: все 200 сценариев × 6 групп инвариантов зелёные.
+// Regression cases (the protocol): if a property invariant above catches an engine
+// bug — src is NOT edited. The sequence is minimized to a small explicit
+// case and recorded here by a test with the comment "found by a property test,
+// seed=…, scenario #…, invariant …", pinning the ACTUAL behavior.
+// There are no such cases now: all 200 scenarios × 6 invariant groups are green.
 // ===========================================================================

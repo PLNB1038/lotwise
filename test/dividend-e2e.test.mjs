@@ -1,22 +1,22 @@
-// Сквозной (e2e) тест дивидендного сценария: синтетическое событие DIVIDEND_ACCRUAL
-// проходит фактический путь пайплайна — схема → привязка минта → движок лотов → API.
-// Без сети: свой синтетический реестр (минт НЕ из живого data/tokens.json),
-// мок walletScanner, сервер на 127.0.0.1:0.
+// An end-to-end (e2e) test of the dividend scenario: a synthetic DIVIDEND_ACCRUAL event
+// passes the actual pipeline path — the schema → mint binding → the lot engine → the API.
+// No network: its own synthetic registry (the mint is NOT from the live data/tokens.json),
+// a mock walletScanner, a server on 127.0.0.1:0.
 //
-// Карта пути (по фактическому коду, не по догадкам):
-//   validateEvent (schema/events.mjs): DIVIDEND_ACCRUAL требует type/mint/effectiveDate/
-//     status/sources + amountPerUnitRaw (целое > 0) и decimals (целое 0..18).
-//     Даты в схеме две НЕ разделены: есть только effectiveDate (экс-дата), payout-даты нет.
-//   bindMintAndValidate (events/normalize-xstocks.mjs): привязка события к минту.
-//   applyEvents (lots/lots.mjs): начисление НА ВЛАДЕЛЬЦА —
-//     totalRaw = BigInt(amountPerUnitRaw) × Σ qtyRaw лотов этого владельца,
-//     купленных СТРОГО РАНЬШЕ effectiveDate; qty/basis лотов не меняются.
-//     decimals в арифметике НЕ участвует — это метаданные для слоя отображения.
-//   API (api/server.mjs): /events и /summary отдают событие; /lots — НЕ отдаёт
-//     начислений: движок applyEvents к API не подключён (GAP 2, пин ниже).
+// The path map (from the actual code, not guesses):
+//   validateEvent (schema/events.mjs): DIVIDEND_ACCRUAL requires type/mint/effectiveDate/
+//     status/sources + amountPerUnitRaw (an integer > 0) and decimals (an integer 0..18).
+//     The schema has NOT two dates: there is only effectiveDate (the ex-date), no payout date.
+//   bindMintAndValidate (events/normalize-xstocks.mjs): binding the event to the mint.
+//   applyEvents (lots/lots.mjs): the accrual TO THE OWNER —
+//     totalRaw = BigInt(amountPerUnitRaw) × Σ qtyRaw of that owner's lots,
+//     bought STRICTLY EARLIER than effectiveDate; the lots' qty/basis are unchanged.
+//     decimals does NOT participate in the arithmetic — it is metadata for the display layer.
+//   API (api/server.mjs): /events and /summary serve the event; /lots does NOT serve
+//     accruals: the applyEvents engine is not connected to the API (GAP 2, pinned below).
 //
-// Синтетика: минты/владельцы — валидный base58 (без 0/O/I/l), 44 символа,
-// в живом реестре отсутствуют. Числа целочисленные (BigInt), как в движке.
+// Synthetics: mints/owners — valid base58 (without 0/O/I/l), 44 chars,
+// absent from the live registry. The numbers are integers (BigInt), as in the engine.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateEvent, EventValidationError } from "../src/schema/events.mjs";
@@ -25,34 +25,34 @@ import { applyEvents, LotError } from "../src/lots/lots.mjs";
 import { crossCheckEvents } from "../src/events/crosscheck.mjs";
 import { createApiServer } from "../src/api/server.mjs";
 
-// ---- синтетические константы (валидный base58, не из живого реестра) ----
+// ---- synthetic constants (valid base58, not from the live registry) ----
 
-const MINT = "DivE2eMint" + "1".repeat(34); // 44 символа
-const MINT_OTHER = "DivE2eNone" + "1".repeat(34); // чужой минт для негативных сценариев
+const MINT = "DivE2eMint" + "1".repeat(34); // 44 chars
+const MINT_OTHER = "DivE2eNone" + "1".repeat(34); // a foreign mint for negative scenarios
 const OWNER_A = "DivAddrA" + "1".repeat(36);
 const OWNER_B = "DivAddrB" + "1".repeat(36);
 const SYMBOL = "DVTx";
 
-// Синтетический реестр: один дивидендный токен. Поля — как у записей loadRegistry
-// (report.mjs читает symbol/name/decimals, /summary читает issuer).
+// A synthetic registry: one dividend token. The fields — like loadRegistry records
+// (report.mjs reads symbol/name/decimals, /summary reads issuer).
 const registry = [
   { mint: MINT, symbol: SYMBOL, name: "Dividend Test Token (synthetic)", decimals: 6, issuer: "test-issuer" },
 ];
 
-// Дивиденд: $2.00 на целый токен, токен и выплата по 6 десятичных.
-// amountPerUnitRaw — raw-единиц ВЫПЛАТЫ на одну raw-единицу ТОКЕНА (движок умножает raw×raw):
-// 2 raw выплаты × qtyRaw токена. Целое — схема не принимает дроби.
-// Экс-дата — 2026-09-10.
+// The dividend: $2.00 per whole token, the token and the payout both 6 decimals.
+// amountPerUnitRaw — raw units of the PAYOUT per one raw unit of the TOKEN (the engine multiplies raw×raw):
+// 2 payout raw × the token qtyRaw. An integer — the schema does not accept fractions.
+// The ex-date — 2026-09-10.
 const dividendEvent = bindMintAndValidate([{
   type: "DIVIDEND_ACCRUAL",
-  effectiveDate: "2026-09-10", // экс-дата (единственная дата в схеме)
+  effectiveDate: "2026-09-10", // the ex-date (the only date in the schema)
   status: "confirmed",
   sources: ["https://issuer.example/dividends/2026-q3"],
   amountPerUnitRaw: 2,
   decimals: 6,
 }], MINT)[0];
 
-// blockTime в скане — секунды (report.mjs: new Date(blockTime * 1000))
+// blockTime in the scan — seconds (report.mjs: new Date(blockTime * 1000))
 const ts = (isoDate) => Math.floor(Date.parse(isoDate) / 1000);
 
 const buy = (signature, mint, qty, isoDate) => ({
@@ -74,11 +74,11 @@ async function withServer(fn, { events = [dividendEvent], walletScanner = null }
   }
 }
 
-// ---- сценарий 1: «дивиденд пришёл в позицию» — сквозной путь ----
+// ---- scenario 1: "the dividend arrived into the position" — the end-to-end path ----
 
-test("сценарий 1 (событие): синтетический DIVIDEND_ACCRUAL доезжает до /events, /summary, /health", async () => {
+test("scenario 1 (event): a synthetic DIVIDEND_ACCRUAL arrives into /events, /summary, /health", async () => {
   await withServer(async (base) => {
-    // /events: событие привязано к минту, поля не искажены; фильтр по типу работает
+    // /events: the event is bound to the mint, the fields are not distorted; the type filter works
     const list = await (await fetch(`${base}/events?symbol=${SYMBOL}&type=DIVIDEND_ACCRUAL`)).json();
     assert.equal(list.length, 1);
     assert.equal(list[0].type, "DIVIDEND_ACCRUAL");
@@ -89,22 +89,22 @@ test("сценарий 1 (событие): синтетический DIVIDEND_A
     assert.equal(list[0].status, "confirmed");
     assert.deepEqual(list[0].sources, ["https://issuer.example/dividends/2026-q3"]);
 
-    // /summary: событие посчитано за токеном; множитель честная «1» — дивиденд не ребейз,
-    // таймлайна MULTIPLIER_CHANGE у минта нет и он не исключён из витрины
+    // /summary: the event counted for the token; the multiplier an honest "1" — a dividend is not a rebase,
+    // the mint has no MULTIPLIER_CHANGE timeline and it is not excluded from the vitrine
     const rows = await (await fetch(`${base}/summary`)).json();
     const row = rows.find((r) => r.symbol === SYMBOL);
     assert.equal(row.events, 1);
     assert.equal(row.currentMultiplier, "1");
     assert.equal("excluded" in row, false);
 
-    // /health: событие в общем счётчике
+    // /health: the event in the total counter
     const h = await (await fetch(`${base}/health`)).json();
     assert.equal(h.events, 1);
   });
 });
 
-test("сценарий 1 (деньги): /lots отдаёт позицию, движок начисляет на неё, числа сходятся", async () => {
-  // позиция: две покупки до экс-даты, один владелец
+test("scenario 1 (money): /lots serves the position, the engine accrues onto it, the numbers converge", async () => {
+  // the position: two buys before the ex-date, one owner
   const txs = [
     buy("a", MINT, 1_000_000n, "2026-09-01"),
     buy("b", MINT, 1_500_000n, "2026-09-05"),
@@ -118,84 +118,84 @@ test("сценарий 1 (деньги): /lots отдаёт позицию, дв
     assert.equal(row.symbol, SYMBOL);
     assert.equal(row.rawBalance, "2500000"); // 1M + 1.5M raw
     assert.equal(row.lots.length, 2);
-    assert.equal(row.reconciles, true); // дельты окна сходятся с балансом на цепи
-    assert.equal(row.multiplier.events, 0); // дивиденд в таймлайн множителя не попал
+    assert.equal(row.reconciles, true); // the window deltas converge with the on-chain balance
+    assert.equal(row.multiplier.events, 0); // the dividend did not get into the multiplier timeline
 
-    // Задокументированный стык (report.mjs шапка + round6-report-lots): потребитель /lots
-    // достраивает движковый контекст — в лотах отчёта НЕТ mint/owner/basisRaw.
+    // the documented seam (report.mjs header + round6-report-lots): a /lots consumer
+    // assembles the engine context — the report lots carry NO mint/owner/basisRaw.
     const engineLots = row.lots.map((l) => ({
       ...l, mint: row.mint, owner: rep.owner, qtyRaw: BigInt(l.qtyRaw), basisRaw: 0n,
     }));
     const { lots, accruals, applied } = applyEvents(engineLots, [dividendEvent]);
 
     assert.equal(applied, 1);
-    // лоты дивидендом не тронуты: qty и даты как были
+    // the lots are untouched by the dividend: qty and dates as they were
     assert.deepEqual(lots.map((l) => l.qtyRaw), [1_000_000n, 1_500_000n]);
 
-    // начисление на владельца: обе до-экс-даты покупки агрегированы в ОДНУ запись
+    // the accrual to the owner: both pre-ex-date buys aggregated into ONE record
     assert.equal(accruals.length, 1);
     const a = accruals[0];
     assert.equal(a.owner, OWNER_A);
     assert.equal(a.mint, MINT);
     assert.equal(a.amountPerUnitRaw, 2n);
     assert.equal(a.decimals, 6);
-    // ИТОГ: totalRaw = amountPerUnitRaw × Σ qtyRaw = 2 × 2 500 000 = 5 000 000 raw выплаты
-    // (= 5.0 единиц при decimals 6; 2.5 токена × $2.00). Сверено с числами ИЗ API-ответа:
+    // TOTAL: totalRaw = amountPerUnitRaw × Σ qtyRaw = 2 × 2 500 000 = 5 000 000 payout raw
+    // (= 5.0 units at decimals 6; 2.5 tokens × $2.00). Cross-checked with the numbers FROM the API response:
     assert.equal(a.totalRaw, 2n * row.lots.reduce((acc, l) => acc + BigInt(l.qtyRaw), 0n));
     assert.equal(a.totalRaw, 5_000_000n);
   }, { walletScanner: scanner });
 });
 
-// ---- сценарий 2: «дивиденд без позиции» — ничего не ломает, начисления нет ----
+// ---- scenario 2: "a dividend without a position" — breaks nothing, no accrual ----
 
-test("сценарий 2 (движок): нет лотов и чужой минт — accruals пуст, применение безопасно", () => {
+test("scenario 2 (engine): no lots and a foreign mint — accruals empty, the application is safe", () => {
   const none = applyEvents([], [dividendEvent]);
   assert.deepEqual(none.accruals, []);
   assert.deepEqual(none.lots, []);
-  assert.equal(none.applied, 1); // событие применено (посчитано), но держателей нет
+  assert.equal(none.applied, 1); // the event applied (computed), but there are no holders
 
-  // позиция в ЧУЖОМ минте: дивиденд не переносится
+  // a position in a FOREIGN mint: the dividend does not carry over
   const other = applyEvents([{
     id: "X1", mint: MINT_OTHER, owner: OWNER_A, qtyRaw: 999n, acquiredDate: "2026-09-01", basisRaw: 1n,
   }], [dividendEvent]);
   assert.deepEqual(other.accruals, []);
-  assert.equal(other.lots[0].qtyRaw, 999n); // чужая позиция не тронута
+  assert.equal(other.lots[0].qtyRaw, 999n); // the foreign position untouched
 });
 
-test("сценарий 2 (API): кошелёк без позиции — /lots пуст, событие в /events живёт", async () => {
-  const scanner = async () => scanOf([]); // пустой скан
+test("scenario 2 (API): a wallet without a position — /lots empty, the event lives in /events", async () => {
+  const scanner = async () => scanOf([]); // an empty scan
   await withServer(async (base) => {
     const rep = await (await fetch(`${base}/lots?address=${OWNER_A}`)).json();
-    assert.deepEqual(rep.tokens, []); // ни позиции, ни выдуманных строк
-    // начислений в ответе нет вообще — по всему wire-формату
+    assert.deepEqual(rep.tokens, []); // neither a position nor invented rows
+    // there are no accruals in the response at all — over the whole wire format
     assert.equal(JSON.stringify(rep).includes("accrual"), false);
 
-    // при этом событие отдаётся: событие ≠ начисление, оно существует без позиции
+    // meanwhile the event is served: an event ≠ an accrual, it exists without a position
     const list = await (await fetch(`${base}/events?symbol=${SYMBOL}&type=DIVIDEND_ACCRUAL`)).json();
     assert.equal(list.length, 1);
   }, { walletScanner: scanner });
 });
 
-// ---- сценарий 3: «дивиденд между двумя покупками» — только лоты на экс-дате ----
+// ---- scenario 3: "a dividend between two buys" — only lots on the ex-date ----
 
-test("сценарий 3: покупка ПОСЛЕ экс-даты не получает начисление, ДО — получает", () => {
+test("scenario 3: a buy AFTER the ex-date gets no accrual, BEFORE — does", () => {
   const { accruals } = applyEvents([
     { id: "L1", mint: MINT, owner: OWNER_A, qtyRaw: 1_000_000n, acquiredDate: "2026-09-01", basisRaw: 1n },
     { id: "L2", mint: MINT, owner: OWNER_A, qtyRaw: 700_000n, acquiredDate: "2026-09-20", basisRaw: 1n },
   ], [dividendEvent]);
   assert.equal(accruals.length, 1);
-  assert.equal(accruals[0].totalRaw, 2n * 1_000_000n, "в базе только лот, купленный до экс-даты");
+  assert.equal(accruals[0].totalRaw, 2n * 1_000_000n, "only the lot bought before the ex-date is in the base");
 });
 
-test("сценарий 3 (граница): купленный В ДЕНЬ экс-даты исключён; внутри дня сравнение unix-ms", () => {
-  // «строго раньше»: купленный date-only в день события — уже по пост-событийным правилам
+test("scenario 3 (boundary): one bought ON the ex-date is excluded; within the day the comparison is unix-ms", () => {
+  // "strictly earlier": one bought date-only on the event day — already by post-event rules
   const sameDay = applyEvents([
     { id: "L1", mint: MINT, owner: OWNER_A, qtyRaw: 100n, acquiredDate: "2026-09-10", basisRaw: 1n },
   ], [dividendEvent]);
   assert.deepEqual(sameDay.accruals, []);
 
-  // событие в полночь UTC: покупка в 12:00 того же дня — ПОЗЖЕ события (числовое сравнение,
-  // не лексикографическое), покупка за секунду до полуночи — ДО
+  // the event at midnight UTC: a buy at 12:00 of the same day — LATER than the event (a numeric comparison,
+  // not lexicographic), a buy a second before midnight — BEFORE
   const intraday = applyEvents([
     { id: "early", mint: MINT, owner: OWNER_A, qtyRaw: 10n, acquiredDate: "2026-09-09T23:59:59Z", basisRaw: 1n },
     { id: "late", mint: MINT, owner: OWNER_A, qtyRaw: 20n, acquiredDate: "2026-09-10T12:00:00Z", basisRaw: 1n },
@@ -204,55 +204,55 @@ test("сценарий 3 (граница): купленный В ДЕНЬ экс
   assert.equal(intraday.accruals[0].totalRaw, 2n * 10n);
 });
 
-test("сценарий 3 (владельцы): два владельца — две записи; два лота одного владельца — одна сумма", () => {
+test("scenario 3 (owners): two owners — two records; two lots of one owner — one sum", () => {
   const { accruals } = applyEvents([
     { id: "A1", mint: MINT, owner: OWNER_A, qtyRaw: 100n, acquiredDate: "2026-09-01", basisRaw: 1n },
     { id: "A2", mint: MINT, owner: OWNER_A, qtyRaw: 40n, acquiredDate: "2026-09-02", basisRaw: 1n },
     { id: "B1", mint: MINT, owner: OWNER_B, qtyRaw: 60n, acquiredDate: "2026-09-03", basisRaw: 1n },
-    { id: "A3", mint: MINT, owner: OWNER_A, qtyRaw: 50n, acquiredDate: "2026-09-20", basisRaw: 1n }, // после экс-даты
+    { id: "A3", mint: MINT, owner: OWNER_A, qtyRaw: 50n, acquiredDate: "2026-09-20", basisRaw: 1n }, // after the ex-date
   ], [dividendEvent]);
   assert.equal(accruals.length, 2);
   const byOwner = new Map(accruals.map((a) => [a.owner, a.totalRaw]));
-  assert.equal(byOwner.get(OWNER_A), 2n * 140n); // A1+A2, A3 мимо
+  assert.equal(byOwner.get(OWNER_A), 2n * 140n); // A1+A2, A3 missed
   assert.equal(byOwner.get(OWNER_B), 2n * 60n);
 
-  // вход не мутируется: начисление — отдельная запись, лоты как были
+  // the input is not mutated: the accrual is a separate record, the lots as they were
   const input = [{ id: "Z1", mint: MINT, owner: OWNER_A, qtyRaw: 11n, acquiredDate: "2026-09-01", basisRaw: 7n }];
   const { lots } = applyEvents(input, [dividendEvent]);
   assert.equal(input[0].qtyRaw, 11n);
   assert.deepEqual(lots[0], input[0]);
 });
 
-// ---- схема fail-closed: кривой дивиденд отклоняется ДО движка ----
+// ---- the schema is fail-closed: a broken dividend is rejected BEFORE the engine ----
 
-test("схема: amountPerUnitRaw 0/отрицательное/дробное и decimals вне 0..18 отклоняются", () => {
+test("schema: amountPerUnitRaw 0/negative/fractional and decimals outside 0..18 are rejected", () => {
   const bad = (over) => ({ ...dividendEvent, ...over });
   for (const e of [
     bad({ amountPerUnitRaw: 0 }),
     bad({ amountPerUnitRaw: -5 }),
-    bad({ amountPerUnitRaw: 1.5 }), // дробь запрещена: движок умножает BigInt
+    bad({ amountPerUnitRaw: 1.5 }), // a fraction forbidden: the engine multiplies BigInt
     bad({ decimals: 19 }),
     bad({ decimals: -1 }),
     bad({ decimals: undefined }),
-    bad({ effectiveDate: "2026-13-45" }), // мусорная дата — не доезжает до Date.parse
+    bad({ effectiveDate: "2026-13-45" }), // a garbage date — does not reach Date.parse
   ]) {
     assert.throws(() => validateEvent(e), EventValidationError, JSON.stringify(e));
-    // движок оборачивает в LotError ДО изменения состояния (атомарность)
+    // the engine wraps into a LotError BEFORE changing the state (atomicity)
     assert.throws(() => applyEvents([{
       id: "L", mint: MINT, owner: OWNER_A, qtyRaw: 1n, acquiredDate: "2026-09-01", basisRaw: 1n,
     }], [e]), LotError);
   }
 });
 
-// ---- GAP-пины: честная фиксация фактического состояния (поведение НЕ выдумывается) ----
+// ---- GAP pins: an honest fixation of the actual state (the behavior is NOT invented) ----
 
-test("GAP 1: производитель DIVIDEND_ACCRUAL в src отсутствует — дивиденд эмитента доезжает только как MULTIPLIER_CHANGE", () => {
-  // Факт: единственный нормализатор источников (normalize-xstocks) рождает ТОЛЬКО
-  // MULTIPLIER_CHANGE, даже когда reason эмитента — «Dividend» (узел ровно той формы,
-  // что отдаёт история множителей эмитента). В src/ ни один модуль не создаёт
-  // DIVIDEND_ACCRUAL (строка встречается только в schema, lots и тексте UI): тип
-  // достижим лишь внешней/ручной подачей, как в этом файле. Значит «дивидендный
-  // путь» на живых источниках сегодня считается ребейзом множителя, а не начислением.
+test("GAP 1: no DIVIDEND_ACCRUAL producer exists in src — an issuer dividend arrives only as MULTIPLIER_CHANGE", () => {
+  // The fact: the only source normalizer (normalize-xstocks) produces ONLY
+  // MULTIPLIER_CHANGE, even when the issuer's reason is "Dividend" (a node of exactly the shape
+  // the issuer's multiplier history serves). In src/ no module creates
+  // a DIVIDEND_ACCRUAL (the string occurs only in the schema, lots and the UI text): the type
+  // is reachable only via external/manual submission, as in this file. Hence the "dividend
+  // path" on live sources is today computed as a multiplier rebase, not an accrual.
   const events = multiplierHistoryToEvents([
     { id: "node-1", reason: "Dividend", previousMultiplier: "1", multiplier: "1.005",
       activationDateTime: "2026-06-18T00:00:00.000Z" },
@@ -262,58 +262,58 @@ test("GAP 1: производитель DIVIDEND_ACCRUAL в src отсутств
   assert.equal(events[0].reason, "Dividend");
 });
 
-test("GAP 2: движок лотов не подключён к API — /lots не отдаёт начислений", async () => {
-  // Факт по коду: server.mjs и report.mjs НЕ вызывают applyEvents (упоминание в report.mjs —
-  // только в комментарии-контракте). Пин витриной: в полном wire-ответе /lots нет ни поля
-  // accruals, ни суммы начисления. Начисление существует, только пока его не посчитал
-  // внешний потребитель (как в сценарии 1).
+test("GAP 2: the lot engine is not connected to the API — /lots serves no accruals", async () => {
+  // The fact by code: server.mjs and report.mjs do NOT call applyEvents (a mention in report.mjs —
+  // only in a contract comment). Pinned by the vitrine: the full /lots wire response has neither an
+  // accruals field nor an accrual sum. The accrual exists only until an external
+  // consumer computes it (as in scenario 1).
   const txs = [buy("a", MINT, 1_000_000n, "2026-09-01")];
   const scanner = async () => scanOf(txs);
   await withServer(async (base) => {
     const rep = await (await fetch(`${base}/lots?address=${OWNER_A}`)).json();
     const wire = JSON.stringify(rep);
-    assert.equal(wire.includes("accrual"), false, "начисления не доезжают до /lots");
+    assert.equal(wire.includes("accrual"), false, "accruals do not arrive into /lots");
     assert.equal(wire.includes("dividend"), false);
-    // движок при этом на тех же данных начисляет — разрыв между движком и витриной
+    // meanwhile the engine accrues on the same data — a gap between the engine and the vitrine
     const row = rep.tokens.find((t) => t.mint === MINT);
     const engineLots = row.lots.map((l) => ({ ...l, mint: row.mint, owner: rep.owner, qtyRaw: BigInt(l.qtyRaw), basisRaw: 0n }));
     const { accruals } = applyEvents(engineLots, [dividendEvent]);
-    assert.equal(accruals[0].totalRaw, 2_000_000n); // а движок бы начислил
+    assert.equal(accruals[0].totalRaw, 2_000_000n); // the engine would accrue
   }, { walletScanner: scanner });
 });
 
-test("GAP 3: accrual движка несёт BigInt — напрямую в JSON-ответ не сериализуется", () => {
-  // Факт: accruals.push({ ..., amountPerUnitRaw: BigInt, totalRaw: BigInt }) (lots.mjs).
-  // JSON.stringify на BigInt бросает: выдача начислений через json()-хелпер сервера как есть
-  // дала бы 500. Рабочий путь — ручной String()-адаптер, как делает report.mjs для лотов.
+test("GAP 3: the engine accrual carries BigInt — it does not serialize into a JSON response directly", () => {
+  // The fact: accruals.push({ ..., amountPerUnitRaw: BigInt, totalRaw: BigInt }) (lots.mjs).
+  // JSON.stringify on a BigInt throws: serving accruals through the server's json() helper as is
+  // would give a 500. The working path — a manual String() adapter, as report.mjs does for lots.
   const { accruals } = applyEvents([{
     id: "L", mint: MINT, owner: OWNER_A, qtyRaw: 1_000_000n, acquiredDate: "2026-09-01", basisRaw: 1n,
   }], [dividendEvent]);
   assert.throws(() => JSON.stringify(accruals[0]), /Do not know how to serialize a BigInt/);
-  // адаптер-потребитель (так пришлось бы делать любому эндпоинту):
+  // a consumer adapter (any endpoint would have to do the same):
   const wire = { ...accruals[0], amountPerUnitRaw: String(accruals[0].amountPerUnitRaw), totalRaw: String(accruals[0].totalRaw) };
   assert.equal(JSON.parse(JSON.stringify(wire)).totalRaw, "2000000");
 });
 
-test("GAP 4 (закрыт): /crosscheck теперь даёт вердикт DIVIDEND_ACCRUAL — молчаливой фильтрации нет", () => {
-  // Было (пин факта): crossCheckEvents фильтровал вход к MULTIPLIER_CHANGE — дивиденд
-  // не проверялся против рыночной цены вообще: ни verdict, ни упоминания в выдаче.
-  // Закрыто в src/events/crosscheck.mjs (crossCheckDividendAccrual): честная сигнатура
-  // падения в raw-единицах токена (rawClosePrev − amountPerUnitRaw ≈ rawCloseEx),
-  // вердикт помечен type: "DIVIDEND_ACCRUAL" и идёт в хвосте списка вердиктов
-  // (после всех MULTIPLIER_CHANGE — контракт витрины src/ui/page.mjs не сломан).
+test("GAP 4 (closed): /crosscheck now gives a DIVIDEND_ACCRUAL verdict — no silent filtering", () => {
+  // It was (a fact pin): crossCheckEvents filtered the input to MULTIPLIER_CHANGE — a dividend
+  // was not checked against the market price at all: no verdict, no mention in the output.
+  // Closed in src/events/crosscheck.mjs (crossCheckDividendAccrual): an honest signature
+  // of the drop in the token's raw units (rawClosePrev − amountPerUnitRaw ≈ rawCloseEx),
+  // the verdict is marked type: "DIVIDEND_ACCRUAL" and goes at the tail of the verdict list
+  // (after all MULTIPLIER_CHANGE — the vitrine contract of src/ui/page.mjs is not broken).
   const { verdicts } = crossCheckEvents([dividendEvent], []);
   assert.equal(verdicts.length, 1);
   assert.equal(verdicts[0].type, "DIVIDEND_ACCRUAL");
   assert.equal(verdicts[0].amountPerUnitRaw, 2);
-  // свечей нет — честное «нет цены», а не выдуманный вердикт (та же таксономия, что у ребейза)
+  // no candles — an honest "no price", not an invented verdict (the same taxonomy as the rebase)
   assert.equal(verdicts[0].verdict, "no-price-data");
 });
 
-test("GAP 5: в схеме нет payout-даты — effectiveDate единственная дата начисления", () => {
-  // Факт: validateEvent для DIVIDEND_ACCRUAL требует только amountPerUnitRaw и decimals;
-  // полей exDate/payDate/recordDate в схеме нет. Начисление датируется экс-датой —
-  // «когда деньги придут» схема выразить не может. Пин контракта, поведение не меняется.
+test("GAP 5: the schema has no payout date — effectiveDate is the only accrual date", () => {
+  // The fact: validateEvent for DIVIDEND_ACCRUAL requires only amountPerUnitRaw and decimals;
+  // the exDate/payDate/recordDate fields are not in the schema. The accrual is dated by the ex-date —
+  // "when the money arrives" the schema cannot express. A contract pin, the behavior unchanged.
   const e = { ...dividendEvent };
   assert.equal(validateEvent(e), true);
   assert.equal("payDate" in e, false);

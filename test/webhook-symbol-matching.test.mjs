@@ -1,8 +1,9 @@
-// Раунд 17 — волна I2 (интегратор): подписка вебхуков по СИМВОЛУ обязана работать.
-// Канонические события несут только mint — подписка ["SPYx"] молча давала 0 доставок
-// при exit 0 (тихая неудача). Фикс: deliverToAll принимает symbolToMint (реестр),
-// CLI грузит data/tokens.json и резолвит символы подписок в минты до матчинга;
-// неизвестный символ — warning (опечатка видна сразу), не блокирует доставку.
+// formerly round17-i2.test.mjs
+// Round 17 — wave I2 (the integrator): subscribing to webhooks by SYMBOL must work.
+// Canonical events carry only mint — a ["SPYx"] subscription silently gave 0 deliveries
+// with exit 0 (a quiet failure). Fix: deliverToAll accepts symbolToMint (the registry),
+// the CLI loads data/tokens.json and resolves the subscription symbols into mints before matching;
+// an unknown symbol — a warning (a typo is visible immediately), it does not block delivery.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
@@ -28,34 +29,34 @@ const sub = (symbols) => ({
 const ok200 = async () => new Response("ok", { status: 200 });
 const sleep0 = async () => {};
 
-test("webhooks: подписка [\"SPYx\"] ДОСТАВЛЯЕТ mint-only событие через реестр-карту", async () => {
+test("webhooks: a [\"SPYx\"] subscription DELIVERS a mint-only event via the registry map", async () => {
   const map = new Map([["SPYx", SPYX_MINT]]);
   let posts = 0;
   const fetcher = async () => { posts++; return new Response("ok", { status: 200 }); };
   const rep = await deliverToAll([event], [sub(["SPYx"])], { fetcher, sleep: sleep0, symbolToMint: map });
-  assert.equal(posts, 1, "попытка доставки была");
-  assert.equal(rep.delivered, 1, "символьная подписка сработала через минт");
+  assert.equal(posts, 1, "a delivery attempt was made");
+  assert.equal(rep.delivered, 1, "the symbol subscription worked via the mint");
   assert.equal(rep.failed, 0);
   assert.equal(rep.warnings.length, 0);
 });
 
-test("webhooks: без карты — прежнее поведение (символьная подписка не матчит mint-only)", async () => {
+test("webhooks: without the map — the previous behavior (a symbol subscription does not match mint-only)", async () => {
   let posts = 0;
   const fetcher = async () => { posts++; return new Response("ok", { status: 200 }); };
   const rep = await deliverToAll([event], [sub(["SPYx"])], { fetcher, sleep: sleep0 });
   assert.equal(posts, 0);
-  assert.equal(rep.delivered, 0, "без карты матчинга нет (обратно-совместимо)");
+  assert.equal(rep.delivered, 0, "without the map there is no matching (backward compatible)");
 });
 
-test("webhooks: символ вне реестра — warning, доставка не блокируется", async () => {
+test("webhooks: a symbol outside the registry — a warning, delivery is not blocked", async () => {
   const map = new Map([["SPYx", SPYX_MINT]]);
   const rep = await deliverToAll([event], [sub(["SPYX_TYPO"])], { fetcher: ok200, sleep: sleep0, symbolToMint: map });
   assert.equal(rep.delivered, 0);
-  assert.ok(rep.warnings.some((w) => /SPYX_TYPO/.test(w) && /не найден в реестре/.test(w)),
-    "опечатка видна в warnings отчёта");
+  assert.ok(rep.warnings.some((w) => /SPYX_TYPO/.test(w) && /not found in the registry/.test(w)), // round 19: EN
+    "the typo is visible in the report warnings");
 });
 
-test("webhooks: CLI резолвит символы через data/tokens.json — символ подписки матчит mint-only событие", async () => {
+test("webhooks: the CLI resolves symbols via data/tokens.json — a subscription symbol matches a mint-only event", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-i2-"));
   try {
     mkdirSync(path.join(dir, "data"));
@@ -66,17 +67,17 @@ test("webhooks: CLI резолвит символы через data/tokens.json 
       { id: "wh_a", url: "https://example.com/hook", symbols: ["SPYx"], secret: "s1", createdAt: "2026-09-25T00:00:00.000Z", active: true },
     ]));
     writeFileSync(path.join(dir, "events.json"), JSON.stringify([event]));
-    // публичный URL: доставка честно провалится (example.com не примет) — но ПРОИЗОЙДЁТ
-    // попытка: до фикса exit был 0 с delivered=0/skipped=0 (никто не матчился — тишина)
+    // a public URL: the delivery honestly fails (example.com will not accept) — but the ATTEMPT
+    // happens: before the fix the exit was 0 with delivered=0/skipped=0 (nothing matched — silence)
     const child = spawn(process.execPath, [path.join(ROOT, "scripts", "webhook-deliver.mjs"),
       "--events", path.join(dir, "events.json"), "--subscriptions", path.join(dir, "subs.json")], { cwd: dir });
     let out = "";
     child.stdout.on("data", (c) => { out += c; });
     child.stderr.on("data", (c) => { out += c; });
     const code = await new Promise((r) => child.on("close", r));
-    assert.equal(code, 1, `провал доставки = контрактный 1 (out: ${out.slice(0, 300)})`);
-    assert.match(out, /failed=1/, "ПОПЫТКА была — символ сматчился через реестр CLI");
-    assert.doesNotMatch(out, /delivered=0, skipped=0, failed=0/, "не «тихий ноль» как до фикса");
+    assert.equal(code, 1, `a delivery failure = the contract 1 (out: ${out.slice(0, 300)})`);
+    assert.match(out, /failed=1/, "the ATTEMPT was made — the symbol matched via the CLI registry");
+    assert.doesNotMatch(out, /delivered=0, skipped=0, failed=0/, "not a \"quiet zero\" as before the fix");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

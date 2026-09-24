@@ -1,15 +1,15 @@
-// Адверсариальные границы кошелькового сканера и FIFO-отчёта (раунд 7).
-// Пинится ФАКТИЧЕСКОЕ поведение через мок-клиент (сети нет, как принято в этих тестах).
-// История: метка «GAP:» фиксировала дыру/асимметрию текущего поведения (src не
-// чинился); найденные в этом раунде GAP'ы (failed-tx, задвоение баланса, потолок
-// maxTxs) починены в src — их пины переписаны под правильное поведение.
+// Adversarial boundaries of the wallet scanner and the FIFO report (round 7).
+// The ACTUAL behavior is pinned via a mock client (no network, as is the custom in these tests).
+// History: the "GAP:" mark recorded a hole/asymmetry of the current behavior (src was
+// not fixed); the GAPs found in that round (failed-tx, a doubled balance, the maxTxs
+// cap) were fixed in src — their pins are rewritten for the correct behavior.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { scanWallet, fetchOwnerTokenAccounts, TOKEN_PROGRAMS, WalletScanError } from "../src/wallet/scan.mjs";
 import { buildWalletReport } from "../src/wallet/report.mjs";
 import { fetchWalletDeltas } from "../src/ingest/tx.mjs";
 
-// строго base58 (без 0, O, I, l)
+// strictly base58 (without 0, O, I, l)
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
 const AAPLx = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
 const OWNER = "Wa11etBuyer" + "a".repeat(32);
@@ -20,10 +20,10 @@ const REG = [
   { mint: AAPLx, symbol: "AAPLx", name: "Apple xStock", decimals: 8 },
 ];
 
-// фейк-клиент с НАСТОЯЩЕЙ пагинацией: страницы режутся по before, как публичный RPC
+// a fake client with REAL pagination: pages are cut by before, like the public RPC
 function fakeScanClient({ pages = {}, txs = {}, accountsByProgram = {} } = {}) {
-  const sigCalls = []; // before-параметр каждого getSignaturesForAddress
-  const txCalls = []; // параметры каждого getTransaction
+  const sigCalls = []; // the before parameter of each getSignaturesForAddress
+  const txCalls = []; // the parameters of each getTransaction
   return {
     sigCalls,
     txCalls,
@@ -49,7 +49,7 @@ function fakeScanClient({ pages = {}, txs = {}, accountsByProgram = {} } = {}) {
 
 const sig = (s, slot, err = null) => ({ signature: s, slot, blockTime: slot, err });
 
-// getTransaction-ответ: pre берётся из _pre, post — из uiTokenAmount.amount
+// a getTransaction response: pre is taken from _pre, post — from uiTokenAmount.amount
 const txOf = (sig_, balances, { slot = 1, blockTime = 1750000000, version } = {}) => ({
   slot,
   blockTime,
@@ -62,7 +62,7 @@ const txOf = (sig_, balances, { slot = 1, blockTime = 1750000000, version } = {}
   },
 });
 
-// чистый отчёт поверх собранного скана (как в round5-lots-report)
+// a clean report over an assembled scan (as in round5-lots-report)
 const scanOf = (txs, extra = {}) => ({
   owner: OWNER, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, accounts: {}, ...extra,
 });
@@ -72,7 +72,7 @@ const delta1 = (sig_, slot, deltaRaw, blockTime = slot * 100) => ({
   deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 0n, deltaRaw }],
 });
 
-// Шпион на console.error (как в round6-dedup-warn): warn сканера — единственный ожидаемый канал
+// A spy on console.error (as in round6-dedup-warn): the scanner warn is the only expected channel
 async function captureConsoleError(fn) {
   const lines = [];
   const orig = console.error;
@@ -85,10 +85,10 @@ async function captureConsoleError(fn) {
 }
 
 // ===========================================================================
-// Группа 1. Скан: границы потока сигнатур
+// Group 1. Scan: the boundaries of the signature stream
 // ===========================================================================
 
-test("scanWallet: пустая история по всем источникам — нули, not truncated, getTransaction не зовётся", async () => {
+test("scanWallet: an empty history across all sources — zeros, not truncated, getTransaction is not called", async () => {
   const client = fakeScanClient({ pages: { [OWNER]: [] } });
   const scan = await scanWallet(client, OWNER, REG);
   assert.equal(scan.signatures, 0);
@@ -96,11 +96,11 @@ test("scanWallet: пустая история по всем источникам
   assert.deepEqual(scan.txs, []);
   assert.deepEqual(scan.skipped, []);
   assert.equal(scan.truncated, false);
-  assert.equal(client.sigCalls.length, 1, "один источник (адрес) — один запрос сигнатур");
-  assert.equal(client.txCalls.length, 0, "фечить нечего");
+  assert.equal(client.sigCalls.length, 1, "one source (the address) — one signature request");
+  assert.equal(client.txCalls.length, 0, "nothing to fetch");
 });
 
-test("scanWallet: сигнатуры есть, но tx не трогает реестровые минты — fetched, но txs/skipped пусты", async () => {
+test("scanWallet: signatures exist but the txs touch no registry mints — fetched, but txs/skipped are empty", async () => {
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("foreign", 1)] },
     txs: { foreign: txOf("foreign", [
@@ -109,16 +109,16 @@ test("scanWallet: сигнатуры есть, но tx не трогает ре�
   });
   const scan = await scanWallet(client, OWNER, REG);
   assert.equal(scan.signatures, 1);
-  assert.equal(scan.fetched, 1, "tx фетчилась — работа посчитана");
-  assert.deepEqual(scan.txs, [], "нерелевантная tx не попадает в историю");
-  assert.deepEqual(scan.skipped, [], "…и не считается skipped: она не мусор, просто не наша");
+  assert.equal(scan.fetched, 1, "the tx was fetched — the work is counted");
+  assert.deepEqual(scan.txs, [], "an irrelevant tx does not get into the history");
+  assert.deepEqual(scan.skipped, [], "…and is not counted as skipped: it is not garbage, just not ours");
   const rep = buildWalletReport(scan, { registry: REG });
   assert.equal(rep.counts.relevantTxs, 0);
   assert.deepEqual(rep.tokens, []);
 });
 
-test("scanWallet: дубликаты сигнатур в перекрывающихся батчах — дедуп, каждая tx фетчится один раз", async () => {
-  // перекрытие батчей (b в обеих страницах) — мусор от эндпоинта; страницы режутся по before
+test("scanWallet: duplicate signatures in overlapping batches — dedup, each tx fetched once", async () => {
+  // an overlap of batches (b in both pages) — garbage from the endpoint; pages are cut by before
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("a", 1), sig("b", 2), sig("b", 2), sig("c", 3)] },
     txs: {
@@ -128,17 +128,17 @@ test("scanWallet: дубликаты сигнатур в перекрывающ�
     },
   });
   const scan = await scanWallet(client, OWNER, REG, { limit: 2 });
-  assert.equal(scan.signatures, 3, "уникальных сигнатур 3, дубль b схлопнут");
-  assert.equal(scan.fetched, 3, "каждая уникальная tx фетчится ровно один раз");
+  assert.equal(scan.signatures, 3, "3 unique signatures, the duplicate b collapsed");
+  assert.equal(scan.fetched, 3, "each unique tx is fetched exactly once");
   assert.deepEqual(scan.txs.map((t) => t.signature), ["a", "b", "c"]);
   assert.equal(scan.truncated, false);
 });
 
-test("scanWallet: дубликат сигнатуры не съедает потолок maxTxs — уникальная tx берётся", async () => {
-  // Бывший GAP: потолок считал ВХОЖДЕНИЯ сигнатур (taken++ до дедупа) — дубль b из
-  // перекрывшихся батчей тратил слот, и уникальная c из выданного эндпоинтом батча
-  // не бралась вовсе. Теперь потолок по УНИКАЛЬНЫМ сигнатурам: окно режется по
-  // истории, а не по мусору выдачи; truncated остаётся честным («могли не увидеть»).
+test("scanWallet: a duplicate signature does not eat the maxTxs cap — a unique tx is taken", async () => {
+  // A former GAP: the cap counted signature OCCURRENCES (taken++ before the dedup) — the duplicate b from
+  // the overlapping batches wasted a slot, and the unique c from the batch served by the endpoint
+  // was not taken at all. Now the cap is over UNIQUE signatures: the window is cut by
+  // the history, not by the garbage of the output; truncated stays honest ("we might not have seen").
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("a", 1), sig("b", 2), sig("b", 2), sig("c", 3)] },
     txs: {
@@ -148,16 +148,16 @@ test("scanWallet: дубликат сигнатуры не съедает пот
     },
   });
   const scan = await scanWallet(client, OWNER, REG, { limit: 2, maxTxs: 3 });
-  assert.equal(scan.signatures, 3, "все три уникальные взяты: дубль b слот потолка не съел");
+  assert.equal(scan.signatures, 3, "all three uniques taken: the duplicate b did not eat a cap slot");
   assert.deepEqual(scan.txs.map((t) => t.signature), ["a", "b", "c"]);
-  assert.equal(scan.truncated, false, "история дочитана — ложный truncated не ставится");
+  assert.equal(scan.truncated, false, "the history is read to the end — a false truncated is not set");
   assert.equal(scan.fetched, 3);
 });
 
-test("scanWallet: дубликаты до потолка — уникалы добираются, truncated не выдумывается", async () => {
-  // позитив на фикс потолка: батч [a, a, b] при maxTxs=2 берёт ровно уникалы a и b;
-  // раньше второй a съедал потолок — signatures=1 и выдуманный truncated при
-  // полностью дочитанной истории
+test("scanWallet: duplicates before the cap — the uniques are picked up, truncated is not invented", async () => {
+  // a positive on the cap fix: the batch [a, a, b] at maxTxs=2 takes exactly the uniques a and b;
+  // earlier the second a ate the cap — signatures=1 and an invented truncated with
+  // a fully read history
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("a", 1), sig("a", 1), sig("b", 2)] },
     txs: {
@@ -166,13 +166,13 @@ test("scanWallet: дубликаты до потолка — уникалы до
     },
   });
   const scan = await scanWallet(client, OWNER, REG, { limit: 3, maxTxs: 2 });
-  assert.deepEqual(scan.txs.map((t) => t.signature), ["a", "b"], "уникальная b попала в окно после дубля a");
+  assert.deepEqual(scan.txs.map((t) => t.signature), ["a", "b"], "the unique b got into the window after the duplicate a");
   assert.equal(scan.signatures, 2);
-  assert.equal(scan.truncated, false, "за b ничего нет — история полна, truncation лгал бы");
+  assert.equal(scan.truncated, false, "there is nothing after b — the history is full, truncation would lie");
   assert.equal(scan.fetched, 2);
 });
 
-test("scanWallet: пагинация по before — курсор = последняя сигнатура страницы; короткая допрашивается до подтверждения концом (раунд 8)", async () => {
+test("scanWallet: pagination by before — the cursor = the last signature of a page; a short page is probed until confirmed as the end (round 8)", async () => {
   const pages = { [OWNER]: [sig("s0", 1), sig("s1", 2), sig("s2", 3), sig("s3", 4), sig("s4", 5)] };
   const txs = {};
   for (const s of ["s0", "s1", "s2", "s3", "s4"]) {
@@ -180,25 +180,25 @@ test("scanWallet: пагинация по before — курсор = послед
   }
   const client = fakeScanClient({ pages, txs });
   const scan = await scanWallet(client, OWNER, REG, { limit: 2, maxTxs: 10 });
-  assert.equal(scan.signatures, 5, "все пять сигнатур со всех страниц");
+  assert.equal(scan.signatures, 5, "all five signatures from all pages");
   assert.equal(scan.truncated, false);
-  // третья страница короткая (1 < 2) — больше НЕ конец: четвёртый запрос подтверждает
-  // (повтор страницы = нет прогресса/новых уникальных) и только тогда стоп
-  assert.deepEqual(client.sigCalls, [undefined, "s1", "s3", "s4"], "курсор — последняя сигнатура каждой прочитанной страницы");
+  // the third page is short (1 < 2) — no longer the end: the fourth request confirms
+  // (a repeated page = no progress/no new uniques) and only then a stop
+  assert.deepEqual(client.sigCalls, [undefined, "s1", "s3", "s4"], "the cursor — the last signature of each read page");
 });
 
-test("scanWallet: maxTxs:0 — окно пустое, но truncated:true (пустота не маскируется под полноту)", async () => {
+test("scanWallet: maxTxs:0 — the window is empty but truncated:true (emptiness is not masked as completeness)", async () => {
   const client = fakeScanClient({ pages: { [OWNER]: [sig("s1", 1)] } });
   const scan = await scanWallet(client, OWNER, REG, { maxTxs: 0 });
   assert.equal(scan.signatures, 0);
   assert.equal(scan.fetched, 0);
-  assert.equal(scan.truncated, true, "потолок 0 достигнут сразу: отчёт обязан знать, что история не прочитана");
+  assert.equal(scan.truncated, true, "a cap of 0 is reached immediately: the report must know the history was not read");
 });
 
-test("scanWallet: transfer за потолком maxTxs — окно режется, complete:false честен даже при сходящихся цифрах", async () => {
-  // s3 за потолком вообще не фетчится; на цепи это перевод чужого минта, поэтому
-  // дельты окна сходятся с балансом (reconciles) — но complete обязан остаться false:
-  // непрочитанный хвост истории сам по себе делает отчёт неполным.
+test("scanWallet: a transfer beyond the maxTxs cap — the window is cut, complete:false is honest even with converging numbers", async () => {
+  // s3 beyond the cap is not fetched at all; on chain it is a transfer of a foreign mint, so
+  // the window deltas converge with the balance (reconciles) — but complete must stay false:
+  // an unread tail of the history by itself makes the report incomplete.
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("buy1", 1), sig("buy2", 2), sig("noise", 3)] },
     txs: {
@@ -217,24 +217,24 @@ test("scanWallet: transfer за потолком maxTxs — окно режет�
   const scan = await scanWallet(client, OWNER, REG, { maxTxs: 2 });
   assert.equal(scan.signatures, 2);
   assert.equal(scan.truncated, true);
-  assert.equal(client.txCalls.length, 2, "noise за потолком не фетчилась");
+  assert.equal(client.txCalls.length, 2, "noise beyond the cap was not fetched");
   const rep = buildWalletReport(scan, { registry: REG });
   const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
-  assert.equal(spyx.reconciles, true, "дельты окна (60+40) сходятся с цепью (100)");
-  assert.equal(rep.complete, false, "…но truncated сам по себе делает отчёт неполным");
+  assert.equal(spyx.reconciles, true, "the window deltas (60+40) converge with the chain (100)");
+  assert.equal(rep.complete, false, "…but truncated by itself makes the report incomplete");
 });
 
-test("fetchOwnerTokenAccounts: мусор в выдаче (нет info/parsed/data, чужой минт, нет amount) — скан жив", async () => {
+test("fetchOwnerTokenAccounts: garbage in the output (no info/parsed/data, a foreign mint, no amount) — the scan lives", async () => {
   const mk = (pubkey, info) => ({ pubkey, account: { data: info ? { parsed: { info } } : {} } });
   const client = fakeScanClient({
     accountsByProgram: {
       "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [
         mk("GoodAcct" + "c".repeat(35), { mint: SPYx, owner: OWNER, tokenAmount: { amount: "12" } }),
-        mk("NoInfo", {}), // parsed.info пуст
-        mk("NoParsed", null), // data без parsed
-        { pubkey: "NoData", account: {} }, // нет data вовсе
-        mk("JunkAcct", { mint: UNTRACKED, owner: OWNER, tokenAmount: { amount: "99" } }), // минт вне реестра
-        mk("NoAmountAcct" + "d".repeat(31), { mint: AAPLx, owner: OWNER }), // tokenAmount отсутствует
+        mk("NoInfo", {}), // parsed.info empty
+        mk("NoParsed", null), // data without parsed
+        { pubkey: "NoData", account: {} }, // no data at all
+        mk("JunkAcct", { mint: UNTRACKED, owner: OWNER, tokenAmount: { amount: "99" } }), // a mint outside the registry
+        mk("NoAmountAcct" + "d".repeat(31), { mint: AAPLx, owner: OWNER }), // tokenAmount missing
       ] },
     },
   });
@@ -242,15 +242,15 @@ test("fetchOwnerTokenAccounts: мусор в выдаче (нет info/parsed/da
   assert.equal(accts.size, 2);
   assert.equal(accts.get(SPYx).currentRaw, 12n);
   assert.deepEqual(accts.get(SPYx).addresses, ["GoodAcct" + "c".repeat(35)]);
-  assert.equal(accts.get(AAPLx).currentRaw, 0n, "нет tokenAmount → трактуется как 0, не падение");
-  assert.ok(accts.get(AAPLx).addresses.includes("NoAmountAcct" + "d".repeat(31)), "адрес при нулевом балансе всё равно сканируется");
+  assert.equal(accts.get(AAPLx).currentRaw, 0n, "no tokenAmount → treated as 0, not a crash");
+  assert.ok(accts.get(AAPLx).addresses.includes("NoAmountAcct" + "d".repeat(31)), "the address is scanned even at a zero balance");
 });
 
-test("fetchOwnerTokenAccounts: один pubkey в двух программах — дедуп, баланс НЕ задвоен, warn оператору", async () => {
-  // Бывший GAP: dedup был только для списка адресов; currentRaw суммировался без
-  // учёта pubkey — 7+7=14, ложный reconciles:false. Аккаунт принадлежит ровно одной
-  // токен-программе: pubkey дедупится глобально по всем программам (первое вхождение
-  // выигрывает, порядок TOKEN_PROGRAMS детерминирован), конфликт — громкий warn.
+test("fetchOwnerTokenAccounts: one pubkey in two programs — dedup, the balance is NOT doubled, a warn to the operator", async () => {
+  // A former GAP: the dedup was only for the address list; currentRaw was summed without
+  // regard to pubkey — 7+7=14, a false reconciles:false. An account belongs to exactly one
+  // token program: the pubkey is deduped globally across all programs (the first occurrence
+  // wins, the TOKEN_PROGRAMS order is deterministic), a conflict — a loud warn.
   const entry = { pubkey: "SameAcc" + "e".repeat(36), account: { data: { parsed: { info: {
     mint: SPYx, owner: OWNER, tokenAmount: { amount: "7" },
   } } } } };
@@ -261,17 +261,17 @@ test("fetchOwnerTokenAccounts: один pubkey в двух программах 
     },
   });
   const { result: accts, lines } = await captureConsoleError(() => fetchOwnerTokenAccounts(client, OWNER, REG));
-  assert.deepEqual(accts.get(SPYx).addresses, ["SameAcc" + "e".repeat(36)], "адрес один");
-  assert.equal(accts.get(SPYx).currentRaw, 7n, "сумма не задвоена: первое вхождение выигрывает");
-  assert.equal(lines.length, 1, "конфликт не тихий: ровно один warn оператору");
+  assert.deepEqual(accts.get(SPYx).addresses, ["SameAcc" + "e".repeat(36)], "the address is one");
+  assert.equal(accts.get(SPYx).currentRaw, 7n, "the sum is not doubled: the first occurrence wins");
+  assert.equal(lines.length, 1, "the conflict is not quiet: exactly one warn to the operator");
   assert.match(lines[0], /SameAcc/);
   assert.match(lines[0], /\[wallet-scan\]/);
 });
 
-test("fetchOwnerTokenAccounts: разные pubkey в двух программах — честная сумма без warn", async () => {
-  // позитив на фикс дедупа: легитимный случай «по аккаунту в каждой программе»
-  // по-прежнему складывается (7+5=12) и молчит — дедуп не путает разные аккаунты
-  // с конфликтом, шуметь на норму нельзя
+test("fetchOwnerTokenAccounts: different pubkeys in two programs — an honest sum without a warn", async () => {
+  // a positive on the dedup fix: the legitimate case "an account in each program"
+  // is still summed (7+5=12) and stays silent — the dedup does not confuse different accounts
+  // with a conflict, one must not make noise on the norm
   const mk = (pubkey, amount) => ({ pubkey, account: { data: { parsed: { info: {
     mint: SPYx, owner: OWNER, tokenAmount: { amount },
   } } } } });
@@ -282,12 +282,12 @@ test("fetchOwnerTokenAccounts: разные pubkey в двух программ�
     },
   });
   const { result: accts, lines } = await captureConsoleError(() => fetchOwnerTokenAccounts(client, OWNER, REG));
-  assert.deepEqual(accts.get(SPYx).addresses, ["LegAcc" + "f".repeat(37), "AtaAcc" + "a".repeat(37)], "оба аккаунта в порядке программ");
-  assert.equal(accts.get(SPYx).currentRaw, 12n, "разные аккаунты складываются, а не дедупятся");
-  assert.equal(lines.length, 0, "легитимная мультипрограммность — не конфликт, warn не звучит");
+  assert.deepEqual(accts.get(SPYx).addresses, ["LegAcc" + "f".repeat(37), "AtaAcc" + "a".repeat(37)], "both accounts in program order");
+  assert.equal(accts.get(SPYx).currentRaw, 12n, "different accounts are summed, not deduped");
+  assert.equal(lines.length, 0, "a legitimate multi-program setup — not a conflict, no warn sounds");
 });
 
-test("fetchOwnerTokenAccounts: кривая константа токен-программы — WalletScanError invalid-program-id ДО сети", async () => {
+test("fetchOwnerTokenAccounts: a broken token-program constant — WalletScanError invalid-program-id BEFORE the network", async () => {
   const client = fakeScanClient();
   TOKEN_PROGRAMS.push("0bad-not-base58");
   try {
@@ -295,17 +295,17 @@ test("fetchOwnerTokenAccounts: кривая константа токен-про
       () => fetchOwnerTokenAccounts(client, OWNER, REG),
       (e) => e instanceof WalletScanError && e.kind === "invalid-program-id",
     );
-    assert.equal(client.sigCalls.length + client.txCalls.length, 0, "ни одного запроса: константа проверяется раньше сети");
+    assert.equal(client.sigCalls.length + client.txCalls.length, 0, "not a single request: the constant is checked before the network");
   } finally {
-    TOKEN_PROGRAMS.pop(); // глобальную константу возвращаем — другие тесты живы
+    TOKEN_PROGRAMS.pop(); // we return the global constant — the other tests stay alive
   }
 });
 
 // ===========================================================================
-// Группа 2. Парсинг транзакций: версии, ошибки, decimals, mint/burn
+// Group 2. Transaction parsing: versions, errors, decimals, mint/burn
 // ===========================================================================
 
-test("scanWallet: versioned (version:'0') и legacy — сканер версии не различает, обе tx в истории", async () => {
+test("scanWallet: versioned (version:'0') and legacy — the scanner does not distinguish versions, both txs in the history", async () => {
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("v0", 1), sig("legacy", 2)] },
     txs: {
@@ -315,17 +315,17 @@ test("scanWallet: versioned (version:'0') и legacy — сканер верси�
   });
   const scan = await scanWallet(client, OWNER, REG);
   assert.deepEqual(scan.txs.map((t) => t.signature), ["v0", "legacy"]);
-  assert.ok(scan.txs.every((t) => !("version" in t)), "поле version ответа в дельты не тащится");
+  assert.ok(scan.txs.every((t) => !("version" in t)), "the version field of the response is not dragged into the deltas");
   assert.ok(client.txCalls.every((p) => p[1].maxSupportedTransactionVersion === 1),
-    "каждый getTransaction уходит с maxSupportedTransactionVersion:1 (иначе -32015 на versioned)");
+    "every getTransaction goes out with maxSupportedTransactionVersion:1 (otherwise -32015 on versioned)");
 });
 
-test("meta.err при err:null-сигнатуре: парсер считает дельты (слой ingest), сканер их гасит, откат — не молча", async () => {
-  // Бывший GAP: сканер доверял err из списка сигнатур, meta.err ответа getTransaction
-  // игнорировался — failed-tx с расходящимися pre/post (кривой эндпоинт; на живой
-  // цепи откат даёт pre==post) кормила FIFO фантомной дельтой. Развязка по слоям:
-  // fetchWalletDeltas — сырые данные (дельты считаются всегда, err протаскивается),
-  // решение «failed = не влияет на баланс» принимает сканер — и теперь принимает.
+test("meta.err on an err:null signature: the parser computes the deltas (the ingest layer), the scanner zeroes them, the revert is not silent", async () => {
+  // A former GAP: the scanner trusted err from the signature list, the meta.err of the getTransaction
+  // response was ignored — a failed-tx with diverging pre/post (a broken endpoint; on a live
+  // chain a revert gives pre==post) fed the FIFO a phantom delta. A layer separation:
+  // fetchWalletDeltas — raw data (the deltas are always computed, err is passed through),
+  // the decision "failed = does not affect the balance" is made by the scanner — and now it does.
   const deltas = new Set([SPYx]);
   const mismatch = {
     async call() {
@@ -335,11 +335,11 @@ test("meta.err при err:null-сигнатуре: парсер считает �
     },
   };
   const tx = await fetchWalletDeltas(mismatch, "sig-mismatch", deltas);
-  assert.deepEqual(tx.err, { InstructionError: [0, "Custom"] }, "meta.err доезжает в поле err результата…");
-  assert.equal(tx.deltas[0].deltaRaw, 50n, "…дельта на слое ingest посчитана — гасит её сканер, а не парсер");
+  assert.deepEqual(tx.err, { InstructionError: [0, "Custom"] }, "meta.err arrives into the err field of the result…");
+  assert.equal(tx.deltas[0].deltaRaw, 50n, "…the delta is computed at the ingest layer — the scanner zeroes it, not the parser");
 
-  // честный откат (pre==post при meta.err) больше не выпадает молча: это failed-tx —
-  // в skipped с причиной, не в txs и не потеряна
+  // an honest revert (pre==post with meta.err) no longer falls out silently: it is a failed-tx —
+  // into skipped with a reason, not into txs and not lost
   const reverted = {
     async call() {
       return { slot: 1, blockTime: 1, meta: { err: { x: 1 } },
@@ -360,11 +360,11 @@ test("meta.err при err:null-сигнатуре: парсер считает �
   assert.equal(scan.fetched, 1);
 });
 
-test("scanWallet: failed-tx с расходящимися pre/post — дельт нет, фантома в отчёте нет", async () => {
-  // позитив на фикс failed-tx: сигнатура err:null, но в tx meta.err не пуст, а
-  // балансы разошлись (0 → 50). Раньше такая tx попадала в FIFO фантомной покупкой
-  // 50 — окно разъезжалось с цепью (ложный reconciles:false). Семантика
-  // «failed = не влияет на баланс»: pre/post расходятся, но дельт нет.
+test("scanWallet: a failed-tx with diverging pre/post — no deltas, no phantom in the report", async () => {
+  // a positive on the failed-tx fix: the signature is err:null, but the tx meta.err is not empty and
+  // the balances diverged (0 → 50). Earlier such a tx got into the FIFO as a phantom purchase
+  // of 50 — the window diverged from the chain (a false reconciles:false). The semantics
+  // "failed = does not affect the balance": pre/post diverge, but there are no deltas.
   const client = fakeScanClient({
     pages: { [OWNER]: [sig("phantom", 1)] },
     txs: { phantom: {
@@ -382,20 +382,20 @@ test("scanWallet: failed-tx с расходящимися pre/post — дель�
     },
   });
   const scan = await scanWallet(client, OWNER, REG);
-  assert.deepEqual(scan.txs, [], "расходящиеся pre/post failed-tx не попадают в FIFO");
+  assert.deepEqual(scan.txs, [], "a failed-tx with diverging pre/post does not get into the FIFO");
   assert.deepEqual(scan.skipped, [{ signature: "phantom", reason: "failed-tx" }]);
   assert.equal(scan.fetched, 1);
   const rep = buildWalletReport(scan, { registry: REG });
   const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
-  assert.equal(spyx.rawBalance, "0", "окно не накопило фантомные 50");
-  assert.equal(spyx.onchainNow, "0", "на цепи пусто — и отчёт этому не противоречит");
-  assert.equal(spyx.reconciles, true, "0 дельт vs 0 на цепи — сходится без выдумок");
-  assert.equal(rep.complete, true, "история дочитана, всё сошлось");
+  assert.equal(spyx.rawBalance, "0", "the window did not accumulate the phantom 50");
+  assert.equal(spyx.onchainNow, "0", "the chain is empty — and the report does not contradict it");
+  assert.equal(spyx.reconciles, true, "0 deltas vs 0 on chain — it converges without inventions");
+  assert.equal(rep.complete, true, "the history is read to the end, everything converged");
 });
 
-test("рассинхрон decimals между tx и реестром: raw-дельты точны (BigInt-строки), decimals отчёта — из реестра", async () => {
-  // парсер читает ТОЛЬКО uiTokenAmount.amount (строку); поле decimals балансов
-  // игнорируется — расхождение с реестром не искажает raw ни на юнит
+test("a decimals mismatch between the tx and the registry: the raw deltas are exact (BigInt strings), the report decimals — from the registry", async () => {
+  // the parser reads ONLY uiTokenAmount.amount (a string); the decimals field of the balances
+  // is ignored — a mismatch with the registry does not distort the raw by a unit
   const client = {
     async call() {
       return { slot: 1, blockTime: 1750000000, meta: { err: null,
@@ -404,45 +404,45 @@ test("рассинхрон decimals между tx и реестром: raw-де�
     },
   };
   const tx = await fetchWalletDeltas(client, "sig-dec", new Set([SPYx]));
-  assert.equal(tx.deltas[0].deltaRaw, 123456789012345678901234n, "24 знака: далеко за Number.MAX_SAFE_INTEGER, BigInt точен");
+  assert.equal(tx.deltas[0].deltaRaw, 123456789012345678901234n, "24 digits: far beyond Number.MAX_SAFE_INTEGER, BigInt is exact");
 
   const rep = buildWalletReport(scanOf([
     { signature: "sig-dec", slot: 1, blockTime: 1750000000, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 123456789012345678901234n, deltaRaw: 123456789012345678901234n }] },
   ]), { registry: REG });
   const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
   assert.equal(spyx.rawBalance, "123456789012345678901234");
-  assert.equal(spyx.decimals, 8, "decimals в отчёте — из реестра, не из tx");
-  assert.equal(spyx.adjustedAvailable, false, "таймлайна нет — adjusted это identity-fallback, помечен честно");
-  assert.equal(spyx.adjusted.whole, "123456789012345678901234", "fallback не искажает raw");
+  assert.equal(spyx.decimals, 8, "the decimals in the report — from the registry, not from the tx");
+  assert.equal(spyx.adjustedAvailable, false, "no timeline — adjusted is the identity fallback, honestly marked");
+  assert.equal(spyx.adjusted.whole, "123456789012345678901234", "the fallback does not distort the raw");
 });
 
-test("mint-to/burn в потоке: аккаунт создан (pre нет) и закрыт (post нет) — обычные дельты владельца, нетто в одной tx", async () => {
+test("mint-to/burn in the stream: an account created (no pre) and closed (no post) — ordinary owner deltas, the net in one tx", async () => {
   const client = {
     async call() {
       return { slot: 1, blockTime: 1750000000, meta: { err: null,
-        // idx0: burn/закрытие — post-запись исчезла, дельта −50
+        // idx0: a burn/closure — the post record vanished, the delta −50
         preTokenBalances: [{ accountIndex: 0, owner: OWNER, mint: SPYx, uiTokenAmount: { amount: "50" } }],
-        // idx1: mint-to/создание — pre-записи не было, дельта +70
+        // idx1: a mint-to/creation — there was no pre record, the delta +70
         postTokenBalances: [{ accountIndex: 1, owner: OWNER, mint: SPYx, uiTokenAmount: { amount: "70" } }] } };
     },
   };
   const tx = await fetchWalletDeltas(client, "sig-mintburn", new Set([SPYx]));
-  assert.equal(tx.deltas.length, 1, "оба события одного владельца агрегированы");
-  assert.equal(tx.deltas[0].deltaRaw, 20n, "нетто −50+70 = +20");
+  assert.equal(tx.deltas.length, 1, "both events of one owner are aggregated");
+  assert.equal(tx.deltas[0].deltaRaw, 20n, "the net −50+70 = +20");
 
   const rep = buildWalletReport(scanOf([
     { signature: "sig-mintburn", slot: 1, blockTime: 1750000000, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 50n, postRaw: 70n, deltaRaw: 20n }] },
   ]), { registry: REG });
   const spyx = rep.tokens.find((t) => t.symbol === "SPYx");
-  assert.equal(spyx.lots.length, 1, "один лот на tx: FIFO видит нетто-дельту, а не отдельные переводы");
+  assert.equal(spyx.lots.length, 1, "one lot per tx: the FIFO sees the net delta, not separate transfers");
   assert.equal(spyx.lots[0].qtyRaw, "20");
 });
 
 // ===========================================================================
-// Группа 3. FIFO-движок отчёта: пересечения, перерасход, время, нули
+// Group 3. The FIFO engine of the report: intersections, overdraft, time, zeros
 // ===========================================================================
 
-test("FIFO: пересекающиеся покупки-продажи — частичные закрытия, realized по датам продаж, хвост остаётся", () => {
+test("FIFO: intersecting buys/sells — partial closures, realized by the sell dates, the tail stays", () => {
   const txs = [
     delta1("b1", 1, 100n, 1750000000),
     delta1("s1", 2, -30n, 1750003600),
@@ -452,17 +452,17 @@ test("FIFO: пересекающиеся покупки-продажи — ча�
   const rep = buildWalletReport(scanOf(txs, { accounts: { [SPYx]: { address: "AtE1", currentRaw: 30n } } }), { registry: REG });
   const t = rep.tokens.find((x) => x.symbol === "SPYx");
   assert.equal(t.rawBalance, "30");
-  assert.equal(t.lots.length, 1, "из двух лотов выжил второй");
-  assert.ok(t.lots[0].id.endsWith("-2"), "это лот второй покупки");
+  assert.equal(t.lots.length, 1, "of the two lots the second survived");
+  assert.ok(t.lots[0].id.endsWith("-2"), "it is the lot of the second purchase");
   assert.equal(t.lots[0].qtyRaw, "30");
   assert.equal(t.lots[0].acquiredDate, new Date(1750007200 * 1000).toISOString());
-  assert.equal(t.realizedCount, 3, "три записи реализации: 30@t2, 70@t4 (хвост лота-1), 10@t4 (голова лота-2)");
+  assert.equal(t.realizedCount, 3, "three realized records: 30@t2, 70@t4 (the tail of lot-1), 10@t4 (the head of lot-2)");
   assert.equal(t.realizedQtyRaw, "110");
   assert.deepEqual(t.gaps, []);
   assert.equal(rep.complete, true);
 });
 
-test("FIFO: перерасход после частичной продажи — гэп = недостача, очередь пуста, минус в лотах не выдумывается", () => {
+test("FIFO: an overdraft after a partial sale — a gap = the shortage, the queue is empty, no minus is invented in the lots", () => {
   const txs = [
     delta1("b1", 1, 100n),
     delta1("s1", 2, -40n),
@@ -471,15 +471,15 @@ test("FIFO: перерасход после частичной продажи �
   const rep = buildWalletReport(scanOf(txs), { registry: REG });
   const t = rep.tokens.find((x) => x.symbol === "SPYx");
   assert.equal(t.rawBalance, "-20");
-  assert.deepEqual(t.lots, [], "очередь съедена целиком");
-  assert.equal(t.realizedQtyRaw, "100", "реализовано ровно то, что было куплено");
+  assert.deepEqual(t.lots, [], "the queue eaten entirely");
+  assert.equal(t.realizedQtyRaw, "100", "realized exactly what was bought");
   assert.equal(t.gaps.length, 1);
-  assert.equal(t.gaps[0].missingQtyRaw, "20", "недостающие 20 — честная дыра с датой");
+  assert.equal(t.gaps[0].missingQtyRaw, "20", "the missing 20 — an honest hole with a date");
   assert.equal(t.gaps[0].date, new Date(300 * 1000).toISOString());
   assert.equal(rep.complete, false);
 });
 
-test("FIFO: лоты одного дня с разным временем — очередь в порядке tx (slot), продаётся утренний лот", () => {
+test("FIFO: lots of one day with different times — the queue in tx order (slot), the morning lot is sold", () => {
   const morning = 1750000000;
   const noon = morning + 3600;
   const txs = [
@@ -490,31 +490,31 @@ test("FIFO: лоты одного дня с разным временем — о
   const rep = buildWalletReport(scanOf(txs, { accounts: { [SPYx]: { address: "AtE2", currentRaw: 70n } } }), { registry: REG });
   const t = rep.tokens.find((x) => x.symbol === "SPYx");
   assert.equal(t.lots.length, 2);
-  assert.equal(t.lots[0].qtyRaw, "20", "утренний лот подрезан первым (FIFO по порядку tx, не по строке даты)");
+  assert.equal(t.lots[0].qtyRaw, "20", "the morning lot is trimmed first (FIFO by tx order, not by the date string)");
   assert.equal(t.lots[0].acquiredDate, new Date(morning * 1000).toISOString());
-  assert.equal(t.lots[1].qtyRaw, "50", "полуденный нетронут");
+  assert.equal(t.lots[1].qtyRaw, "50", "the noon one untouched");
   assert.equal(t.lots[1].acquiredDate, new Date(noon * 1000).toISOString());
-  assert.equal(t.lots[0].acquiredDate.slice(0, 10), t.lots[1].acquiredDate.slice(0, 10), "оба лота одного дня");
+  assert.equal(t.lots[0].acquiredDate.slice(0, 10), t.lots[1].acquiredDate.slice(0, 10), "both lots of one day");
 });
 
-test("zero-qty transfer: дельта 0 — ни лота, ни реализации, ни гэпа; токен не появляется в отчёте без аккаунта", () => {
+test("a zero-qty transfer: a delta of 0 — no lot, no realization, no gap; the token does not appear in the report without an account", () => {
   const rep = buildWalletReport(scanOf([
     { signature: "zero", slot: 1, blockTime: 100, deltas: [{ owner: OWNER, mint: SPYx, preRaw: 10n, postRaw: 10n, deltaRaw: 0n }] },
   ]), { registry: REG });
-  assert.deepEqual(rep.tokens, [], "нулевая дельта не рождает токен-строку без аккаунта на цепи");
-  assert.equal(rep.counts.relevantTxs, 1, "tx при этом посчитана релевантной (дельта в скане была)");
+  assert.deepEqual(rep.tokens, [], "a zero delta does not birth a token row without an on-chain account");
+  assert.equal(rep.counts.relevantTxs, 1, "the tx is still counted as relevant (the delta was in the scan)");
 });
 
-test("buildWalletReport: пустой скан — tokens [], counts нули, complete:true (честная пустота, не ошибка)", () => {
+test("buildWalletReport: an empty scan — tokens [], zero counts, complete:true (an honest emptiness, not an error)", () => {
   const rep = buildWalletReport(scanOf([], { signatures: 0, fetched: 0 }), { registry: REG });
   assert.deepEqual(rep.tokens, []);
   assert.deepEqual(rep.counts, { signatures: 0, fetched: 0, relevantTxs: 0, skipped: 0 });
   assert.equal(rep.truncated, false);
-  assert.equal(rep.complete, true, "нечего скрывать и нечего терять — отчёт полон тривиально");
+  assert.equal(rep.complete, true, "nothing to hide and nothing to lose — the report is trivially complete");
   assert.equal(rep.method, "fifo");
 });
 
-test("buildWalletReport: accounts как Map (путь /lots-сервера) — сверка работает как с объектом", () => {
+test("buildWalletReport: accounts as a Map (the /lots-server path) — the reconcile works as with an object", () => {
   const rep = buildWalletReport(
     scanOf([delta1("a", 1, 60n)], { accounts: new Map([[SPYx, { address: "AtMap", currentRaw: 60n }]]) }),
     { registry: REG },

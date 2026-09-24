@@ -1,13 +1,13 @@
-// Стрим сигнатур транзакций по минту: пагинация getSignaturesForAddress.
-// err-транзакции отдаются с флагом — фильтрация на совести потребителя.
-// Контракты (раунды 8–9):
-//   — конец истории — ТОЛЬКО пустая страница («короткая» у нод с soft caps ≠ конец);
-//   — уникальность: одна сигнатура не выдаётся дважды (залипшая страница дедупится);
-//   — не-массивный ответ (result:null лежащего шлюза) — ЯВНАЯ ошибка, не тихий
-//     «конец истории» (fail-closed);
-//   — битые элементы (null/без signature) skip'аются, курсор — последний валидный;
-//   — терминация: 2 подряд страницы БЕЗ новых уникальных сигнатур = нет прогресса
-//     (чередующиеся дубли с разными хвостами тоже ловятся).
+// Stream of transaction signatures per mint: getSignaturesForAddress pagination.
+// Failed (err) transactions are yielded with the flag — filtering is the consumer's job.
+// Contracts (rounds 8-9):
+//   — end of history is ONLY an empty page ("short" pages on soft-capped nodes ≠ end);
+//   — uniqueness: one signature is never yielded twice (a stuck page gets deduped);
+//   — a non-array response (result:null from a lying gateway) is an EXPLICIT error,
+//     not a silent "end of history" (fail-closed);
+//   — broken elements (null/no signature) are skipped; the cursor is the last valid one;
+//   — termination: 2 consecutive pages WITHOUT new unique signatures = no progress
+//     (alternating duplicates with different tails are caught too).
 export async function* streamSignatures(client, mint, { limit = 100, maxPages = Infinity } = {}) {
   let before = undefined;
   const seen = new Set();
@@ -33,7 +33,7 @@ export async function* streamSignatures(client, mint, { limit = 100, maxPages = 
           err: s.err ?? null,
         };
       }
-      lastValid = s.signature; // курсор — последний валидный элемент, дубли включительно
+      lastValid = s.signature; // cursor is the last valid element, duplicates included
     }
     if (added === 0 || lastValid === null || lastValid === before) {
       if (++zeroProgressPages >= 2) return;

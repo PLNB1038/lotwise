@@ -1,16 +1,17 @@
-// Нормализация on-chain состояния минта в канонические MULTIPLIER_CHANGE.
-// Живые находки 19.09: у PreStocks нет API истории, но события живут прямо в минте —
-// SPACEX: active=1 + pending=5 c 10.06.2026 (уже эффективен), OPENAI: ×1.4861347 c 17.07.
-// On-chain — первичный источник: статус confirmed; «from» при бэкфилле = поле active
-// (лучшая правда цепи о предыдущем значении; промежуточные шаги между наблюдениями
-// из состояния минта невосстановимы — это задокументированное ограничение, не догадка).
+// Normalization of on-chain mint state into canonical MULTIPLIER_CHANGE.
+// Live findings of Sep 19: PreStocks has no history API, but the events live right in the
+// mint — SPACEX: active=1 + pending=5 since 2026-06-10 (already effective), OPENAI: ×1.4861347 since Jul 17.
+// On-chain is the primary source: status confirmed; "from" during backfill = the active field
+// (the chain's best truth about the previous value; intermediate steps between observations
+// are unrecoverable from mint state — a documented limitation, not a guess).
 //
-// Инвариант цепочки (раунд 4): событие эмитится ТОЛЬКО если продолжает цепочку от "1".
-// MultiplierTimeline требует базу "1" и непрерывность, иначе createApiServer падает с
-// TimelineError на старте, а запись с ядом уже персистится в журнале → рестарт реплеит
-// → краш снова: вечный boot-loop. Токен, впервые увиденный в середине истории
-// (active="5"), не получает выдуманного 5→X: lastEffective фиксируется, events остаются
-// пустыми, warn на старте serve честно говорит о неполноте. Событие не выдумываем.
+// Chain invariant (round 4): an event is emitted ONLY if it continues the chain from "1".
+// MultiplierTimeline requires the base "1" and continuity, otherwise createApiServer falls
+// with TimelineError at startup, while an entry with the poison is already persisted in the
+// journal → a restart replays it → crash again: an eternal boot-loop. A token first seen
+// mid-history (active="5") gets no invented 5→X: lastEffective is fixed, events stay
+// empty, a warn at serve startup honestly says the history is incomplete. We do not
+// invent events.
 import { validateEvent } from "../schema/events.mjs";
 
 export class OnchainNormalizeError extends Error {
@@ -22,9 +23,9 @@ export class OnchainNormalizeError extends Error {
 
 const DAY = 86400;
 
-// pending "0" — способ эмитента «сбросить» pending (живая фикстура xstocks-spyx-current):
-// трактуем как отсутствующий, иначе журнал эмитит X→0, таймлайн формально валиден,
-// а витрина молча показывает нули. Defense in depth: парсер цепи чинится отдельно.
+// pending "0" is the issuer's way to "reset" pending (the live xstocks-spyx-current fixture):
+// we treat it as absent, otherwise the journal emits X→0, the timeline is formally valid,
+// and the vitrine silently shows zeros. Defense in depth: the chain parser is fixed separately.
 const pendingOf = (parsed) =>
   parsed.pendingMultiplier == null || Number(parsed.pendingMultiplier) === 0
     ? null
@@ -39,16 +40,16 @@ const effectiveOf = (parsed, nowMs) => {
 };
 
 /**
- * Бэкфилл из текущего состояния минта (первое наблюдение).
- * @returns {object|null} каноническое MULTIPLIER_CHANGE или null, если события не видно
+ * Backfill from the current mint state (first observation).
+ * @returns {object|null} a canonical MULTIPLIER_CHANGE or null when no event is visible
  */
 export function backfillMultiplierEvent(token, parsed, nowMs = Date.now()) {
-  if (!parsed.hasExtension) return null; // токен без механизма ребейза — фактов нет, и это факт
+  if (!parsed.hasExtension) return null; // a token without a rebase mechanism — no facts, and that is a fact
   const pending = pendingOf(parsed);
   if (pending === null || parsed.pendingEffectiveDate === null) return null;
   const from = parsed.activeMultiplier;
   const to = pending;
-  if (from === to) return null; // pending уже равен active — ротация завершена, нового не видно
+  if (from === to) return null; // pending already equals active — the rotation is complete, nothing new to see
   const event = {
     type: "MULTIPLIER_CHANGE",
     mint: token.mint,
@@ -68,13 +69,14 @@ export function backfillMultiplierEvent(token, parsed, nowMs = Date.now()) {
 }
 
 /**
- * Дифф журнала: сравнить прошлую эффективную величину с текущим состоянием цепи.
- * @param {{lastEffective: string, observedAt: string, events?: Array}|null} entry — запись журнала
- *   (null = первое наблюдение). events — ПОЛНАЯ история выданных событий: entry без
- *   них (v1) мигрируется бэкфиллом вызывающим слоем.
+ * Journal diff: compare the past effective value with the current chain state.
+ * @param {{lastEffective: string, observedAt: string, events?: Array}|null} entry — journal entry
+ *   (null = first observation). events — the FULL history of emitted events: an entry without
+ *   them (v1) is migrated by backfill by the calling layer.
  * @returns {{event: object|null, entry: {lastEffective: string, observedAt: string, events: Array}}}
- *   event — только НОВОЕ событие этого шага; вся история живёт в entry.events —
- *   иначе рестарт процесса терял уже выданные события (множитель молча откатывался к 1).
+ *   event — only the NEW event of this step; the whole history lives in entry.events —
+ *   otherwise a process restart lost the already-emitted events (the multiplier silently
+ *   rolled back to 1).
  */
 export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   const nowIso = new Date(nowMs).toISOString();
@@ -83,27 +85,27 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
 
   if (entry === null) {
     if (!parsed.hasExtension) {
-      // минт без механизма ребейза: дефолт "1" парсера — не факт, записи нет
-      // (волна C4-1: пустые записи {lastEffective:"1"} лишь шум и приманка)
+      // a mint without a rebase mechanism: the parser's default "1" is not a fact, no entry
+      // (wave C4-1: empty {lastEffective:"1"} entries are just noise and bait)
       return { event: null, entry: null };
     }
-    // Первое наблюдение: бэкфилл имеет смысл, только если СТАРТУЕТ цепочку от "1".
-    // Токен, впервые увиденный mid-history (active="5", pending="6"), раньше эмитил 5→6 —
-    // TimelineError при построении таймлайнов и вечный boot-loop (ядо персистится в
-    // журнале). Не выдумываем: фиксируем lastEffective, events остаются пустыми.
+    // First observation: backfill only makes sense if it STARTS the chain from "1".
+    // A token first seen mid-history (active="5", pending="6") used to emit 5→6 —
+    // a TimelineError when building timelines and an eternal boot-loop (the poison gets
+    // persisted in the journal). We do not invent: lastEffective is fixed, events stay empty.
     const candidate = parsed.hasExtension && effective !== "1"
       ? backfillMultiplierEvent(token, parsed, nowMs)
       : null;
     const event = candidate !== null && candidate.multiplierFrom === "1" ? candidate : null;
-    // entry фиксирует ЭФФЕКТИВНУЮ величину — будущие ротации диффом от неё
+    // entry records the EFFECTIVE value — future rotations diff against it
     return { event, entry: { lastEffective: effective, observedAt: nowIso, events: event ? [event] : [] } };
   }
 
-  // Волна C4-1 [P1]: ответ БЕЗ scaledUiAmountConfig — «нет факта», а не «сброс до 1»:
-  // парсер честно отдаёт дефолт "1" (hasExtension:false), но дифф принимал его за
-  // наблюдённый сброс → фантом X→1, а при возврате правды — вечный дубль-триплет
-  // в истории (марафон 2400 бутов: 1221 нарушение этого класса до фикса). Запись
-  // не трогаем — тот же контракт, что у недоступной цепи.
+  // Wave C4-1 [P1]: a response WITHOUT scaledUiAmountConfig is "no fact", not "a reset to 1":
+  // the parser honestly returns the default "1" (hasExtension:false), but the diff took it
+  // for an observed reset → a phantom X→1, and when the truth returned — an eternal duplicate
+  // triplet in the history (the 2400-boot marathon: 1221 violations of this class before the fix).
+  // The entry is not touched — the same contract as for an unreachable chain.
   if (!parsed.hasExtension) {
     return { event: null, entry };
   }
@@ -112,11 +114,11 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
     return { event: null, entry: { lastEffective: entry.lastEffective, observedAt: nowIso, events: priorEvents } };
   }
 
-  // Дифф-событие эмитится, только если ПРОДОЛЖАЕТ записанную цепочку: она пуста и
-  // from === "1", либо последнее событие кончается ровно в from. Иначе — например,
-  // токен впервые увиден после завершённой ротации (lastEffective="5", events=[]):
-  // событие 5→X порвало бы таймлайн при следующем ребейзе. Честно обновляем
-  // lastEffective без события — warn в serve подхватит запись без истории.
+  // The diff event is emitted only if it CONTINUES the recorded chain: it is empty and
+  // from === "1", or the last event ends exactly at from. Otherwise — for example,
+  // a token first seen after a completed rotation (lastEffective="5", events=[]):
+  // a 5→X event would tear the timeline at the next rebase. We honestly update
+  // lastEffective without an event — a warn in serve will pick up an entry without history.
   const chainOk = priorEvents.length === 0
     ? entry.lastEffective === "1"
     : priorEvents[priorEvents.length - 1].multiplierTo === entry.lastEffective;

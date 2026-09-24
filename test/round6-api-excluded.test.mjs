@@ -1,14 +1,14 @@
-// Регрессионные тесты раунда 6 ревью Lotwise — зона src/api/server.mjs.
-// Находки:
-//   LW2_excluded_unmarked_multiplier_and_events — фикс ROUND5 №5 («исключённый токен
-//       показывал множитель 1») покрыл /summary, /lots и /health, но не /multiplier
-//       и /events. Для исключённого токена (TimelineError на старте, события скрыты
-//       из eventsByMint) /multiplier отвечает сфабрикованной «1» с events:0 БЕЗ поля
-//       excluded — неотличимо от честного «событий не было»; /events отдаёт тихий []
-//       хотя события у токена есть.
-//   LW2_excluded_token_adjusted_row_unmarked (кросс-зонная, серверная часть) — строка
-//       исключённого токена в /lots не несёт adjustedAvailable:false — контракта для
-//       витрины «adjusted — not computed» (t.adjustedAvailable === false || t.excluded).
+// Round 6 regression tests of the Lotwise review — zone src/api/server.mjs.
+// Findings:
+//   LW2_excluded_unmarked_multiplier_and_events — the fix of ROUND5 #5 ("an excluded token
+//       showed multiplier 1") covered /summary, /lots and /health, but not /multiplier
+//       and /events. For an excluded token (TimelineError at startup, events hidden
+//       from eventsByMint) /multiplier answers a fabricated "1" with events:0 WITHOUT the
+//       excluded field — indistinguishable from an honest "no events"; /events serves a silent []
+//       although the token has events.
+//   LW2_excluded_token_adjusted_row_unmarked (cross-zone, the server part) — the row
+//       of an excluded token in /lots carries no adjustedAvailable:false — the contract
+//       for the vitrine "adjusted — not computed" (t.adjustedAvailable === false || t.excluded).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createApiServer } from "../src/api/server.mjs";
@@ -20,13 +20,13 @@ import { fileURLToPath } from "node:url";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
-const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // как в round5-api-ui.test.mjs
+const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // same as in round5-api-ui.test.mjs
 
 const historyNodes = JSON.parse(readFileSync(path.join(dir, "xstocks-spyx-history-eth.json"), "utf8")).nodes;
 const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { symbol: "SPYx" }), SPYx);
 
-// Сервер с «отравленным» минтом: кривая цепочка → TimelineError на старте → токен
-// исключается из витрины (паттерн round5-api-ui.test.mjs / api.test.mjs).
+// Server with a "poisoned" mint: a broken chain → TimelineError at startup → the token
+// is excluded from the vitrine (the round5-api-ui.test.mjs / api.test.mjs pattern).
 async function withPoisonedServer(fn, optsFn = null) {
   const registry = await loadRegistry("data/tokens.json");
   const bad = registry.find((t) => t.symbol === "T-SpaceX");
@@ -50,25 +50,25 @@ async function withPoisonedServer(fn, optsFn = null) {
 
 // ---- LW2_excluded_unmarked_multiplier_and_events: /multiplier ----
 
-test("/multiplier: исключённый токен — «1» помечена excluded+excludedReason, а не голая", async () => {
+test("/multiplier: an excluded token — the \"1\" is marked excluded+excludedReason, not bare", async () => {
   await withPoisonedServer(async (base, bad) => {
     const res = await fetch(`${base}/multiplier?symbol=T-SpaceX&raw=1000`);
     assert.equal(res.status, 200);
     const m = await res.json();
     assert.equal(m.mint, bad.mint);
-    assert.equal(m.multiplier, "1"); // значение то же сырое, но теперь честно помечено
+    assert.equal(m.multiplier, "1"); // the value is the same raw one, but now honestly marked
     assert.equal(m.events, 0);
-    assert.equal(m.excluded, true); // было: undefined — «1» неотличима от «событий не было»
+    assert.equal(m.excluded, true); // was: undefined — the "1" was indistinguishable from "no events"
     assert.ok(typeof m.excludedReason === "string" && m.excludedReason.length > 0);
   });
 });
 
-test("/multiplier: пометка аддитивна — живой токен отвечает как раньше, без флагов", async () => {
+test("/multiplier: the marking is additive — a live token answers as before, without flags", async () => {
   await withPoisonedServer(async (base) => {
     const m = await (await fetch(`${base}/multiplier?symbol=SPYx&raw=100000000&date=2026-07-01`)).json();
     assert.equal(m.multiplier, "1.005714560286254");
     assert.equal(m.events, 4);
-    assert.equal(m.sampleScaledQty.exact, false); // поля легитимного ответа не тронуты
+    assert.equal(m.sampleScaledQty.exact, false); // the fields of a legitimate response are untouched
     assert.equal(m.excluded, undefined);
     assert.equal(m.excludedReason, undefined);
   });
@@ -76,30 +76,30 @@ test("/multiplier: пометка аддитивна — живой токен �
 
 // ---- LW2_excluded_unmarked_multiplier_and_events: /events ----
 
-test("/events: исключённый токен — честный отказ с причиной вместо тихого []", async () => {
+test("/events: an excluded token — an honest refusal with a reason instead of a silent []", async () => {
   await withPoisonedServer(async (base) => {
     const res = await fetch(`${base}/events?symbol=T-SpaceX`);
-    assert.equal(res.status, 400); // конвенция эндпоинта для кривого symbol — как у неизвестного
+    assert.equal(res.status, 400); // the endpoint convention for a broken symbol — same as for an unknown one
     const body = await res.json();
-    assert.match(body.error, /excluded/i); // причина доступна в сообщении
+    assert.match(body.error, /excluded/i); // the reason is available in the message
     assert.equal(body.excluded, true);
     assert.ok(typeof body.excludedReason === "string" && body.excludedReason.length > 0);
   });
 });
 
-test("/events: конвенция не перегнута — неизвестный symbol 400, живой остаётся массивом", async () => {
+test("/events: the convention did not overreach — an unknown symbol 400, a live one stays an array", async () => {
   await withPoisonedServer(async (base) => {
     const unknown = await fetch(`${base}/events?symbol=NOSUCHx`);
     assert.equal(unknown.status, 400);
     const good = await (await fetch(`${base}/events?symbol=SPYx`)).json();
-    assert.ok(Array.isArray(good)); // форма легитимного ответа не менялась
+    assert.ok(Array.isArray(good)); // the shape of a legitimate response unchanged
     assert.equal(good.length, 4);
   });
 });
 
-// ---- LW2_excluded_token_adjusted_row_unmarked: /lots пост-обработка ----
+// ---- LW2_excluded_token_adjusted_row_unmarked: /lots post-processing ----
 
-test("/lots: у исключённого токена adjustedAvailable:false, raw-поля сохранены; у обычного поля нет", async () => {
+test("/lots: an excluded token has adjustedAvailable:false with raw fields preserved; a regular one has no such field", async () => {
   const scanOf = (badMint) => ({
     owner: OWNER, signatures: 1, fetched: 1, skipped: [], truncated: false,
     accounts: new Map([
@@ -114,18 +114,18 @@ test("/lots: у исключённого токена adjustedAvailable:false, r
   await withPoisonedServer(async (base) => {
     const rep = await (await fetch(`${base}/lots?address=${OWNER}`)).json();
     const excluded = rep.tokens.find((x) => x.symbol === "T-SpaceX");
-    assert.ok(excluded, "токен исключённого минта присутствует в отчёте");
+    assert.ok(excluded, "the excluded-mint token is present in the report");
     assert.equal(excluded.excluded, true);
-    assert.equal(excluded.adjustedAvailable, false); // контракт витрины: «adjusted — not computed»
-    assert.equal(excluded.rawBalance, "10"); // сырые значения не перевираются
+    assert.equal(excluded.adjustedAvailable, false); // the vitrine contract: "adjusted — not computed"
+    assert.equal(excluded.rawBalance, "10"); // raw values are not falsified
     assert.equal(excluded.netDeltaRaw, "10");
-    assert.equal(excluded.adjusted.whole, "10"); // fallback тождественный — потому и помечен
+    assert.equal(excluded.adjusted.whole, "10"); // the fallback is identical — that is why it is marked
     const good = rep.tokens.find((x) => x.symbol === "SPYx");
-    assert.ok(good, "живой токен тоже в отчёте");
-    // пост-обработка /lots помечает ТОЛЬКО исключённые: обычному токену «adjusted —
-    // not computed» не показывается (контракт витрины noAdjusted = excluded ||
-    // adjustedAvailable === false не срабатывает). Значение поля у обычного токена
-    // (true/undefined) — забота report.mjs, чужая зона: здесь важно лишь «не false».
+    assert.ok(good, "the live token is in the report too");
+    // the /lots post-processing marks ONLY the excluded ones: a regular token is not shown
+    // "adjusted — not computed" (the vitrine contract noAdjusted = excluded ||
+    // adjustedAvailable === false does not fire). The field's value for a regular token
+    // (true/undefined) is report.mjs's concern, a foreign zone: here only "not false" matters.
     assert.notEqual(good.adjustedAvailable, false);
     assert.equal(good.excluded, undefined);
   }, (bad) => ({ walletScanner: async () => scanOf(bad.mint) }));

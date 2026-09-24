@@ -1,12 +1,13 @@
-// Раунд 15 — фиксы атаки диффа (волна F1):
-//   F1-1 [P2] enrich: «?? дефолт» съедал null ошибки флага — скрипт печатал отказ
-//        и ПОТОМ шёл в сеть/переписывал реестр. Теперь: битый флаг = exit 2 ДО любого
-//        I/O (0 запросов, файл не тронут).
-//   F1-2 [P3] enrich: equals-форма --registry=<путь> молча игнорировалась —
-//        обогащался дефолтный файл (повтор ROUND7 №10a). Теперь грамматика = serve.
-//   F1-3 [P3] лок журнала: pid-живость (семантика R9 №9 из вебхук-лока) — живой
-//        застрявший владелец НЕ ломается по mtime; мёртвый pid ломается сразу.
-//   F1-4 [P3] будущий mtime лока (перекос часов) — ломка сразу, без 10с ожидания.
+// formerly round15-f1-fixes.test.mjs
+// Round 15 — the fixes of the diff attack (wave F1):
+//   F1-1 [P2] enrich: the "?? default" ate the null flag errors — the script printed a refusal
+//        and THEN went to the network/rewrote the registry. Now: a broken flag = exit 2 BEFORE any
+//        I/O (0 requests, the file untouched).
+//   F1-2 [P3] enrich: the equals form --registry=<path> was silently ignored —
+//        the default file was enriched (a repeat of ROUND7 #10a). Now the grammar = serve.
+//   F1-3 [P3] the journal lock: pid liveness (the semantics of R9 #9 from the webhook lock) — a live
+//        stuck owner is NOT broken by mtime; a dead pid is broken immediately.
+//   F1-4 [P3] a future mtime of the lock (a clock skew) — broken immediately, without a 10s wait.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync, existsSync } from "node:fs";
@@ -29,9 +30,9 @@ const runCli = (args) => new Promise((resolve) => {
   child.on("close", (code) => resolve({ code, out }));
 });
 
-// ---- F1-1: битый флаг = отказ ДО любого I/O ----
+// ---- F1-1: a broken flag = a refusal BEFORE any I/O ----
 
-test("cli: enrich --registry без значения — exit 2, НОЛЬ запросов к API, файл не тронут", async () => {
+test("cli: enrich --registry without a value — exit 2, ZERO API requests, the file untouched", async () => {
   let hits = 0;
   const api = http.createServer((req, res) => { hits++; res.writeHead(400); res.end(); });
   await new Promise((r) => api.listen(0, "127.0.0.1", r));
@@ -40,19 +41,19 @@ test("cli: enrich --registry без значения — exit 2, НОЛЬ зап
     const reg = path.join(dir, "reg.json");
     writeFileSync(reg, JSON.stringify([{ mint: MINT, symbol: "SPYx", decimals: null }]));
     const { code, out } = await runCli(["--registry", "--api", `http://127.0.0.1:${api.address().port}`]);
-    assert.equal(code, 2, "контрактный код отказа флага");
+    assert.equal(code, 2, "the contract refusal code of a flag");
     assert.match(out, /--registry requires a value/);
-    assert.equal(hits, 0, "ни одного запроса к API после отказа (P2: раньше шли сеть+перезапись)");
-    assert.equal(JSON.parse(readFileSync(reg, "utf8"))[0].decimals, null, "реестр не перезаписан");
+    assert.equal(hits, 0, "not a single API request after the refusal (P2: network+rewrite used to happen)");
+    assert.equal(JSON.parse(readFileSync(reg, "utf8"))[0].decimals, null, "the registry is not rewritten");
   } finally {
     await new Promise((r) => api.close(r));
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-// ---- F1-2: equals-форма ----
+// ---- F1-2: the equals form ----
 
-test("cli: enrich --registry=<путь> (equals) — обогащается ИМЕННО этот файл", async () => {
+test("cli: enrich --registry=<path> (equals) — exactly THAT file is enriched", async () => {
   const dir = tmp("lw-f1b-");
   try {
     const alt = path.join(dir, "alt.json");
@@ -64,8 +65,8 @@ test("cli: enrich --registry=<путь> (equals) — обогащается ИМ
       res.end(JSON.stringify({ [MINT]: { usdPrice: 1, blockId: "b", decimals: 8, priceChange24h: {} } }));
     });
     await new Promise((r) => api.listen(0, "127.0.0.1", r));
-    // cwd песочницы: дефолтный путь data/tokens.json разрешится в её же data/ —
-    // кладём туда копию def, чтобы поймать «обогатился не тот файл»
+    // the sandbox cwd: the default path data/tokens.json resolves into its own data/ —
+    // we put a copy of def there to catch "the wrong file was enriched"
     mkdirSync(path.join(dir, "data"));
     writeFileSync(path.join(dir, "data", "tokens.json"), readFileSync(def));
     const child = spawn(process.execPath, [path.join(ROOT, "scripts", "enrich-decimals.mjs"),
@@ -75,68 +76,68 @@ test("cli: enrich --registry=<путь> (equals) — обогащается ИМ
     child.stderr.on("data", (c) => { out += c; });
     const code = await new Promise((r) => child.on("close", r));
     await new Promise((r) => api.close(r));
-    assert.equal(code, 0, `успех (out: ${out.slice(0, 200)})`);
-    assert.equal(JSON.parse(readFileSync(alt, "utf8"))[0].decimals, 8, "equals-форма обогатила УКАЗАННЫЙ файл");
-    assert.equal(JSON.parse(readFileSync(path.join(dir, "data", "tokens.json"), "utf8"))[0].decimals, null, "дефолтный не тронут");
+    assert.equal(code, 0, `success (out: ${out.slice(0, 200)})`);
+    assert.equal(JSON.parse(readFileSync(alt, "utf8"))[0].decimals, 8, "the equals form enriched the SPECIFIED file");
+    assert.equal(JSON.parse(readFileSync(path.join(dir, "data", "tokens.json"), "utf8"))[0].decimals, null, "the default one untouched");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 import { mkdirSync } from "node:fs";
 
-// ---- F1-3: pid-живость лока журнала ----
+// ---- F1-3: the pid liveness of the journal lock ----
 
 const entry = (m) => ({ lastEffective: m, observedAt: "2026-09-24T00:00:00.000Z", events: [] });
 
-test("journal-лок: ЖИВОЙ владелец с древним mtime НЕ ломается (pid-живость, R9 №9)", () => {
+test("journal lock: a LIVE owner with an ancient mtime is NOT broken (pid liveness, R9 #9)", () => {
   const dir = tmp("lw-f1c-");
   try {
     const jp = path.join(dir, "j.json");
     const lock = `${jp}.lock`;
     writeFileSync(jp, JSON.stringify({ A: entry("1") }));
     writeFileSync(lock, JSON.stringify({ pid: process.pid, createdAt: "2026-09-24T00:00:00.000Z" }));
-    utimesSync(lock, new Date(Date.now() - 3600_000), new Date(Date.now() - 3600_000)); // час назад
+    utimesSync(lock, new Date(Date.now() - 3600_000), new Date(Date.now() - 3600_000)); // an hour ago
     const t0 = Date.now();
     saveJournalMerged(jp, { B: entry("2") }, { staleMs: 10_000, attempts: 3, retryPauseMs: 1 });
-    assert.ok(Date.now() - t0 < 2000, "без долгого ожидания: быстрые ретраи и деградация");
-    assert.ok(existsSync(lock), "лока ЖИВОГО владельца не снесли (запись деградировала без лока)");
+    assert.ok(Date.now() - t0 < 2000, "no long waiting: fast retries and degradation");
+    assert.ok(existsSync(lock), "the LIVE owner's lock was not torn down (the write degraded without the lock)");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("journal-лок: МЁРТВЫЙ pid ломается СРАЗУ, даже с совершенно свежим mtime", () => {
+test("journal lock: a DEAD pid is broken IMMEDIATELY, even with a completely fresh mtime", () => {
   const dir = tmp("lw-f1d-");
   try {
     const jp = path.join(dir, "j.json");
     const lock = `${jp}.lock`;
     writeFileSync(jp, JSON.stringify({ A: entry("1") }));
-    writeFileSync(lock, JSON.stringify({ pid: 2_000_000_000, createdAt: new Date().toISOString() })); // pid вне диапазра ОС = мёртв
+    writeFileSync(lock, JSON.stringify({ pid: 2_000_000_000, createdAt: new Date().toISOString() })); // a pid outside the OS range = dead
     const t0 = Date.now();
     saveJournalMerged(jp, { B: entry("2") }, { staleMs: 10_000, attempts: 600, retryPauseMs: 5 });
-    assert.ok(Date.now() - t0 < 2000, "сирота после kill -9 не жжёт staleMs — ломка по pid мгновенная (было ~10с)");
+    assert.ok(Date.now() - t0 < 2000, "an orphan after kill -9 does not burn staleMs — the pid-based break is instant (used to be ~10s)");
     const after = JSON.parse(readFileSync(jp, "utf8"));
-    assert.ok(after.A && after.B, "merge прошёл под взятым локом");
-    assert.ok(!existsSync(lock), "лок убран за собой");
+    assert.ok(after.A && after.B, "the merge went through under the taken lock");
+    assert.ok(!existsSync(lock), "the lock is cleaned up after itself");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-// ---- F1-4: будущий mtime ----
+// ---- F1-4: a future mtime ----
 
-test("journal-лок: будущий mtime (перекос часов) — ломка сразу, не 10с ожидания", () => {
+test("journal lock: a future mtime (a clock skew) — broken immediately, not a 10s wait", () => {
   const dir = tmp("lw-f1e-");
   try {
     const jp = path.join(dir, "j.json");
     const lock = `${jp}.lock`;
     writeFileSync(jp, JSON.stringify({ A: entry("1") }));
-    writeFileSync(lock, "legacy-not-json"); // легаси-контент: pid-проверка неприменима
-    utimesSync(lock, new Date(Date.now() + 3600_000), new Date(Date.now() + 3600_000)); // mtime из будущего
+    writeFileSync(lock, "legacy-not-json"); // legacy content: the pid check is not applicable
+    utimesSync(lock, new Date(Date.now() + 3600_000), new Date(Date.now() + 3600_000)); // an mtime from the future
     const t0 = Date.now();
     saveJournalMerged(jp, { B: entry("2") }, { staleMs: 10_000, attempts: 600, retryPauseMs: 5 });
-    assert.ok(Date.now() - t0 < 2000, "age < 0 = кандидат на ломку немедленно");
-    assert.ok(!existsSync(lock), "будущий лок сломан и убран");
+    assert.ok(Date.now() - t0 < 2000, "age < 0 = a break candidate immediately");
+    assert.ok(!existsSync(lock), "the future lock is broken and removed");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

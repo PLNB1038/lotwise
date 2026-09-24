@@ -1,7 +1,8 @@
-// Клиент GeckoTerminal: пулы токена и дневные OHLCV (без ключа).
-// Троттл/ретраи — та же дисциплина, что у RpcClient: 429/5xx/сеть — повтор,
-// прочие HTTP — сразу ошибка с kind. Цены — float-НАБЛЮДЕНИЯ (не суммы!):
-// целочисленное правило проекта касается количеств и множителей, не котировок.
+// GeckoTerminal client: token pools and daily OHLCV (no key required).
+// Throttle/retries follow the RpcClient discipline: 429/5xx/network — retry,
+// other HTTP statuses fail immediately with a kind. Prices are float OBSERVATIONS
+// (not amounts!): the project's integer rule covers quantities and multipliers,
+// not market quotes.
 export class PriceError extends Error {
   constructor(kind, message, { status } = {}) {
     super(message);
@@ -29,11 +30,11 @@ export class GeckoTerminalClient {
     this._queue = Promise.resolve();
   }
 
-  // Выдержка интервала работает только внутри очереди (порт из RpcClient,
-  // раунд 5): конкурентные вызовы (параллельные GET /crosscheck по разным
-  // символам) встают в хвост, иначе все считают wait от одного _lastCall
-  // и уходят залпом → 429 → ретраи усиливают шторм. Провал слота не должен
-  // отравить хвост.
+  // The interval is enforced inside a queue only (ported from RpcClient,
+  // round 5): concurrent calls (parallel GET /crosscheck for different
+  // symbols) join the tail, otherwise every caller computes its wait from the
+  // same _lastCall and they all fire at once → 429 → retries amplify the storm.
+  // A failed slot must not poison the tail.
   async _throttle() {
     const turn = this._queue.then(async () => {
       const wait = this._lastCall + this.minIntervalMs - Date.now();
@@ -61,7 +62,7 @@ export class GeckoTerminalClient {
       }
       if (res.status === 429) { lastErr = new PriceError("rate-limit", "HTTP 429", { status: 429 }); continue; }
       if (!res.ok) {
-        // прочие 4xx (404 пула, 403) — не транзиентность: сразу ошибка, без ретраев
+        // other 4xx (pool 404, 403) are not transient: fail immediately, no retries
         if (res.status < 500) throw new PriceError("http", `HTTP ${res.status}`, { status: res.status });
         lastErr = new PriceError("http", `HTTP ${res.status}`, { status: res.status });
         continue;
@@ -75,7 +76,7 @@ export class GeckoTerminalClient {
     throw lastErr ?? new PriceError("network", "unreachable");
   }
 
-  /** Все пулы минта (Solana). */
+  /** All pools of the mint (Solana). */
   async poolsForMint(mint) {
     const body = await this._get(`/networks/solana/tokens/${mint}/pools`);
     const pools = body?.data;
@@ -84,9 +85,9 @@ export class GeckoTerminalClient {
   }
 
   /**
-   * Лучший пул, где НАШ токен — base (OHLCV ценит именно base; пул «STONK / SPYx»
-   * отдаёт цену STONK — ловушка ориентации, проверено живьём 19.09).
-   * Сортировка по суточному объёму; null = пула с нашим base нет.
+   * The best pool where OUR token is the base (OHLCV prices the base side; a
+   * "STONK / SPYx" pool quotes STONK — an orientation trap, verified live on Sep 19).
+   * Sorted by 24h volume; null when no pool has our token as base.
    */
   async bestBasePool(mint) {
     const pools = await this.poolsForMint(mint);
@@ -99,7 +100,7 @@ export class GeckoTerminalClient {
     return { address: addr, name: p.attributes?.name ?? null, volume24hUsd: p.attributes?.volume_usd?.h24 ?? null };
   }
 
-  /** Дневные свечи пула, по возрастанию ts: [{ts, o, h, l, c}]. */
+  /** Daily candles of the pool, ascending by ts: [{ts, o, h, l, c}]. */
   async dailyCandles(poolAddress, { limit = 1000 } = {}) {
     const body = await this._get(
       `/networks/solana/pools/${poolAddress}/ohlcv/day?aggregate=1&limit=${limit}&currency=usd`,
@@ -109,9 +110,9 @@ export class GeckoTerminalClient {
     return list
       .map(([ts, o, h, l, c]) => ({ ts, o, h, l, c }))
       .sort((a, b) => a.ts - b.ts)
-      // Дубль-свечи одного дня — живая реальность GT (волна C2, 23.09: тот же ts,
-      // разные o/h/l) — не контракт, а дрейф формы. Схлопываем, ПОСЛЕДНЯЯ запись
-      // дня выигрывает (GT перезаписывает текущую/переагрегированную свечу).
+      // A duplicate candle for the same day is a live GT reality (wave C2, Sep 23:
+      // same ts, different o/h/l) — not a contract, but shape drift. Deduped, the
+      // LAST record of the day wins (GT overwrites the current/re-aggregated candle).
       .filter((cd, i, arr) => i === arr.length - 1 || cd.ts !== arr[i + 1].ts);
   }
 }

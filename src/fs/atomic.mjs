@@ -1,8 +1,8 @@
-// Общие гарантии файлов данных: атомарная запись и сохранение улики повреждённого
-// файла (раунд 6). Выделено из журнала (saveJournalAtomic раунда 5) после находки
-// LW2_tokens_json_write_non_atomic: тот же класс обрыва записи, что у журнала, у
-// data/tokens.json ронял сервис ЦЕЛИКОМ — а писатели реестра (
-// enrich-decimals) писали прямым writeFileSync поверх живого файла.
+// Shared guarantees for data files: atomic writes and preservation of a corrupted file
+// as evidence (round 6). Extracted from the journal (saveJournalAtomic of round 5) after
+// the LW2_tokens_json_write_non_atomic finding: the same class of interrupted write as the
+// journal's, on data/tokens.json, brought the service down ENTIRELY — while the registry
+// writers (enrich-decimals) wrote with a plain writeFileSync over the live file.
 import {
   openSync, writeSync, closeSync, fsyncSync, renameSync, unlinkSync, copyFileSync,
   statSync, chmodSync,
@@ -12,94 +12,95 @@ import { dirname, join, basename } from "node:path";
 const defaultFs = { statSync, chmodSync, openSync, fsyncSync, closeSync };
 
 /**
- * Перенести mode СУЩЕСТВУЮЩЕЙ цели на tmp перед rename (раунд 8): rename заменяет
- * inode, и операторский chmod 600 (в webhooks.json лежат plaintext-секреты HMAC)
- * молча слетал до дефолтных 0644 на каждой записи. Цели нет — нечего сохранять;
- * chmod — best-effort (платформы без полноценного chmod не роняют запись).
+ * Carry the mode of an EXISTING target onto the tmp file before rename (round 8): rename
+ * replaces the inode, and an operator chmod 600 (webhooks.json holds plaintext HMAC secrets)
+ * silently fell back to the default 0644 on every write. No target — nothing to carry;
+ * chmod is best-effort (platforms without a full chmod must not break the write).
  */
 export function copyModeIfExists(targetPath, tmpPath, { fsTools = defaultFs } = {}) {
   let mode;
   try {
     mode = fsTools.statSync(targetPath).mode;
   } catch {
-    return; // цели ещё нет: режим задаст создатель файла (umask), не наша забота
+    return; // no target yet: the file creator (umask) sets the mode, not our concern
   }
   try {
     fsTools.chmodSync(tmpPath, mode);
-  } catch { /* best-effort: запись важнее режима */ }
+  } catch { /* best-effort: the write matters more than the mode */ }
 }
 
 /**
- * fsync каталога после rename (раунд 8, Linux-прод): без него power-loss может
- * уронить само переименование при уцелевших данных. На платформах/ФС без fsync
- * каталогов (Windows) — тихо best-effort. kill -9 не страшен и без него: данные
- * fsync'ятся ДО rename.
+ * fsync the directory after rename (round 8, Linux prod): without it, a power-loss can
+ * undo the rename itself while the data survives. On platforms/filesystems without directory
+ * fsync (Windows) — quietly best-effort. kill -9 is safe even without this: the data is
+ * fsynced BEFORE the rename.
  */
 export function fsyncDir(dirPath, { fsTools = defaultFs } = {}) {
   let fd;
   try {
     fd = fsTools.openSync(dirPath, "r");
   } catch {
-    return; // платформа не даёт открыть каталог как файл — best-effort
+    return; // the platform refuses to open a directory as a file — best-effort
   }
   try {
     fsTools.fsyncSync(fd);
-  } catch { /* win/фс без fsync каталога — best-effort */ }
+  } catch { /* win/fs without directory fsync — best-effort */ }
   finally {
-    try { fsTools.closeSync(fd); } catch { /* уже закрыт */ }
+    try { fsTools.closeSync(fd); } catch { /* already closed */ }
   }
 }
 
 /**
- * Атомарная запись JSON: payload целиком уходит во временный файл в ТОЙ ЖЕ
- * директории (rename между устройствами не работает), fsync'ится и переименовывается
- * поверх целевого файла. Обрыв в любой момент оставляет на месте журнала/реестра
- * целую предыдущую версию; temp-файл при ЛЮБОМ отказе подчищается.
- * Раунд 7 (адверсариальные тесты журнала): сериализация — ДО создания temp. Раньше
- * JSON.stringify стоял после openSync(tmp), и несериализуемый payload (BigInt внутри)
- * бросал TypeError, оставляя после себя пустой .tmp рядом с целью: цель при этом
- * цела (мусор не доезжал до неё), но директория засорялась при каждом таком отказе.
- * Теперь бросок сериализации не создаёт ни одного файла, а отказ write/fsync/rename
- * после открытия temp подчищает его в catch — на диске не остаётся ни tmp, ни
- * изменений цели, ошибка пробрасывается как раньше.
- * @param {string} filePath — путь к файлу
- * @param {object|Array} value — сериализуемый payload
+ * Atomic JSON write: the payload goes entirely into a temp file in the SAME directory
+ * (rename across devices does not work), is fsynced, and is renamed over the target file.
+ * An interruption at any moment leaves a whole previous version in place of the journal/
+ * registry; the temp file is cleaned up on ANY failure.
+ * Round 7 (adversarial journal tests): serialization happens BEFORE the temp file is created.
+ * Previously JSON.stringify ran after openSync(tmp), and a non-serializable payload (BigInt
+ * inside) threw a TypeError, leaving an empty .tmp next to the target: the target itself
+ * stayed intact (no garbage ever reached it), but the directory got polluted on every such
+ * failure. Now a serialization throw creates no files at all, and a write/fsync/rename
+ * failure after the temp file is opened cleans it up in catch — the disk is left with
+ * neither a tmp nor target changes, and the error propagates as before.
+ * @param {string} filePath — path to the file
+ * @param {object|Array} value — serializable payload
  */
 export function atomicWriteJson(filePath, value) {
   const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
-  // сериализация до openSync: бросок (BigInt/циклические ссылки) не оставляет файлов
+  // serialize before openSync: a throw (BigInt/circular references) leaves no files behind
   const data = JSON.stringify(value, null, 1) + "\n";
-  // 0600 с создания (ROUND9 №10): в data/-файлах бывают plaintext-секреты (webhooks);
-  // прежде первая запись получала umask 0644 на Linux, а R8-2 берёг mode только
-  // со второй записи. Существующую цель copyModeIfExists ниже приведёт к её mode.
+  // 0600 from creation (round 9 fix 10): data/ files can hold plaintext secrets (webhooks);
+  // previously the first write got the Linux umask default 0644, and R8-2 only preserved
+  // the mode from the second write on. An existing target is normalized to its mode by
+  // copyModeIfExists below.
   const fd = openSync(tmp, "w", 0o600);
   try {
     try {
       writeSync(fd, data);
-      fsyncSync(fd); // данные на диске ДО rename: переименование не обгоняет запись
+      fsyncSync(fd); // data on disk BEFORE the rename: the rename never overtakes the write
     } finally {
-      closeSync(fd); // close до возможного unlink: на Windows открытый файл не удалить
+      closeSync(fd); // close before a possible unlink: on Windows an open file cannot be deleted
     }
-    copyModeIfExists(filePath, tmp); // mode цели (напр. 0600 секретов) переживает rename (раунд 8)
+    copyModeIfExists(filePath, tmp); // the target's mode (e.g. 0600 secrets) survives the rename (round 8)
     renameSync(tmp, filePath);
-    fsyncDir(dirname(filePath)); // каталог после rename: power-loss не роняет переименование (раунд 8)
+    fsyncDir(dirname(filePath)); // directory after rename: power-loss does not undo the rename (round 8)
   } catch (err) {
-    // отказ write/fsync/rename ПОСЛЕ открытия temp: подчищаем, цель не тронута —
-    // на диске не остаётся ни tmp, ни изменений (лучшее усилие: не затираем исходную ошибку)
-    try { unlinkSync(tmp); } catch { /* уже удалён или залочен — исходная ошибка важнее */ }
+    // write/fsync/rename failure AFTER the temp file was opened: clean up, the target is
+    // untouched — the disk keeps neither a tmp nor changes (best effort: do not mask the original error)
+    try { unlinkSync(tmp); } catch { /* already deleted or locked — the original error matters more */ }
     throw err;
   }
 }
 
 /**
- * Сохранить повреждённый файл как улику ПЕРЕД первой перезаписью: rename в
- * `<path>.corrupt-<timestamp>`; если rename сорван («временный» отказ: AV-сканер,
- * индексер, EBUSY на Windows) — попытки повторяются с другими именами, в крайнем
- * случае содержимое КОПИРУЕТСЯ рядом (оригинал при этом остаётся на месте).
- * @param {string} filePath — путь к повреждённому файлу
+ * Preserve a corrupted file as evidence BEFORE the first overwrite: rename to
+ * `<path>.corrupt-<timestamp>`; if the rename is blocked (a "transient" failure: AV scanner,
+ * indexer, EBUSY on Windows) — attempts are retried under different names, and as a last
+ * resort the content is COPIED alongside (the original stays in place).
+ * @param {string} filePath — path to the corrupted file
  * @param {{nowMs?: number, attempts?: number, rename?: Function, copy?: Function}} [opts]
- *   attempts — число попыток rename (по умолчанию 1); rename/copy — инъекция для тестов
- * @returns {string|null} путь к улике или null, если сохранить улику не удалось вовсе
+ *   attempts — number of rename attempts (default 1); rename/copy — test injection
+ * @returns {string|null} the evidence path, or null if the evidence could not be preserved at all
  */
 export function preserveCorruptedFile(filePath, { nowMs = Date.now(), attempts = 1, rename = renameSync, copy = copyFileSync } = {}) {
   const backupName = (i) => `${filePath}.corrupt-${new Date(nowMs + i).toISOString().replace(/[:.]/g, "-")}`;
@@ -108,9 +109,9 @@ export function preserveCorruptedFile(filePath, { nowMs = Date.now(), attempts =
     try {
       rename(filePath, backupPath);
       return backupPath;
-    } catch { /* файл мог быть залочен мгновение — следующая попытка под другим именем */ }
+    } catch { /* the file may have been locked for a moment — next attempt under a different name */ }
   }
-  // rename так и не удался: улику можно хотя бы скопировать (оригинал остаётся на месте)
+  // rename never succeeded: the evidence can at least be copied (the original stays in place)
   const backupPath = backupName(attempts - 1);
   try {
     copy(filePath, backupPath);

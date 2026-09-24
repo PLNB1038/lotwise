@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { validateEvent, isValidEvent, EventValidationError } from "../src/schema/events.mjs";
 
-const MINT = "EHTvgDbXdad1o1tfqmT4apRDYXQmbsLtc72jLLGgQAp6"; // реальный минт из стокбейсовского реестра (SPACEX-класс, base58-валидный)
+const MINT = "EHTvgDbXdad1o1tfqmT4apRDYXQmbsLtc72jLLGgQAp6"; // a real mint from the stockbasis registry (SPACEX-class, base58-valid)
 const valid = (over = {}) => ({
   type: "SPLIT",
   mint: MINT,
@@ -14,145 +14,145 @@ const valid = (over = {}) => ({
   ...over,
 });
 
-test("валидное событие SPLIT проходит", () => {
+test("a valid SPLIT event passes", () => {
   assert.equal(validateEvent(valid()), true);
 });
 
-test("валидное DIVIDEND_ACCRUAL в raw-единицах проходит", () => {
+test("a valid DIVIDEND_ACCRUAL in raw units passes", () => {
   assert.equal(validateEvent(valid({
     type: "DIVIDEND_ACCRUAL",
-    amountPerUnitRaw: 150_000, // 0.15 при 6 decimals
+    amountPerUnitRaw: 150_000, // 0.15 at 6 decimals
     decimals: 6,
   })), true);
 });
 
-test("MERGER требует новый минт, отличный от старого", () => {
+test("a MERGER requires a new mint different from the old one", () => {
   assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu" })), true);
   assert.equal(isValidEvent(valid({ type: "MERGER", newMint: MINT })), false);
 });
 
-test("MERGER-коэффициент обмена опционален, но если есть — целые положительные", () => {
+test("the MERGER exchange ratio is optional, but if present — positive integers", () => {
   assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu", exchangeNumerator: 2, exchangeDenominator: 1 })), true);
   assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu", exchangeNumerator: 1.5, exchangeDenominator: 1 })), false);
   assert.equal(isValidEvent(valid({ type: "MERGER", newMint: "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu", exchangeDenominator: 1 })), false);
 });
 
-test("TICKER_CHANGE должен менять символ", () => {
+test("a TICKER_CHANGE must change the symbol", () => {
   assert.equal(isValidEvent(valid({ type: "TICKER_CHANGE", oldSymbol: "TSLAx", newSymbol: "TSLA2x" })), true);
   assert.equal(isValidEvent(valid({ type: "TICKER_CHANGE", oldSymbol: "TSLAx", newSymbol: "TSLAx" })), false);
 });
 
-test("REDEEM проходит без доп-полей, но с источником", () => {
+test("a REDEEM passes without extra fields, but with a source", () => {
   assert.equal(isValidEvent(valid({ type: "REDEEM" })), true);
   assert.equal(isValidEvent(valid({ type: "REDEEM", sources: [] })), false);
 });
 
-test("неизвестный тип отклоняется", () => {
+test("an unknown type is rejected", () => {
   assert.equal(isValidEvent(valid({ type: "MOON_LANDING" })), false);
 });
 
-test("битый минт отклоняется", () => {
+test("a broken mint is rejected", () => {
   assert.equal(isValidEvent(valid({ mint: "0OIlIl0OIl" })), false);
 });
 
-test("отрицательный/дробный коэффициент сплита отклоняется", () => {
+test("a negative/fractional split ratio is rejected", () => {
   assert.equal(isValidEvent(valid({ ratioNumerator: 0 })), false);
   assert.equal(isValidEvent(valid({ ratioNumerator: 1.5 })), false);
 });
 
-test("дивиденд в float, а не raw-целом, отклоняется", () => {
+test("a dividend as a float, not a raw integer, is rejected", () => {
   assert.equal(isValidEvent(valid({ type: "DIVIDEND_ACCRUAL", amountPerUnitRaw: 0.15, decimals: 6 })), false);
 });
 
-test("без источников событие не существует (анти-слух)", () => {
+test("without sources the event does not exist (anti-rumor)", () => {
   assert.equal(isValidEvent(valid({ sources: undefined })), false);
 });
 
-test("ошибка валидации называет поле", () => {
+test("a validation error names the field", () => {
   try {
     validateEvent(valid({ ratioNumerator: -3 }));
-    assert.fail("должен был бросить");
+    assert.fail("it must have thrown");
   } catch (err) {
     assert.ok(err instanceof EventValidationError);
     assert.equal(err.field, "ratioNumerator");
   }
 });
 
-// ---- раунд 4: строгие даты (src/schema/isodate.mjs) ----
-// Находки: Date.parse принимает мусор после схемной проверки формы и тихо
-// «перекатывает» несуществующие даты. Схема — единственный барьер для
-// журнал-реплея и xstocks-истории, поэтому валидация здесь, а не ниже.
+// ---- round 4: strict dates (src/schema/isodate.mjs) ----
+// Findings: Date.parse accepts garbage after the schema's form check and silently
+// "rolls over" non-existent dates. The schema is the only barrier for
+// the journal replay and the xstocks history, hence the validation here, not lower.
 
-// Батарея мусорных дат: находки ревью (месяц 13 / 00, 60-я секунда, оффсет 99:99),
-// перекаты Date.parse, наивные datetime, нарушения формы.
+// A battery of garbage dates: the review findings (a month of 13 / 00, a 60th second, an offset 99:99),
+// Date.parse roll-overs, naive datetimes, form violations.
 const garbageDates = [
-  "2026-13-01",                // месяц 13: Date.parse = NaN уже ПОСЛЕ схемной проверки
-  "2026-00-10",                // месяц 00
-  "2026-06-18T23:59:60Z",      // 60-я секунда (leap second) — не время
-  "2026-06-18T12:00:00+99:99", // оффсет 99:99 проходит форму, Date.parse = NaN
-  "2026-02-30",                // Date.parse перекатывает на 02.03
-  "2026-06-31",                // перекат на 01.07
-  "2027-02-29",                // не високосный — перекат на 01.03
-  "2026-06-18T24:00:00Z",      // перекат на следующий день
-  "2026-06-18T12:00:00",       // наивное время: парсилось бы локалью хоста
-  "2026-06-18T12:00:00.500",   // наивное с долями — та же дыра
-  "2026-1-1",                  // форма: без ведущих нулей
-  "2026-02-29",                // 2026 не високосный
-  "2026-06-18T12:60:00Z",      // минуты 60
-  "2026-06-18T12:00:00+0200",  // оффсет без двоеточия — не канонический формат проекта
+  "2026-13-01",                // month 13: Date.parse = NaN already AFTER the schema check
+  "2026-00-10",                // month 00
+  "2026-06-18T23:59:60Z",      // a 60th second (leap second) — not a time
+  "2026-06-18T12:00:00+99:99", // an offset 99:99 passes the form, Date.parse = NaN
+  "2026-02-30",                // Date.parse rolls it over to 02.03
+  "2026-06-31",                // a roll-over to 01.07
+  "2027-02-29",                // not a leap year — a roll-over to 01.03
+  "2026-06-18T24:00:00Z",      // a roll-over to the next day
+  "2026-06-18T12:00:00",       // a naive time: would be parsed by the host's locale
+  "2026-06-18T12:00:00.500",   // a naive one with fractions — the same hole
+  "2026-1-1",                  // the form: without leading zeros
+  "2026-02-29",                // 2026 is not a leap year
+  "2026-06-18T12:60:00Z",      // minutes 60
+  "2026-06-18T12:00:00+0200",  // an offset without a colon — not the project's canonical format
 ];
 
-test("мусорные даты: параметризованная батарея отвергается схемой", () => {
+test("garbage dates: a parameterized battery is rejected by the schema", () => {
   for (const bad of garbageDates) {
-    assert.equal(isValidEvent(valid({ effectiveDate: bad })), false, `должна отвергаться: ${JSON.stringify(bad)}`);
+    assert.equal(isValidEvent(valid({ effectiveDate: bad })), false, `must be rejected: ${JSON.stringify(bad)}`);
   }
 });
 
-test("мусорная дата называется полем effectiveDate", () => {
+test("a garbage date names the field effectiveDate", () => {
   try {
     validateEvent(valid({ effectiveDate: "2026-02-30" }));
-    assert.fail("перекат-дата должна была быть отвергнута");
+    assert.fail("a rolled-over date must have been rejected");
   } catch (err) {
     assert.ok(err instanceof EventValidationError);
     assert.equal(err.field, "effectiveDate");
   }
 });
 
-// АНТИ-регрессия: канонические форматы (реальные продюсеры проекта) не должны
-// начать отвергаться строгим валидатором.
+// An ANTI-regression: the canonical formats (the project's real producers) must not
+// start being rejected by the strict validator.
 const canonicalDates = [
-  "2026-06-18",                  // date-only (витрина, /multiplier?date=)
+  "2026-06-18",                  // date-only (the vitrine, /multiplier?date=)
   "2026-06-18T00:00:00Z",        // Z
   "2026-06-18T12:34:56Z",
-  "2026-06-18T12:34:56.000Z",    // формат xstocks-фикстур и normalize-onchain (toISOString)
-  "2026-06-18T12:34:56.5Z",      // одна доля секунды
-  "2026-06-18T12:34:56.123456Z", // суб-мс доли в строке
-  "2026-06-18T04:00Z",           // без секунд
-  "2026-06-18T12:34:56+02:00",   // положительный оффсет
-  "2026-06-18T12:34:56-05:30",   // отрицательный оффсет, нецелый час
-  "2025-10-31T23:55:00.000Z",    // реальное событие SPYx из фикстуры
-  "2028-02-29",                  // високосный день валиден
+  "2026-06-18T12:34:56.000Z",    // the format of the xstocks fixtures and normalize-onchain (toISOString)
+  "2026-06-18T12:34:56.5Z",      // one fraction of a second
+  "2026-06-18T12:34:56.123456Z", // sub-ms fractions in the string
+  "2026-06-18T04:00Z",           // without seconds
+  "2026-06-18T12:34:56+02:00",   // a positive offset
+  "2026-06-18T12:34:56-05:30",   // a negative offset, a non-integer hour
+  "2025-10-31T23:55:00.000Z",    // a real SPYx event from the fixture
+  "2028-02-29",                  // a leap day is valid
   "1970-01-01",
 ];
 
-test("канонические форматы дат не отвергаются (анти-перегиб строгого валидатора)", () => {
+test("canonical date formats are not rejected (an anti-overreach of the strict validator)", () => {
   for (const good of canonicalDates) {
-    assert.equal(validateEvent(valid({ effectiveDate: good })), true, `должна проходить: ${good}`);
+    assert.equal(validateEvent(valid({ effectiveDate: good })), true, `must pass: ${good}`);
   }
 });
 
-// ---- раунд 4: множитель «0» и кап точности ----
+// ---- round 4: the multiplier "0" and the precision cap ----
 
-test("нулевой множитель не существует: «0», «0.0», «0.000» отвергаются, «0.5» валиден", () => {
+test("a zero multiplier does not exist: \"0\", \"0.0\", \"0.000\" are rejected, \"0.5\" is valid", () => {
   const mc = (over) => valid({ type: "MULTIPLIER_CHANGE", multiplierFrom: "1", multiplierTo: "1.005", ...over });
   for (const zero of ["0", "0.0", "0.000"]) {
-    assert.equal(isValidEvent(mc({ multiplierTo: zero })), false, `multiplierTo=${zero} — позиция обнулилась бы молча`);
+    assert.equal(isValidEvent(mc({ multiplierTo: zero })), false, `multiplierTo=${zero} — the position would be silently zeroed`);
     assert.equal(isValidEvent(mc({ multiplierFrom: zero, multiplierTo: "1.005" })), false, `multiplierFrom=${zero}`);
   }
-  assert.equal(isValidEvent(mc({ multiplierFrom: "0.5", multiplierTo: "1" })), true); // пол-множителя существует
+  assert.equal(isValidEvent(mc({ multiplierFrom: "0.5", multiplierTo: "1" })), true); // a half multiplier exists
 });
 
-test("кап дробной точности множителя 30 знаков — пара с timeline.mjs (decimalToRatio)", () => {
+test("the cap of the multiplier's fractional precision at 30 digits — a pair with timeline.mjs (decimalToRatio)", () => {
   const mc = (over) => valid({ type: "MULTIPLIER_CHANGE", multiplierFrom: "1", multiplierTo: "1.005", ...over });
   const m30 = "1." + "1".repeat(30);
   const m31 = "1." + "1".repeat(31);
@@ -160,9 +160,9 @@ test("кап дробной точности множителя 30 знаков 
   assert.equal(isValidEvent(mc({ multiplierTo: m31 })), false);
 });
 
-// ---- раунд 4: инварианты фаззера (schema) ----
+// ---- round 4: the fuzzer invariants (schema) ----
 
-test("канонически валидные события всех 6 типов не отвергаются строгим валидатором", () => {
+test("canonically valid events of all 6 types are not rejected by the strict validator", () => {
   const newMint = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu";
   const byType = {
     SPLIT: { ratioNumerator: 3, ratioDenominator: 1 },
@@ -172,7 +172,7 @@ test("канонически валидные события всех 6 типо
     REDEEM: {},
     MULTIPLIER_CHANGE: { multiplierFrom: "1", multiplierTo: "1.005", reason: "Dividend" },
   };
-  // даты в форматах всех продюсеров проекта: date-only (витрина), .000Z (toISOString), Z (ручной ввод)
+  // the dates in the formats of all the project's producers: date-only (the vitrine), .000Z (toISOString), Z (manual input)
   for (const [type, extra] of Object.entries(byType)) {
     for (const date of ["2026-06-18", "2026-06-18T04:00:00.000Z", "2026-06-18T04:00Z"]) {
       assert.equal(validateEvent(valid({ type, effectiveDate: date, ...extra })), true, `${type} @ ${date}`);

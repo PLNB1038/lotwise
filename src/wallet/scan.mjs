@@ -1,16 +1,16 @@
-// Кошельковый скан: транзакции адреса И его токен-аккаунтов реестровых минтов.
-// Только подписи владельца НЕДОВОСТАТОЧНО: входящие переводы (fee платит отправитель)
-// касаются token-аккаунта, но не адреса кошелька — скан v1 их терял (живой кейс EJBQ:
-// 4 подписи вместо всей истории). v2: сигнатуры адреса + сигнатуры каждого живого
-// token-аккаунта, дедуп, плюс текущие балансы аккаунтов для сверки отчёта с цепью.
-// fail-closed: err-транзакции и недоступные — в skipped с причиной, не молча.
+// Wallet scan: transactions of the address AND of its token accounts for registry mints.
+// Owner signatures alone are NOT enough: incoming transfers (the sender pays the fee)
+// touch the token account but not the wallet address — the v1 scan lost them (live case EJBQ:
+// 4 signatures instead of the full history). v2: address signatures + signatures of every live
+// token account, deduplicated, plus current account balances to reconcile the report with the chain.
+// Fail-closed: failed and unavailable txs go into skipped with a reason, not silently.
 import { fetchWalletDeltas } from "../ingest/tx.mjs";
 
 export const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export const TOKEN_PROGRAMS = [
-  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // классический SPL (сверен с owner минта USDC)
-  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", // Token-2022 (xStocks и др., сверен с фикстурой)
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // classic SPL (cross-checked against the owner of the USDC mint)
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", // Token-2022 (xStocks et al., cross-checked against the fixture)
 ];
 
 export class WalletScanError extends Error {
@@ -21,10 +21,10 @@ export class WalletScanError extends Error {
   }
 }
 
-// E4-1 (волна E): charset+длины мало — «1»×41 проходит regex, но декодируется не в
-// 32 байта: сканер тратил RPC и отвечал 503 «rpc» на перманентно битый ввод (retry-
-// логика потребителя долбит его вечно). Структурная проверка: base58 → ровно 32 байта;
-// лидирующие «1» — нулевые байты (поэтому «1»×32 = system program, структурно валиден).
+// E4-1 (wave E): charset+length checks alone are too weak — "1"×41 passes the regex but does not
+// decode to 32 bytes: the scanner burned RPC calls and answered 503 "rpc" on permanently broken input (the
+// consumer's retry logic hammers it forever). Structural check: base58 → exactly 32 bytes;
+// leading "1"s are zero bytes (hence "1"×32 = system program, structurally valid).
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const B58_INDEX = new Map([...B58].map((ch, i) => [ch, i]));
 
@@ -43,14 +43,14 @@ export function isValidAddress(addr) {
 }
 
 /**
- * Текущие token-аккаунты владельца по минтам реестра.
+ * Current token accounts of the owner for registry mints.
  * @returns {Promise<Map<string, {addresses: string[], currentRaw: bigint}>>}
- *   mint -> ВСЕ аккаунты (ATA + legacy): баланс = сумма, сканируется каждый адрес.
- *   Один аккаунт на минт — норма, но legacy-кошельки держат по два: молча выкинуть
- *   один = потерять его историю (тихая ложь), уронить скан = отказать честному кошельку.
+ *   mint -> ALL accounts (ATA + legacy): balance = the sum, every address is scanned.
+ *   One account per mint is the norm, but legacy wallets hold two: silently dropping
+ *   one loses its history (a quiet lie), breaking the scan denies an honest wallet.
  */
 export async function fetchOwnerTokenAccounts(client, owner, registry) {
-  // programId — тоже pubkey: кривая константа даёт далёкий от очевидного -32602
+  // programId is a pubkey too: a corrupt constant yields something far from the obvious -32602
   for (const pid of TOKEN_PROGRAMS) {
     if (!PUBKEY_RE.test(pid)) throw new WalletScanError(`bad token program id: ${pid}`, "invalid-program-id");
   }
@@ -65,12 +65,12 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
     if (address && !cur.addresses.includes(address)) cur.addresses.push(address);
     cur.currentRaw += amount;
   };
-  // Аккаунт принадлежит РОВНО ОДНОЙ токен-программе, но кривой/проксирующий эндпоинт
-  // может отдать один pubkey в обеих выдачах. Дедуп глобальный (по всем программам,
-  // первое вхождение выигрывает — порядок TOKEN_PROGRAMS детерминирован): раньше
-  // currentRaw суммировался по выдачам без учёта pubkey — 7+7=14, фантомный двойной
-  // баланс давал ложный reconciles:false. Конфликт не тихий: warn оператору
-  // (паттерн round 6 — наблюдаемость вместо молчаливой потери).
+  // An account belongs to EXACTLY ONE token program, but a broken/proxying endpoint
+  // may return the same pubkey in both responses. Dedup is global (across all programs,
+  // first occurrence wins — TOKEN_PROGRAMS order is deterministic): previously
+  // currentRaw was summed across responses without accounting for the pubkey — 7+7=14, a phantom
+  // double balance produced a false reconciles:false. The conflict is not silent: a warn goes to the operator
+  // (round 6 pattern — observability instead of silent loss).
   const seenPubkeys = new Set();
   for (const programId of TOKEN_PROGRAMS) {
     const res = await client.call("getTokenAccountsByOwner", [
@@ -78,8 +78,8 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
       { programId },
       { encoding: "jsonParsed", commitment: "confirmed" },
     ]);
-    // Волна H3-3 [P1]: не-массив от шлюза — ЯВНАЯ malformed-source (зеркало ROUND9 №3
-    // для сигнатур): «пустой набор аккаунтов» от лежащего источника неотличим от нуля.
+    // Wave H3-3 [P1]: a non-array from the gateway is an EXPLICIT malformed-source (mirror of
+    // round 9 fix 3 for signatures): an "empty account set" from a lying source is indistinguishable from zero.
     if (!Array.isArray(res?.value)) {
       throw new WalletScanError(
         `malformed getTokenAccountsByOwner response: expected array, got ${res?.value === null ? "null" : typeof res?.value}`,
@@ -91,30 +91,30 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
       const info = entry?.account?.data?.parsed?.info;
       if (!info || !mintSet.has(info.mint)) continue;
       const address = typeof entry.pubkey === "string" ? entry.pubkey : null;
-      // битый pubkey не становится источником сигнатур (класс E4: «1»×41 жёг RPC и валил
-      // скан на -32602); мусорный amount («1e6») не попадает в сверку молча — оба
-      // пропускаем с warn: наблюдаемость вместо тихой лжи
+      // a broken pubkey does not become a signature source (E4 class: "1"×41 burned RPC and crashed
+      // the scan on -32602); garbage amount ("1e6") does not silently enter the reconciliation — both
+      // are skipped with a warn: observability instead of a quiet lie
       if (address !== null && !isValidAddress(address)) {
-        console.error(`[wallet-scan] ${owner}: аккаунт с невалидным pubkey ${JSON.stringify(entry.pubkey).slice(0, 60)} пропущен (не источник сигнатур, не баланс)`);
+        console.error(`[wallet-scan] ${owner}: account with invalid pubkey ${JSON.stringify(entry.pubkey).slice(0, 60)} skipped (not a signature source, not a balance)`);
         continue;
       }
-      // Нет tokenAmount → 0n, но адрес остаётся источником сигнатур (легаси-контракт
-      // wallet-edge: «нулевой баланс всё равно сканируется»). Мусорный amount («1e6»,
-      // 1.5) — skip с warn: тихий 0n без предупреждения = молчаливая потеря сверки.
+      // No tokenAmount → 0n, but the address remains a signature source (legacy contract
+      // wallet-edge: "a zero balance is still scanned"). Garbage amount ("1e6",
+      // 1.5) — skip with a warn: a silent 0n without a warning = silent loss of the reconciliation.
       const amountRaw = info.tokenAmount?.amount;
       let amt = 0n;
       if (amountRaw !== undefined && amountRaw !== null) {
         const rawOk = (typeof amountRaw === "number" && Number.isSafeInteger(amountRaw) && amountRaw >= 0)
           || (typeof amountRaw === "string" && /^\d+$/.test(amountRaw));
         if (!rawOk) {
-          console.error(`[wallet-scan] ${owner}: аккаунт ${address ?? "?"} с мусорным balance amount ${JSON.stringify(amountRaw)} пропущен`);
+          console.error(`[wallet-scan] ${owner}: account ${address ?? "?"} with garbage balance amount ${JSON.stringify(amountRaw)} skipped`);
           continue;
         }
         amt = BigInt(amountRaw);
       }
       if (address !== null) {
         if (seenPubkeys.has(address)) {
-          console.error(`[wallet-scan] ${owner}: аккаунт ${address} встречен в выдаче токен-программ повторно — аккаунт принадлежит ровно одной программе; первое вхождение выигрывает, дубль в сумму не пошёл (иначе баланс задваивается и reconcile ложно падает)`);
+          console.error(`[wallet-scan] ${owner}: account ${address} seen again across token-program responses — an account belongs to exactly one program; the first occurrence wins, the duplicate did not go into the sum (otherwise the balance doubles and reconcile fails spuriously)`);
           continue;
         }
         seenPubkeys.add(address);
@@ -127,63 +127,63 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
 
 /**
  * @param {RpcClient} client
- * @param {string} owner — адрес кошелька
- * @param {Array} registry — реестр токенов (нужны только .mint)
- * @param {object} [opts] maxTxs — потолок подписей НА ИСТОЧНИК (адрес или каждый аккаунт),
- *   onProgress({fetched, total}) — после каждой транзакции
+ * @param {string} owner — wallet address
+ * @param {Array} registry — token registry (only .mint is needed)
+ * @param {object} [opts] maxTxs — cap on signatures PER SOURCE (the address or each account),
+ *   onProgress({fetched, total}) — after every transaction
  * @returns {{owner, signatures, fetched, txs, skipped, truncated, accounts}}
- *   txs — хронологические (старейшие первыми), дельты всех владельцев (фильтр в отчёте);
- *   accounts — Map mint->{address, currentRaw} для сверки балансов
+ *   txs — chronological (oldest first), deltas of all owners (filtered in the report);
+ *   accounts — Map mint->{address, currentRaw} for balance reconciliation
  */
 export async function scanWallet(client, owner, registry, { maxTxs = 300, limit = 100, onProgress, signal } = {}) {
   if (!isValidAddress(owner)) {
     throw new WalletScanError("owner must be a base58 Solana pubkey", "invalid-address");
   }
-  // Abort-пропагация (волна B): ушедший клиент останавливает скан между
-  // страницами/транзакциями — RPC-квота не дожигается в пустоту
+  // Abort propagation (wave B): a departed client stops the scan between
+  // pages/transactions — the RPC quota is not burned into the void
   const aborted = () => {
     if (signal?.aborted) throw new WalletScanError("scan aborted by client", "aborted");
   };
   const mintSet = new Set(registry.map((t) => t.mint));
   const accounts = await fetchOwnerTokenAccounts(client, owner, registry);
 
-  // 1) сигнатуры по каждому источнику: адрес кошелька + ВСЕ токен-аккаунты реестровых минтов
+  // 1) signatures per source: wallet address + ALL token accounts of registry mints
   const sources = [owner, ...[...accounts.values()].flatMap((a) => a.addresses).filter(Boolean)];
-  const sigs = new Map(); // signature -> {slot, blockTime, err} (дедуп по источникам)
+  const sigs = new Map(); // signature -> {slot, blockTime, err} (dedup across sources)
   let truncated = false;
   for (const source of sources) {
     let before;
     let taken = 0;
-    let srcTruncated = false; // флаг НА ИСТОЧНИК: упёрся один — остальные сканируются своим потолком целиком
-    let zeroProgressPages = 0; // ROUND9 №13: чередующиеся дубли-страницы = нет прогресса
+    let srcTruncated = false; // per-source flag: one hit its cap — the rest are scanned to their own caps in full
+    let zeroProgressPages = 0; // round 9 fix 13: alternating duplicate pages = no progress
     for (;;) {
       aborted();
       const batch = await client.call("getSignaturesForAddress", [
         source,
         { limit, ...(before !== undefined ? { before } : {}) },
       ]);
-      // Не-массив (result:null лежащего шлюза) — ЯВНАЯ ошибка, не молчаливый
-      // «конец истории» с truncated:false (ROUND9 №3: «пустой кошелёк» неотличим
-      // от «источник умер» — нарушение fail-closed).
+      // Non-array (result:null from a lying gateway) is an EXPLICIT error, not a silent
+      // "end of history" with truncated:false (round 9 fix 3: "empty wallet" is indistinguishable
+      // from "the source died" — a fail-closed violation).
       if (!Array.isArray(batch)) {
         throw new WalletScanError(
           `malformed getSignaturesForAddress response: expected array, got ${batch === null ? "null" : typeof batch}`,
           "malformed-source",
         );
       }
-      // Конец истории — ТОЛЬКО пустая страница (раунд 8): «короткая» страница у
-      // эндпоинтов с soft caps/лагающим индексером не значит «дальше пусто».
+      // End of history — an EMPTY page only (round 8): a "short" page at endpoints
+      // with soft caps / a lagging indexer does not mean "nothing beyond".
       if (batch.length === 0) break;
       let added = 0;
       let lastValid = null;
       for (const s of batch) {
-        // битый элемент (null/без signature) — skip, не TypeError всего скана
-        // (ROUND9 №12, класс ROUND7 №14); курсор считаем по последнему валидному
+        // broken entry (null/no signature) — skip, not a TypeError for the whole scan
+        // (round 9 fix 12, round 7 fix 14 class); the cursor advances by the last valid one
         if (s === null || typeof s !== "object" || typeof s.signature !== "string") continue;
         if (taken >= maxTxs) { srcTruncated = true; break; }
         if (!sigs.has(s.signature)) {
           sigs.set(s.signature, { slot: s.slot, blockTime: s.blockTime ?? null, err: s.err ?? null });
-          // taken ПОСЛЕ дедупа: потолок по УНИКАЛЬНЫМ сигнатурам (см. раунд 4).
+          // taken AFTER dedup: the cap counts UNIQUE signatures (see round 4).
           taken++;
           added++;
         }
@@ -200,7 +200,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     if (srcTruncated) truncated = true;
   }
 
-  // 2) err-транзакции не fetch'им — это не история балансов, а мусор с причиной
+  // 2) failed txs are not fetched — that is not balance history but garbage with a reason
   const skipped = [];
   const toFetch = [];
   for (const [signature, s] of sigs) {
@@ -208,10 +208,10 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     else toFetch.push({ signature, ...s });
   }
 
-  // 3) обрабатываем хронологически: сборка шла новейшими-первыми.
-  // Сорт по slot: он есть всегда и монотонен; blockTime бывает null, а смешение
-  // секунд и слотов в одном компараторе — единицы разных порядков. slot от битого
-  // эндпоинта бывает undefined — ?? 0 даёт определённый порядок (H3-6).
+  // 3) processed chronologically: collection went newest-first.
+  // Sort by slot: always present and monotonic; blockTime can be null, and mixing
+  // seconds and slots in one comparator means units of different orders. slot from a broken
+  // endpoint can be undefined — ?? 0 gives a definite order (H3-6).
   const ordered = toFetch.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
   const txs = [];
   let fetched = 0;
@@ -221,11 +221,11 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     try {
       tx = await fetchWalletDeltas(client, s.signature, mintSet);
     } catch (err) {
-      // Волна H3-1/H3-2 [P1]: ОДНА ядовитая tx (мусорная meta из лежащего шлюза,
-      // постоянная RpcError на versioned-tx) роняла ВЕСЬ скан — кошелёк становился
-      // permanent-несканируемым, потребитель долбил 503-ретраями. Контракт ROUND7 №14
-      // «битая tx = skipped с причиной» покрывает и БРОСКИ, не только null.
-      // Наш собственный abort (WalletScanError) не глотаем — летит дальше.
+      // Wave H3-1/H3-2 [P1]: ONE poisoned tx (garbage meta from a lying gateway,
+      // a permanent RpcError on a versioned tx) crashed the ENTIRE scan — the wallet became
+      // permanently unscannable, the consumer hammered it with 503 retries. The round 7 fix 14 contract
+      // "broken tx = skipped with a reason" must cover THROWN errors too, not only null.
+      // Our own abort (WalletScanError) is not swallowed — it propagates.
       if (err instanceof WalletScanError) throw err;
       skipped.push({ signature: s.signature, reason: `tx unreadable: ${err?.code ? `${err.code}: ` : ""}${String(err?.message ?? err).slice(0, 120)}` });
       fetched++;
@@ -239,12 +239,12 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       continue;
     }
     if (tx.err !== null) {
-      // meta.err ФАКТА сильнее err из списка сигнатур: списки бывают err:null для
-      // failed-tx, а fetchWalletDeltas честно протащил meta.err в поле err. Раньше
-      // сверка шла только с err сигнатуры — failed-tx с расходящимися pre/post
-      // (кривой эндпоинт, на живой цепи откат даёт pre==post) кормила FIFO
-      // фантомной дельтой. Семантика «failed = не влияет на баланс»: дельты такой
-      // tx в историю не идут.
+      // meta.err as FACT beats err from the signature list: lists sometimes carry err:null for
+      // failed txs, while fetchWalletDeltas honestly carried meta.err into the err field. Previously
+      // the reconciliation used only the signature err — a failed tx with diverging pre/post
+      // (broken endpoint; on a live chain a rollback yields pre==post) fed the FIFO
+      // a phantom delta. Semantics "failed = does not affect the balance": deltas of such
+      // a tx do not enter the history.
       skipped.push({ signature: s.signature, reason: "failed-tx" });
       continue;
     }

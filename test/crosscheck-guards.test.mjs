@@ -1,8 +1,9 @@
-// Регрессионные тесты раунда 10 — фиксы ночной волны B (ROUND10, из ROUND9-хвостов
-// и волны B: см. BUILD_PLAN «раунд 10»). Группы: crosscheck-фinitude (B1-1/B1-2),
-// ratio-потолки (B1-3), partial rateLimits (B2-2), flags host/rpc-санити (B3-1),
-// лок writeSync (B3-3), esc stats (B4-1), saveFailed в /health (B4-2),
-// Array-гвард xstocks (B1-latent), abort-пропагация скана (B2-1).
+// formerly round10-waveb.test.mjs
+// Round 10 regression tests — the fixes of night wave B (ROUND10, from the ROUND9 tails
+// and wave B: see BUILD_PLAN "round 10"). Groups: crosscheck finiteness (B1-1/B1-2),
+// ratio ceilings (B1-3), partial rateLimits (B2-2), flags host/rpc sanity (B3-1),
+// the lock writeSync (B3-3), esc stats (B4-1), saveFailed in /health (B4-2),
+// the xstocks Array guard (B1-latent), scan abort propagation (B2-1).
 import test from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
@@ -34,12 +35,12 @@ const divEv = () => ({
   status: "confirmed", sources: ["test"], amountPerUnitRaw: 2_000_000, decimals: 8,
 });
 
-// ---- B1-1: нечисловые close не проходят гварды <= 0 ----
+// ---- B1-1: non-numeric closes do not pass the <= 0 guards ----
 
-test("crosscheck: NaN/Infinity/undefined close — честный inconclusive/ошибка, не «mismatch» с null-полями", () => {
+test("crosscheck: NaN/Infinity/undefined close — an honest inconclusive/error, not a \"mismatch\" with null fields", () => {
   for (const bad of [NaN, undefined, Infinity, "abc"]) {
     const v = crossCheckMultiplierChange(multEv(), candlesOf([16, 100], [17, 100], [18, bad]));
-    assert.equal(v.verdict, "inconclusive", `close=${bad}: вердикт не строится на нечисловом close`);
+    assert.equal(v.verdict, "inconclusive", `close=${bad}: the verdict must not be built on a non-numeric close`);
     assert.equal(v.observedRatio, null);
     const d = crossCheckDividendAccrual(divEv(), candlesOf([16, 10000000], [17, 10000000], [18, bad]));
     assert.equal(d.verdict, "inconclusive", `dividend close=${bad}`);
@@ -47,19 +48,19 @@ test("crosscheck: NaN/Infinity/undefined close — честный inconclusive/�
   }
 });
 
-// ---- B1-2: coverage на мусорном ts свечи ----
+// ---- B1-2: coverage on a garbage candle ts ----
 
-test("crosscheck: мусорный ts свечи — честная ошибка/нет данных, не RangeError → 500", () => {
+test("crosscheck: a garbage candle ts — an honest error/no data, not a RangeError → 500", () => {
   const bad = [{ ts: NaN, c: 1 }];
   assert.throws(() => crossCheckEvents([multEv()], bad), CrossCheckError);
-  // число-строка ts — коэрцится как везде в конвейере дат
+  // a numeric-string ts — coerced like everywhere in the date pipeline
   const ok = crossCheckEvents([multEv()], candlesOf([16, 100], [18, 50]));
   assert.ok(Array.isArray(ok.verdicts) && ok.verdicts.length === 1);
 });
 
-// ---- B1-3: ratio-потолки SPLIT/MERGER ----
+// ---- B1-3: the SPLIT/MERGER ratio ceilings ----
 
-test("schema: SPLIT/MERGER ratio выше MAX_SAFE_INTEGER — отказ, как у amountPerUnitRaw (R9 №14)", () => {
+test("schema: a SPLIT/MERGER ratio above MAX_SAFE_INTEGER — refused, like amountPerUnitRaw (R9 #14)", () => {
   const tooBig = 2 ** 53 + 1;
   assert.throws(() => validateEvent({
     type: "SPLIT", mint: SPYx, effectiveDate: "2026-10-01T00:00:00.000Z", status: "confirmed",
@@ -72,25 +73,25 @@ test("schema: SPLIT/MERGER ratio выше MAX_SAFE_INTEGER — отказ, ка�
   }), (err) => err.name === "EventValidationError" && /exchangeNumerator|safe/i.test(err.message));
 });
 
-// ---- B2-2: частичная конфигурация rateLimits ----
+// ---- B2-2: a partial rateLimits configuration ----
 
-test("api: rateLimits без одного из ключей — внятный отказ, не TypeError из деструктуризации", async () => {
+test("api: rateLimits missing one of the keys — a clear refusal, not a TypeError from destructuring", async () => {
   const registry = await loadRegistry("data/tokens.json");
   for (const partial of [{}, { scan: { windowMs: 60_000, max: 5 } }, { rpc: { windowMs: 60_000, max: 5 } }]) {
-    // createApiServer не async: бросок может быть синхронным — нормализуем оба случая
+    // createApiServer is not async: the throw may be synchronous — we normalize both cases
     let err = null;
     try {
       const srv = await createApiServer({ registry, events: [], rateLimits: partial });
       srv.close();
     } catch (e) { err = e; }
-    assert.ok(err, `конфигурация ${JSON.stringify(partial)} обязана отказать`);
+    assert.ok(err, `the configuration ${JSON.stringify(partial)} must be refused`);
     assert.match(err.message, /rateLimits/i);
   }
 });
 
-// ---- B3-1: flags — host с пробелом, rpc-санити ----
+// ---- B3-1: flags — a host with a space, rpc sanity ----
 
-test("flags: --host с пробелом/пусто-после-trim — отказ ДО бута; rpc обязан парситься в URL http(s)", () => {
+test("flags: --host with a space/empty-after-trim — a refusal BEFORE boot; rpc must parse into an http(s) URL", () => {
   assert.throws(() => parseServeArgs(["--host", " "]), /host/);
   assert.throws(() => parseServeArgs(["--host", "not a host"]), /host/);
   assert.throws(() => parseServeArgs(["--rpc", "not a url"]), /rpc/);
@@ -99,9 +100,9 @@ test("flags: --host с пробелом/пусто-после-trim — отка�
   assert.equal(parseServeArgs([]).host, "127.0.0.1");
 });
 
-// ---- B3-3: лок — сбой writeSync не оставляет пустой лок ----
+// ---- B3-3: the lock — a writeSync failure does not leave an empty lock ----
 
-test("лок: сбой записи содержимого лока — лок снимается, не реанимирует TOCTOU пустым файлом", () => {
+test("lock: a failure writing the lock content — the lock is released, not resurrecting the TOCTOU with an empty file", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-lock-r10-"));
   try {
     const store = path.join(dir, "webhooks.json");
@@ -110,7 +111,7 @@ test("лок: сбой записи содержимого лока — лок �
       () => withStoreLock(store, () => "never", { writeSync: failingWrite, attempts: 3, retryPauseMs: 1 }),
       /ENOSPC/,
     );
-    assert.ok(!exists(store + ".lock"), "лок снят — следующий процесс не увидит пустой файл как легаси");
+    assert.ok(!exists(store + ".lock"), "the lock is released — the next process will not see an empty file as legacy");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -125,7 +126,7 @@ function exists(p) {
   }
 }
 
-// ---- B4-1: esc в renderStats ----
+// ---- B4-1: esc in renderStats ----
 
 function runClient() {
   const els = new Map();
@@ -146,21 +147,21 @@ function runClient() {
   return { sb, els };
 }
 
-test("vitrine: journal.unavailable и excluded.length из /health — инъекция строкой не живёт", () => {
+test("vitrine: journal.unavailable and excluded.length from /health — a string injection does not live", () => {
   const { sb, els } = runClient();
-  // строка-вместо-числа: числовой гейт (> 0) сам её прячет, esc() — второй эшелон
+  // a string-instead-of-number: the numeric gate (> 0) hides it itself, esc() is the second echelon
   sb.renderStats({ tokens: 31, events: 56, journal: { unavailable: "<script>alert(4)</script>" }, excluded: { length: "<script>alert(5)</script>" } }, []);
   const html = els.get("stats").innerHTML;
-  assert.ok(!html.includes("<script>"), "инъекция через health-поля не переживает");
-  // числа по контракту рендерятся как раньше (гейт их пропускает, esc() безвреден)
+  assert.ok(!html.includes("<script>"), "an injection through health fields does not survive");
+  // numbers by contract render as before (the gate lets them through, esc() is harmless)
   const { sb: sb2, els: els2 } = runClient();
   sb2.renderStats({ tokens: 31, events: 56, journal: { unavailable: 2 }, excluded: { length: 1 } }, []);
-  assert.ok(els2.get("stats").innerHTML.includes("2"), "числовые warn-поля по-прежнему видны");
+  assert.ok(els2.get("stats").innerHTML.includes("2"), "numeric warn fields are still visible");
 });
 
-// ---- B4-2: saveFailed в /health ----
+// ---- B4-2: saveFailed in /health ----
 
-test("/health: несохранённый журнал бута виден флагом journal.saveFailed", async () => {
+test("/health: an unsaved boot journal is visible via the journal.saveFailed flag", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const server = await createApiServer({
     registry, events: [],
@@ -169,23 +170,23 @@ test("/health: несохранённый журнал бута виден фл�
   const { port } = server.address();
   try {
     const h = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
-    assert.equal(h.journal.saveFailed, 1, "события бута только в памяти — мониторинг обязан видеть");
+    assert.equal(h.journal.saveFailed, 1, "the boot events are memory-only — monitoring must see it");
   } finally {
     server.close();
   }
 });
 
-// ---- B1-latent: Array-гвард multiplierHistoryToEvents ----
+// ---- B1-latent: the Array guard of multiplierHistoryToEvents ----
 
-test("xstocks: не-массив истории — NormalizeError, не голый TypeError", () => {
+test("xstocks: a non-array history — NormalizeError, not a bare TypeError", () => {
   for (const bad of [null, undefined, "x", { nodes: "x" }]) {
     assert.throws(() => multiplierHistoryToEvents(bad, { symbol: "TESTx" }), (err) => /history|array|nodes/i.test(err.message));
   }
 });
 
-// ---- B2-1: abort-пропагация скана ----
+// ---- B2-1: scan abort propagation ----
 
-test("scan: signal прерывает скан между страницами — RPC-квота не горит после ухода клиента", async () => {
+test("scan: a signal aborts the scan between pages — the RPC quota is not burned after the client leaves", async () => {
   const ac = new AbortController();
   let calls = 0;
   const client = {
@@ -194,7 +195,7 @@ test("scan: signal прерывает скан между страницами �
       if (method === "getTransaction") return null;
       if (method === "getSignaturesForAddress") {
         calls++;
-        if (calls >= 3) ac.abort(); // клиент ушёл на третьей странице бесконечной истории
+        if (calls >= 3) ac.abort(); // the client left on the third page of an endless history
         return [sig(calls), sig(calls + 1000)];
       }
       throw new Error(`unexpected ${method}`);
@@ -204,5 +205,5 @@ test("scan: signal прерывает скан между страницами �
     () => scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 10_000, signal: ac.signal }),
     (err) => /abort/i.test(err.message),
   );
-  assert.ok(calls <= 4, `скан остановился уйдя клиента (calls=${calls}), а не дожигал историю`);
+  assert.ok(calls <= 4, `the scan stopped when the client left (calls=${calls}), not burning through the history`);
 }, { timeout: 5000 });

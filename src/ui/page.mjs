@@ -1,10 +1,10 @@
-// Витрина Lotwise: одна самодостаточная страница-отчёт (sample consumer API).
-// Без зависимостей и внешних ресурсов: только относительные fetch к своему же API.
-// Публичная сторона — английский, без эмодзи, только проверяемые факты из эндпоинтов.
+// Lotwise showcase: a single self-contained report page (a sample API consumer).
+// No dependencies and no external resources: only relative fetches to its own API.
+// The public side is English, no emojis, only verifiable facts from the endpoints.
 
-// Фавиконка = та же L-марка (assets/logo-mark.svg), но одним акцентом #58a6ff:
-// у data-URI нет CSS-контекста страницы — currentColor наследовать неоткуда, а
-// нейтральный инк (#e6edf0/#1f2328) пропадает на светлом или тёмном таб-баре.
+// The favicon is the same L mark (assets/logo-mark.svg) but in a single accent #58a6ff:
+// a data-URI has no CSS context of the page — there is nothing to inherit currentColor
+// from, and the neutral ink (#e6edf0/#1f2328) vanishes on a light or dark tab bar.
 const FAVICON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
   '<rect x="4.5" y="4" width="4" height="24" rx="2" fill="#58a6ff"/>' +
@@ -61,9 +61,10 @@ export function renderPage() {
   .verdict.unavailable { color: var(--warn); border-color: var(--warn); }
   .timeline .verdict { font-size: 11px; padding: 0 6px; margin-left: 6px; cursor: help; }
   .note { color: var(--muted); font-size: 13px; }
-  input[type=number], input[type=date], select {
+  input[type=number], input[type=date], #token-filter, select {
     background: #0d1117; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 14px;
   }
+  #token-filter { width: 280px; margin: 0 0 8px; }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
   button { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font-size: 14px; cursor: pointer; }
   button:hover { border-color: var(--accent); color: var(--accent); }
@@ -76,9 +77,9 @@ export function renderPage() {
   footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
   footer code { font-family: var(--mono); color: var(--accent); }
   .err { color: var(--warn); font-size: 13px; }
-  /* Волна I1 (мобайл): адрес не вылезает за экран, колонка множителя не режется
-     краем — на узких экранах она сворачивается (значение есть в карточке токена),
-     длинные числа переносятся, а не рвут сетку */
+  /* Wave I1 (mobile): the address stays on screen, the multiplier column is not cut
+     off at the edge — on narrow screens it collapses (the value is in the token card),
+     long numbers wrap instead of tearing the grid */
   @media (max-width: 640px) {
     main { padding: 16px 10px 48px; }
     .row { flex-direction: column; align-items: stretch; gap: 6px; }
@@ -94,8 +95,9 @@ export function renderPage() {
 <main>
   <header class="brand">
     <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
-      <!-- знак Lotwise (монограмма L, как фавиконка и README): ось-ствол событий,
-           акцентная нога — adjusted lot, точка на стволе — само событие -->
+      <!-- the Lotwise mark (an L monogram, same as the favicon and README): the spine
+           is the event axis, the accent leg is an adjusted lot, the dot on the spine is
+           the event itself -->
       <rect x="4.5" y="4" width="4" height="24" rx="2" fill="currentColor"/>
       <rect x="4.5" y="24.5" width="21" height="3.5" rx="1.75" fill="#58a6ff" class="accent"/>
       <circle cx="6.5" cy="13" r="2.3" fill="#58a6ff" class="accent"/>
@@ -112,9 +114,10 @@ export function renderPage() {
 
   <div class="stats" id="stats"></div>
 
-  <!-- Дивидендный слой: статичный редакторский контекст (не данные — данные выше и ниже
-       берутся из API). Тикеры перечислены поимённо без счётчиков, чтобы копирайт не разъехался
-       с реестром; факт «событий пока нет» привязан к дате расширения, а не к моменту чтения. -->
+  <!-- Dividend layer: static editorial context (not data — data above and below comes
+       from the API). Tickers are listed by name without counters so the copy cannot drift
+       apart from the registry; the "no events yet" fact is anchored to the expansion date,
+       not to the moment of reading. -->
   <section id="dividend-layer">
     <h2>Dividend layer</h2>
     <div class="card">
@@ -132,6 +135,7 @@ export function renderPage() {
 
   <section>
     <h2>Tracked tokens</h2>
+    <input id="token-filter" placeholder="Filter by symbol or name" spellcheck="false" autocomplete="off">
     <table id="token-table">
       <thead><tr><th>Symbol</th><th>Name</th><th>Issuer</th><th class="num">Events</th><th class="num">Multiplier today</th></tr></thead>
       <tbody id="tokens"></tbody>
@@ -200,8 +204,8 @@ function esc(s) {
   });
 }
 
-// Баннер повреждения источника (0|1 из /health, контракт с boot-зоной): falsy — тишина,
-// truthy — тот же стиль честного warn, что у unavailable/excluded.
+// Source-corruption banner (0|1 from /health, contract with the boot zone): falsy —
+// silence, truthy — the same honest warn style as unavailable/excluded.
 function corruptionStat(value, label) {
   if (!value) return '';
   return '<div class="stat"><b class="err">' + esc(value) + '</b><i>' + esc(label) +
@@ -216,23 +220,26 @@ function renderStats(h, tokens) {
     '<div class="stat"><b>' + esc(h.events) + '</b><i>events normalized</i></div>' +
     '<div class="stat"><b>' + Object.keys(issuers).length + '</b><i>issuers</i></div>' +
     '<div class="stat"><b>fail-closed</b><i>reconcile policy</i></div>';
-  // RPC мог лежать на старте: journal.unavailable — токены, не прочитанные из цепи,
-  // и по ним витрина рисует множитель «1». Молчать = тихая ложь, показываем честный warn.
+  // The RPC may have been down at startup: journal.unavailable — tokens not read from
+  // the chain, and the showcase paints multiplier "1" for them. Silence = a quiet lie;
+  // show an honest warn.
   if (h.journal && h.journal.unavailable > 0) {
     el('stats').innerHTML +=
       '<div class="stat"><b class="err">' + esc(h.journal.unavailable) + '</b>' +
       '<i>tokens unavailable at startup — multipliers may be understated</i></div>';
   }
-  // Токены, исключённые из витрины по кривому таймлайну (health.excluded[] с сервера):
-  // строка с «1» в таблице без пометки неотличима от честного «событий не было».
+  // Tokens excluded from the showcase over a broken timeline (health.excluded[] from the
+  // server): a "1" row in the table without the mark is indistinguishable from an honest
+  // "no events ever".
   if (h.excluded && h.excluded.length > 0) {
     el('stats').innerHTML +=
       '<div class="stat"><b class="err">' + esc(h.excluded.length) + '</b>' +
       '<i>tokens excluded from multiplier reporting — shown as excluded, not computed</i></div>';
   }
-  // Повреждения источников на старте: журнал повреждён (бэкфилл восстановил не всё),
-  // улика не сохранена (переименовать битый файл не удалось), реестр повреждён.
-  // Молчать = тихая ложь — тот же класс, что unavailable/excluded выше.
+  // Source corruption at startup: the journal is corrupted (the backfill did not restore
+  // everything), the evidence could not be preserved (the broken file could not be
+  // renamed), the registry is corrupted. Silence = a quiet lie — the same class as
+  // unavailable/excluded above.
   el('stats').innerHTML +=
     corruptionStat(h.journal && h.journal.corrupted, 'journal corrupted at startup') +
     corruptionStat(h.journal && h.journal.preserveFailed, 'corrupted journal could not be preserved') +
@@ -268,15 +275,15 @@ function select(symbol, scroll) {
   el('detail').style.display = 'block';
   el('detail-title').textContent = t.symbol + ' — ' + t.name;
   el('date-in').value = todayISO();
-  // смена токена чистит панели ДО загрузки (волна D1): события/расчёт прошлого
-  // токена не висят под заголовком нового, пока его ответы в полёте
+  // a token change clears the panels BEFORE loading (wave D1): the previous token's
+  // events/calc do not sit under the new title while its answers are in flight
   el('events').innerHTML = '<li class="note">loading events…</li>';
   el('calc-out').innerHTML = '';
   loadEvents(t);
   loadPlanes(t);
   calc();
-  // Волна I1 (UX): автопрыжок при загрузке страницы вышибал пользователя с первого
-  // экрана (заголовок + адресное поле) к таблице токенов. Скролл — только на клик.
+  // Wave I1 (UX): auto-jumping on page load kicked the user off the first screen
+  // (header + address field) down to the token table. Scrolling happens only on click.
   if (scroll !== false) document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -284,12 +291,13 @@ function eventsError(msg) {
   el('events').innerHTML = '<li><span class="what err">' + esc(msg) + '</span></li>';
 }
 
-// Ключ кросс-чек-бейджа: тип события + effectiveDate + порядковый номер среди событий
-// СВОЕГО типа. Ключевание по одной только дате коллидировало: два события в один день —
-// и первое показывало вердикт второго (Map затирался); ребейз и дивиденд в один день
-// затёрлись бы и при совпадении номеров — разводим префиксом типа. /crosscheck отдаёт
-// вердикты блоками в порядке событий: сначала все MULTIPLIER_CHANGE, затем DIVIDEND_ACCRUAL
-// (контракт витрины), поэтому пара (тип, seq) однозначно склеивает пару.
+// The key of a cross-check badge: event type + effectiveDate + the sequence number among
+// the events of their OWN type. Keying by the date alone collided: two events on one day —
+// and the first showed the second's verdict (the Map was overwritten); a rebase and a
+// dividend on the same day would also clash on matching numbers — we separate them with
+// the type prefix. /crosscheck serves verdicts in blocks in event order: all
+// MULTIPLIER_CHANGE first, then DIVIDEND_ACCRUAL (the showcase contract), so the
+// (type, seq) pair joins the two sides unambiguously.
 function xcKey(e, seq) {
   return (e.type === 'DIVIDEND_ACCRUAL' ? 'div' : 'mult') + '#' + e.effectiveDate + '#' + seq;
 }
@@ -298,8 +306,8 @@ function loadEvents(t) {
   fetch('/events?symbol=' + encodeURIComponent(t.symbol))
     .then(function (r) { return r.json().then(function (list) { return { ok: r.ok, status: r.status, list: list }; }); })
     .then(function (res) {
-      if (state.selected !== t) return; // устаревший ответ: пользователь уже переключил токен
-      // не-массив ({error} от 500) — не «пустая история»: показываем ошибку, не маскируем
+      if (state.selected !== t) return; // stale response: the user has already switched tokens
+      // a non-array ({error} from a 500) is not "empty history": show the error, do not mask it
       if (!res.ok || !Array.isArray(res.list)) {
         eventsError('Event history unavailable (HTTP ' + res.status +
           (res.list && res.list.error ? ': ' + res.list.error : '') + ')');
@@ -307,21 +315,21 @@ function loadEvents(t) {
       }
       renderEvents(res.list, null);
       if (!res.list.length) return;
-      // вердикты кросс-чека цены приходят вторым заходом и дополняют таймлайн бейджами
+      // price cross-check verdicts arrive in a second pass and enrich the timeline with badges
       fetch('/crosscheck?symbol=' + encodeURIComponent(t.symbol))
         .then(function (r) { return r.json(); })
         .then(function (xc) {
           if (state.selected !== t) return;
           var byKey = {};
-          var vi = 0; // порядковый номер среди MULTIPLIER_CHANGE
-          var di = 0; // порядковый номер среди DIVIDEND_ACCRUAL
+          var vi = 0; // sequence number among MULTIPLIER_CHANGE
+          var di = 0; // sequence number among DIVIDEND_ACCRUAL
           var numMult = 0;
           res.list.forEach(function (e) { if (e.type === 'MULTIPLIER_CHANGE') numMult += 1; });
           res.list.forEach(function (e) {
             var isMult = e.type === 'MULTIPLIER_CHANGE';
             if (!isMult && e.type !== 'DIVIDEND_ACCRUAL') return;
-            // вердикты идут блоками: сначала все ребейзы (в порядке событий), затем все
-            // дивиденды (в порядке событий) — индекс вердикта = позиция события в своём блоке
+            // verdicts arrive in blocks: all rebases first (in event order), then all
+            // dividends (in event order) — a verdict index = the event's position in its block
             var seq = isMult ? vi : di;
             var idx = isMult ? vi : numMult + di;
             if (isMult) vi += 1; else di += 1;
@@ -329,21 +337,21 @@ function loadEvents(t) {
           });
           renderEvents(res.list, byKey);
         })
-        .catch(function () { /* бейджи — обогащение, не данные: молча без них */ });
+        .catch(function () { /* badges are enrichment, not data: silently go without them */ });
     })
     .catch(function (e) {
-      // сеть/рестарт сервера: без catch — unhandled rejection и ЧУЖОЙ таймлайн
-      // предыдущего токена оставался под новым заголовком. Честная err-заметка.
+      // network/server restart: without the catch — an unhandled rejection, and the OTHER
+      // token's timeline stayed under the new title. An honest err note.
       if (state.selected !== t) return;
       eventsError('Event history unavailable: ' + e.message);
     });
 }
 
-// Доля падения цены со знаком (drop-семантика): падение — с минусом, рост — с плюсом.
+// Signed price-drop fraction (drop semantics): a drop carries a minus, a rise a plus.
 function pctDrop(f) { return (f < 0 ? '+' : '-') + (Math.abs(f) * 100).toFixed(3) + '%'; }
 
-// Цвет бейджа — по verdict, тот же набор классов, что у ребейза; подпись своя:
-// «dividend: …» отличает дивидендный вердикт от ребейзного «price: …» с первого взгляда.
+// Badge color — by verdict, the same class set as the rebase badge; its own label:
+// "dividend: …" tells a dividend verdict apart from a rebase "price: …" at a glance.
 function xcBadge(v) {
   if (!v) return '';
   var kind = v.type === 'DIVIDEND_ACCRUAL' ? 'dividend' : 'price';
@@ -356,8 +364,8 @@ function xcBadge(v) {
   };
   var m = map[v.verdict] || ['unavailable', kind + ': ?'];
   var tip = v.note || '';
-  // числа сравнения дивиденда — компактно в тултип, как у ребейза через note:
-  // доли pre-ex цены безразмерны, долларов и FX у вердикта честно нет
+  // the dividend comparison numbers go compactly into the tooltip, like the rebase's note:
+  // the pre-ex price fractions are dimensionless — the verdict honestly has no dollars or FX
   if (kind === 'dividend' && v.expectedDropFraction != null && v.observedDropFraction != null) {
     tip = 'expected ' + pctDrop(v.expectedDropFraction) + ' vs observed ' + pctDrop(v.observedDropFraction) +
       (tip ? ' — ' + tip : '');
@@ -370,8 +378,8 @@ function renderEvents(list, xcByKey) {
     el('events').innerHTML = '<li><span class="what">No normalized events for this token yet.</span></li>';
     return;
   }
-  var seqM = 0; // порядковый среди MULTIPLIER_CHANGE — тот же, что при ключовании вердиктов
-  var seqD = 0; // порядковый среди DIVIDEND_ACCRUAL — дивиденд живёт отдельной строкой
+  var seqM = 0; // sequence among MULTIPLIER_CHANGE — the same one used to key verdicts
+  var seqD = 0; // sequence among DIVIDEND_ACCRUAL — a dividend lives on its own row
   el('events').innerHTML = list.map(function (e) {
     var isMult = e.type === 'MULTIPLIER_CHANGE';
     var isDiv = e.type === 'DIVIDEND_ACCRUAL';
@@ -379,8 +387,8 @@ function renderEvents(list, xcByKey) {
     if (isMult) { key = xcKey(e, seqM); seqM += 1; }
     else if (isDiv) { key = xcKey(e, seqD); seqD += 1; }
     var title = isDiv ? 'dividend accrual' : (e.reason || e.type);
-    // дивиденд — не смена множителя: вместо from → to своя величина начисления
-    // (raw → human по decimals события; decimals неизвестны — fmtUi честно скажет об этом)
+    // a dividend is not a multiplier change: instead of from → to, its own accrual amount
+    // (raw → human by the event's decimals; unknown decimals — fmtUi will say so honestly)
     var what = isDiv
       ? esc(fmtUi(e.amountPerUnitRaw, e.decimals)) + ' per unit'
       : esc(e.multiplierFrom || '-') + ' &rarr; ' + esc(e.multiplierTo || '-');
@@ -402,7 +410,7 @@ function loadPlanes(t) {
   fetch('/onchain?symbol=' + encodeURIComponent(t.symbol))
     .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
     .then(function (res) {
-      if (state.selected !== t) return; // устаревший ответ
+      if (state.selected !== t) return; // stale response
       if (!res.ok) {
         setVerdict('unavailable', 'unavailable');
         el('planes').innerHTML = '<dt>on-chain source</dt><dd class="err">' +
@@ -424,7 +432,7 @@ function loadPlanes(t) {
       else setVerdict('disagree', 'planes disagree');
     })
     .catch(function (e) {
-      if (state.selected !== t) return; // чужая ошибка не ложится на новый токен (волна D1)
+      if (state.selected !== t) return; // someone else's error does not land on the new token (wave D1)
       setVerdict('unavailable', 'unavailable');
       el('planes').innerHTML = '<dt>on-chain source</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
@@ -433,26 +441,27 @@ function loadPlanes(t) {
 var calcSeq = 0;
 function calc() {
   var t = state.selected;
-  var mySeq = ++calcSeq; // эпоха: устаревший пересчёт не перерисовывается (волна D1)
+  var mySeq = ++calcSeq; // epoch: a stale recompute does not repaint (wave D1)
   if (!t) return;
   var rawIn = (el('raw-in').value || '0').trim();
   if (!/^\\d*(\\.\\d*)?$/.test(rawIn) || rawIn === '' || rawIn === '.') {
     el('calc-out').innerHTML = '<dt>input</dt><dd class="err">enter a non-negative amount, e.g. 1.5</dd>';
     return;
   }
-  // decimals null (реестр до enrich-decimals): UI-число в базовые юниты честно не
-  // конвертировать — показываем ввод как есть, калькулятор не считает, не выдумывая 0
+  // decimals null (registry before enrich-decimals): the UI number cannot honestly be
+  // converted into base units — show the input as is, the calculator does not compute,
+  // not inventing a 0
   if (t.decimals == null) {
     el('calc-out').innerHTML =
       '<dt>input</dt><dd>' + esc(rawIn) + '</dd>' +
       '<dt>decimals</dt><dd class="err">decimals unknown for this token — conversion skipped, not guessing</dd>';
     return;
   }
-  // UI-число -> целые базовые юниты строкой, без float-магии
+  // UI number -> integer base units as a string, no float magic
   var parts = rawIn.split('.');
   var base = parts[0] || '0';
   var frac = parts[1] || '';
-  // точность сверх decimals базовыми юнитами не выражается — обрезаем и честно помечаем
+  // precision beyond decimals is not expressible in base units — truncate and mark honestly
   var truncated = frac.length > t.decimals && frac.slice(t.decimals).replace(/0+$/, '') !== '';
   var padded = (frac + '0'.repeat(Math.max(0, t.decimals - frac.length))).slice(0, t.decimals);
   var raw = BigInt(base + padded);
@@ -461,14 +470,15 @@ function calc() {
   fetch(qs)
     .then(function (r) { return r.json(); })
     .then(function (m) {
-      if (mySeq !== calcSeq || state.selected !== t) return; // устаревший ответ (эпоха — волна D1)
-      // {error}-тело от 400/500: json успел, данных нет — показываем причину честно
+      if (mySeq !== calcSeq || state.selected !== t) return; // stale response (epoch — wave D1)
+      // an {error} body from a 400/500: json made it, the data did not — show the reason honestly
       if (m && m.error) {
         el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(m.error) + '</dd>';
         return;
       }
-      // токен без таймлайна: короткий ответ без sampleScaledQty — adjusted вычислить
-      // нечем, а «1» из ответа — дефолт, не расчёт; показываем приписку, не TypeError
+      // a token without a timeline: a short response without sampleScaledQty — there is
+      // nothing to compute adjusted from, and the "1" in the response is a default, not a
+      // computation; show the caveat, not a TypeError
       var s = m && m.sampleScaledQty;
       if (!s) {
         el('calc-out').innerHTML =
@@ -479,14 +489,14 @@ function calc() {
       el('calc-out').innerHTML =
         '<dt>raw (base units)</dt><dd>' + raw.toString() + '</dd>' +
         '<dt>multiplier at ' + esc(m.date.slice(0, 10)) + '</dt><dd>' + esc(m.multiplier) + '</dd>' +
-        // числовые-по-контракту поля тоже эскейпим (ROUND7 №9): строка в них —
-        // мимо контракта, но silent stored-XSS дороже одного вызова esc()
+        // contractually-numeric fields get escaped too (round 7 fix 9): a string in them
+        // is off-contract, but silent stored XSS costs more than one esc() call
         '<dt>adjusted (base units)</dt><dd>' + esc(s.whole) + (s.exact ? '' : ' + ' + esc(s.remainder) + '/' + esc(s.den)) + '</dd>' +
         '<dt>remainder policy</dt><dd>' + dust + '</dd>' +
         (truncated ? '<dt>input precision</dt><dd class="err">amount exceeds ' + t.decimals + ' token decimals — truncated to base units</dd>' : '');
     })
     .catch(function (e) {
-      if (mySeq !== calcSeq || state.selected !== t) return; // устаревшая попытка молчит (волна D1)
+      if (mySeq !== calcSeq || state.selected !== t) return; // a stale attempt stays silent (wave D1)
       el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
 }
@@ -495,20 +505,33 @@ document.getElementById('calc').onclick = calc;
 el('date-in').onchange = calc;
 el('raw-in').onchange = calc;
 
+// Live filter over the Tracked tokens table: no button, filtering happens on input.
+// The haystack is symbol + name only (issuer and counters do not match by design);
+// filtering only toggles row display — row onclick handlers and the selected class
+// are untouched.
+function applyTokenFilter() {
+  var q = (el('token-filter').value || '').toLowerCase();
+  document.querySelectorAll('#tokens tr').forEach(function (tr) {
+    var hay = (tr.getAttribute('data-symbol') + ' ' + tr.children[1].textContent).toLowerCase();
+    tr.style.display = hay.indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+el('token-filter').oninput = applyTokenFilter;
+
 function fmtUi(rawStr, decimals) {
   var s = String(rawStr);
   var sign = '';
   if (s[0] === '-') { sign = '-'; s = s.slice(1); }
-  // decimals null (реестр до enrich-decimals): сырые base units с пометкой,
-  // а не «.» от slice(0, -null) — ноль децималов не выдумываем
+  // decimals null (registry before enrich-decimals): raw base units with a note,
+  // not "." from slice(0, -null) — we do not invent zero decimals
   if (decimals == null) return sign + s + ' base units (decimals unknown)';
   if (decimals === 0) return sign + s;
   while (s.length <= decimals) s = '0' + s;
   return sign + s.slice(0, -decimals) + '.' + s.slice(-decimals);
 }
 
-// Волна I1 (UX): «fetch failed» без объяснения пугает. Человеческая фраза для
-// сетевого класса, оригинал — в тултипе (честность не теряем, доступность даём).
+// Wave I1 (UX): a bare "fetch failed" with no explanation scares people. A human phrase
+// for the network class, the original in the tooltip (honesty kept, accessibility given).
 function humanScanError(body, rawMsg) {
   var m = String(rawMsg || (body && body.error) || '');
   var kind = body && body.kind;
@@ -527,9 +550,10 @@ function scanWalletUi() {
     el('wallet-out').innerHTML = '<p class="err">Enter a valid Solana address (base58).</p>';
     return;
   }
-  var myAddr = addr; // захват адреса: ответ чужого скана рендерить нельзя
-  // Волна I1: кнопка гаснет на время скана + честный счётчик времени — раньше
-  // «Scanning…» висел без прогресса минуты, и кнопку можно было жать повторно.
+  var myAddr = addr; // capture the address: another scan's response must not be rendered
+  // Wave I1: the button dims for the duration of the scan + an honest elapsed timer —
+  // "Scanning…" used to sit there for minutes with no progress, and the button could
+  // be clicked again.
   var btn = document.getElementById('scan-btn');
   btn.disabled = true;
   var started = Date.now();
@@ -548,9 +572,9 @@ function scanWalletUi() {
   fetch('/lots?address=' + encodeURIComponent(addr))
     .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
     .then(function (res) {
-      // гонка Scan/Scan: пользователь поправил адрес, пока шёл долгий скан — дозревший
-      // ответ старого адреса не перезаписывает витрину (тот же класс гвардов,
-      // что у state.selected для токенов)
+      // Scan/Scan race: the user fixed the address while a long scan was running — the
+      // late-arriving response of the old address does not overwrite the showcase (the
+      // same guard class as state.selected for tokens)
       if ((el('addr-in').value || '').trim() !== myAddr) { finish(); return; }
       if (!res.ok) {
         finish();
@@ -562,7 +586,7 @@ function scanWalletUi() {
       renderWallet(res.body);
     })
     .catch(function (e) {
-      // та же гонка для ошибок: ругаться на упавший запрос чужого адреса — ложь
+      // the same race for errors: blaming a failed request for another address is a lie
       if ((el('addr-in').value || '').trim() !== myAddr) { finish(); return; }
       finish();
       el('wallet-out').innerHTML = '<p class="err" title="' + esc(e.message) + '">' + esc(humanScanError(null, e.message)) + '</p>';
@@ -571,10 +595,10 @@ function scanWalletUi() {
 
 function renderWallet(rep) {
   var c = rep.counts;
-  // исключённые токены в отчёте: их множитель — дефолт, adjusted не вычислялся
+  // excluded tokens in the report: their multiplier is a default, adjusted was not computed
   var excludedCount = 0;
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
-  // Волна I1: полная ISO-метка времени читается тяжело — дата+минуты UTC
+  // Wave I1: a full ISO timestamp reads hard — date + minutes UTC
   var when = String(rep.now || '—').replace('T', ' ').slice(0, 16) + (rep.now ? ' UTC' : '');
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
@@ -587,11 +611,12 @@ function renderWallet(rep) {
   var body = rep.tokens.length === 0
     ? '<p class="note">No tracked tokens found in this wallet.</p>'
     : rep.tokens.map(function (t) {
-        // adjusted не вычислялся: токен исключён из множителей (t.excluded) или API честно
-        // сообщил adjustedAvailable:false (excluded-минт). Сырой fallback-баланс нельзя
-        // показывать как «adjusted (exact)» — это та же тихая ложь «adjusted = raw».
+        // adjusted was not computed: the token is excluded from multipliers (t.excluded) or
+        // the API honestly reported adjustedAvailable:false (an excluded mint). The raw
+        // fallback balance must not be shown as "adjusted (exact)" — the same quiet lie
+        // of "adjusted = raw".
         var noAdjusted = t.excluded || t.adjustedAvailable === false;
-        // Волна I1: простыня гэпов сводится к одной строке, полный список — в тултип
+        // Wave I1: a wall of gaps collapses to one line, the full list in the tooltip
         var gapsFull = t.gaps.map(function (g) {
           return g.missingQtyRaw + ' base units predate the scan window' + (g.date ? ' (by ' + String(g.date).replace('T', ' ').slice(0, 16) + ' UTC)' : '');
         }).join('; ');
@@ -601,8 +626,8 @@ function renderWallet(rep) {
           : '';
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
           '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd>' +
-            // Волна I1: отрицательный дельта-окна — НЕ ошибка, а артефакт окна скана:
-            // красным он читался как «у тебя проблемы»; объяснение — в самой метке
+            // Wave I1: a negative window delta is NOT an error but an artifact of the scan
+            // window: in red it read as "you have a problem"; the explanation lives in the label
             esc(fmtUi(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance, t.decimals)) + ' ' + esc(t.symbol) +
             ' <span class="note">(' + esc(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance) + ' base units)</span></dd>' +
           '<dt>scan vs live chain</dt><dd>' + (t.reconciles
@@ -628,7 +653,7 @@ document.getElementById('scan-btn').onclick = scanWalletUi;
 el('addr-in').onkeydown = function (e) { if (e.key === 'Enter') scanWalletUi(); };
 
 fetch('/health').then(function (r) {
-  if (!r.ok) throw new Error('/health HTTP ' + r.status); // 502-джейсон прокси — не «undefined tokens» (волна D1)
+  if (!r.ok) throw new Error('/health HTTP ' + r.status); // a proxy's 502 JSON — not "undefined tokens" (wave D1)
   return r.json();
 }).then(function (h) {
   if (!h || typeof h !== 'object') throw new Error('/health: unexpected body');
@@ -640,7 +665,7 @@ fetch('/health').then(function (r) {
     state.tokens = list;
     renderStats(h, list);
     renderTokens(list);
-    if (list.length) select(list[0].symbol, false); // самый событийный токен, без хардкода и БЕЗ автопрыжка (волна I1)
+    if (list.length) select(list[0].symbol, false); // the most eventful token, no hardcoding and NO auto-jump (wave I1)
   });
 }).catch(function (e) {
   el('stats').innerHTML = '<div class="stat"><b class="err">API unavailable</b><i>' + esc(e.message) + ' — retry in a moment</i></div>';

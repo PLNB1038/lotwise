@@ -1,14 +1,15 @@
-// Раунд 16 — волна H3 [P1×3 + P2]: транзакционный слой скана.
-//   H3-1 [P1] одна poison-tx с мусорной meta роняла ВЕСЬ скан (8 векторов TypeError) —
-//          кошелёк становился permanent-несканируемым. Контракт ROUND7 №14 «битая tx =
-//          skipped с причиной» обязан покрывать и броски парсера.
-//   H3-2 [P1] постоянная RpcError на ОДНОЙ tx (-32015 на versioned) — тот же летальный
-//          исход через немедленный бросок rpc-клиента.
-//   H3-3 [P1] getTokenAccountsByOwner: не-массив value и мусорные entries (pubkey 12345,
-//          amount "1e6", битый base58) — сырые TypeError из scanWallet и битые адреса в
-//          источниках сигнатур (зеркало ROUND9 №3, который закрыли только для сигнатур).
-//   H3-4 [P2] tx с meta:null (лаг индексера) молча исчезала: fetched+1, ни в txs, ни в
-//          skipped — нарушение fail-closed. Теперь — честный skip «tx unavailable».
+// formerly round16-h3.test.mjs
+// Round 16 — wave H3 [P1×3 + P2]: the transaction layer of the scan.
+//   H3-1 [P1] a single poison-tx with garbage meta crashed the ENTIRE scan (8 TypeError vectors) —
+//          the wallet became permanently unscannable. The ROUND7 #14 contract "a broken tx =
+//          skipped with a reason" must cover parser throws too.
+//   H3-2 [P1] a persistent RpcError on ONE tx (-32015 on versioned) — the same lethal
+//          outcome via the rpc client's immediate throw.
+//   H3-3 [P1] getTokenAccountsByOwner: a non-array value and garbage entries (pubkey 12345,
+//          amount "1e6", broken base58) — raw TypeErrors from scanWallet and broken addresses in
+//          the signature sources (a mirror of ROUND9 #3, closed only for signatures).
+//   H3-4 [P2] a tx with meta:null (an indexer lag) silently vanished: fetched+1, neither in txs nor in
+//          skipped — a fail-closed violation. Now — an honest "tx unavailable" skip.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { scanWallet, WalletScanError } from "../src/wallet/scan.mjs";
@@ -28,7 +29,7 @@ const goodTx = (amount, slot) => ({
   },
 });
 
-// txs-значение может быть функцией — для бросков на конкретной сигнатуре
+// the txs value may be a function — for throws on a specific signature
 function fakeClient({ sigPages = {}, txs = {}, accountsByProgram = {} } = {}) {
   const calls = [];
   return {
@@ -47,7 +48,7 @@ function fakeClient({ sigPages = {}, txs = {}, accountsByProgram = {} } = {}) {
   };
 }
 
-test("scan: poison-tx с битой meta — skip с причиной, скан жив, хорошие tx в отчёте", async () => {
+test("scan: a poison-tx with a broken meta — skipped with a reason, the scan lives, good txs in the report", async () => {
   const client = fakeClient({
     sigPages: { [OWNER]: [
       { signature: "poison", slot: 2, blockTime: 2000, err: null },
@@ -56,19 +57,19 @@ test("scan: poison-tx с битой meta — skip с причиной, скан 
     ] },
     txs: {
       good1: goodTx(100, 1),
-      poison: { slot: 2, blockTime: 2000, meta: { preTokenBalances: 5 } }, // мусор из лежащего шлюза
+      poison: { slot: 2, blockTime: 2000, meta: { preTokenBalances: 5 } }, // garbage from a lying gateway
       good2: goodTx(50, 3),
     },
   });
   const res = await scanWallet(client, OWNER, REGISTRY);
-  assert.equal(res.txs.length, 2, "обе валидные tx в истории");
+  assert.equal(res.txs.length, 2, "both valid txs in the history");
   assert.equal(res.fetched, 3);
   assert.equal(res.skipped.length, 1);
-  assert.match(res.skipped[0].reason, /tx unreadable/, "ядовитая tx — с причиной, не с крэшем");
+  assert.match(res.skipped[0].reason, /tx unreadable/, "the poisoned tx — with a reason, not with a crash");
   assert.equal(res.skipped[0].signature, "poison");
 });
 
-test("scan: постоянная RpcError на одной tx (-32015 versioned) — skip, не смерть скана", async () => {
+test("scan: a persistent RpcError on one tx (-32015 versioned) — a skip, not the death of the scan", async () => {
   const client = fakeClient({
     sigPages: { [OWNER]: [
       { signature: "v0tx", slot: 2, blockTime: 2000, err: null },
@@ -81,10 +82,10 @@ test("scan: постоянная RpcError на одной tx (-32015 versioned) 
   });
   const res = await scanWallet(client, OWNER, REGISTRY);
   assert.equal(res.txs.length, 1);
-  assert.match(res.skipped[0].reason, /-32015/, "код ошибки виден в причине скипа");
+  assert.match(res.skipped[0].reason, /-32015/, "the error code is visible in the skip reason");
 });
 
-test("scan: наш abort НЕ глотается как «tx unreadable» — летит дальше", async () => {
+test("scan: our abort is NOT swallowed as \"tx unreadable\" — it flies on", async () => {
   const client = fakeClient({
     sigPages: { [OWNER]: [{ signature: "s1", slot: 1, blockTime: 1000, err: null }] },
     txs: { s1: () => { throw new WalletScanError("scan aborted by client", "aborted"); } },
@@ -95,24 +96,24 @@ test("scan: наш abort НЕ глотается как «tx unreadable» — л
   );
 });
 
-test("scan: tx с meta:null (лаг индексера) — честный skip, не молчаливое исчезновение", async () => {
+test("scan: a tx with meta:null (an indexer lag) — an honest skip, not a silent disappearance", async () => {
   const client = fakeClient({
     sigPages: { [OWNER]: [
       { signature: "noMeta", slot: 1, blockTime: 1000, err: null },
       { signature: "good1", slot: 2, blockTime: 2000, err: null },
     ] },
     txs: {
-      noMeta: { slot: 1, blockTime: 1000, meta: null }, // каркас без фактуры
+      noMeta: { slot: 1, blockTime: 1000, meta: null }, // a skeleton without substance
       good1: goodTx(100, 2),
     },
   });
   const res = await scanWallet(client, OWNER, REGISTRY);
   assert.equal(res.fetched, 2);
   assert.ok(res.skipped.some((s) => s.signature === "noMeta" && /unavailable/.test(s.reason)),
-    "meta:null = недоступная фактура, видна в skipped (раньше: fetched+1 и тишина)");
+    "meta:null = unavailable substance, visible in skipped (before: fetched+1 and silence)");
 });
 
-test("scan: getTokenAccountsByOwner с value:5 — явная malformed-source, не TypeError", async () => {
+test("scan: getTokenAccountsByOwner with value:5 — an explicit malformed-source, not a TypeError", async () => {
   const client = fakeClient({
     accountsByProgram: { "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: 5 } },
   });
@@ -122,17 +123,17 @@ test("scan: getTokenAccountsByOwner с value:5 — явная malformed-source, 
   );
 });
 
-test("scan: мусорные entries аккаунтов — skip с warn, битые pubkey НЕ становятся источниками сигнатур", async () => {
-  const bad41 = "1".repeat(41); // base58-невалиден (класс E4)
+test("scan: garbage account entries — a skip with a warn, broken pubkeys do NOT become signature sources", async () => {
+  const bad41 = "1".repeat(41); // base58-invalid (the E4 class)
   const client = fakeClient({
     accountsByProgram: { "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": { value: [
-      { pubkey: 12345, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "1e6" } } } } } }, // pubkey-число + мусорный amount
-      { pubkey: bad41, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "7" } } } } } }, // битый base58
+      { pubkey: 12345, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "1e6" } } } } } }, // a number pubkey + a garbage amount
+      { pubkey: bad41, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "7" } } } } } }, // broken base58
     ] } },
     sigPages: { [OWNER]: [] },
   });
   const res = await scanWallet(client, OWNER, REGISTRY);
   const sigSources = client.calls.filter((c) => c.method === "getSignaturesForAddress").map((c) => c.key);
-  assert.ok(!sigSources.includes(bad41) && !sigSources.includes(12345), "битые pubkey не жгут RPC и не валят скан");
-  assert.deepEqual([...res.accounts.values()], [], "мусорные балансы не попали в сверку");
+  assert.ok(!sigSources.includes(bad41) && !sigSources.includes(12345), "broken pubkeys do not burn RPC and do not kill the scan");
+  assert.deepEqual([...res.accounts.values()], [], "garbage balances did not get into the reconcile");
 });

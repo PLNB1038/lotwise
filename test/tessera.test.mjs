@@ -1,7 +1,7 @@
-// Тесты источника эмитента Tessera (tessera.pe, токены T-OpenAI/T-SpaceX/T-Kalshi).
-// БЕЗ СЕТИ: ответы живого CDN cdn.tesseralab.co/tessera/{symbol}.json сохранены как
-// фикстуры (tessera-spacex.json, tessera-openai.json, tessera-kalshi.json,
-// сняты 2026-09-22) и все сценарии гоняются через инжектируемый fetcher.
+// Tests of the Tessera issuer source (tessera.pe, the T-OpenAI/T-SpaceX/T-Kalshi tokens).
+// NO NETWORK: the responses of the live CDN cdn.tesseralab.co/tessera/{symbol}.json are saved as
+// fixtures (tessera-spacex.json, tessera-openai.json, tessera-kalshi.json,
+// captured 2026-09-22) and all the scenarios run through an injectable fetcher.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,26 +15,26 @@ const FIX = (name) => JSON.parse(readFileSync(path.join(dir, name), "utf8"));
 
 const okRes = (payload) => ({ ok: true, status: 200, json: async () => payload });
 
-// ---------- Клиент: парсинг живых фикстур ----------
+// ---------- The client: parsing the live fixtures ----------
 
-test("spacex: identity-метаданные парсятся дословно, все поля — строки/null", async () => {
+test("spacex: the identity metadata parses verbatim, all the fields — strings/null", async () => {
   const m = await fetchTokenMetadata("T-SpaceX", { fetcher: async () => okRes(FIX("tessera-spacex.json")) });
   assert.equal(m.name, "T-SpaceX");
-  assert.equal(m.symbol, "tSpaceX"); // camelCase-остов эмитента, без дефиса
+  assert.equal(m.symbol, "tSpaceX"); // the issuer's camelCase skeleton, without a hyphen
   assert.match(m.description, /^T-SpaceX represents a loan participation right/);
   assert.match(m.description, /https:\/\/terms\.tessera\.pe$/);
   assert.equal(m.image, "https://cdn.tesseralab.co/tessera/tokenicon_T-SpaceX.svg");
   assert.equal(m.externalUrl, "https://www.tessera.pe");
-  // attributes — trait-пары дословно, порядок сохранён
+  // attributes — trait pairs verbatim, the order preserved
   assert.equal(m.attributes.length, 9);
   assert.deepEqual(m.attributes[0], { traitType: "Product Type", value: "Stablecoin Loan Token" });
   assert.deepEqual(m.attributes[1], { traitType: "Underlying Exposure", value: "SpaceX" });
   assert.deepEqual(m.attributes[7], { traitType: "Redemption Trigger", value: "Divestment of Underlying Exposure" });
   assert.deepEqual(m.attributes[8], { traitType: "Terms and Conditions", value: "https://terms.tessera.pe" });
-  // Контракт «числа — строками»: верхний уровень — строки/null, attributes — пары строк.
+  // The contract "numbers — as strings": the top level — strings/null, attributes — pairs of strings.
   for (const [k, v] of Object.entries(m)) {
     if (k === "attributes") continue;
-    assert.ok(v === null || typeof v === "string", `${k} должен быть строкой/null`);
+    assert.ok(v === null || typeof v === "string", `${k} must be a string/null`);
   }
   for (const a of m.attributes) {
     assert.equal(typeof a.traitType, "string");
@@ -42,21 +42,21 @@ test("spacex: identity-метаданные парсятся дословно, �
   }
 });
 
-test("openai: парсится, символ сверяется по остову (T-OpenAI vs tOpenAI)", async () => {
+test("openai: parses, the symbol is verified by the skeleton (T-OpenAI vs tOpenAI)", async () => {
   const m = await fetchTokenMetadata("T-OpenAI", { fetcher: async () => okRes(FIX("tessera-openai.json")) });
   assert.equal(m.symbol, "tOpenAI");
   assert.deepEqual(m.attributes[1], { traitType: "Underlying Exposure", value: "OpenAI" });
   assert.equal(m.attributes[3].value, "Artificial Intelligence");
 });
 
-test("kalshi: парсится, символ сверяется по остову (T-Kalshi vs tKalshi)", async () => {
+test("kalshi: parses, the symbol is verified by the skeleton (T-Kalshi vs tKalshi)", async () => {
   const m = await fetchTokenMetadata("T-Kalshi", { fetcher: async () => okRes(FIX("tessera-kalshi.json")) });
   assert.equal(m.symbol, "tKalshi");
   assert.deepEqual(m.attributes[1], { traitType: "Underlying Exposure", value: "Kalshi" });
   assert.equal(m.attributes[3].value, "Financial Technology & Prediction Markets");
 });
 
-test("URL строится из символа в нижнем регистре (T-SpaceX -> t-spacex.json)", async () => {
+test("the URL is built from the lowercased symbol (T-SpaceX -> t-spacex.json)", async () => {
   const seen = [];
   await fetchTokenMetadata("T-SpaceX", {
     fetcher: async (url) => {
@@ -76,16 +76,16 @@ test("URL строится из символа в нижнем регистре 
   ]);
 });
 
-// ---------- Клиент: отказы ----------
+// ---------- The client: refusals ----------
 
-test("расхождение символа (спросили T-SpaceX, отдали tOpenAI) — IssuerError", async () => {
+test("a symbol divergence (we asked for T-SpaceX, it served tOpenAI) — IssuerError", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("T-SpaceX", { fetcher: async () => okRes(FIX("tessera-openai.json")) }),
     (err) => err instanceof IssuerError && /symbol mismatch: asked T-SpaceX, got tOpenAI/.test(err.message),
   );
 });
 
-test("битый payload без name/symbol отклоняется понятной ошибкой", async () => {
+test("a broken payload without name/symbol is rejected with a clear error", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("T-SpaceX", { fetcher: async () => okRes({ wrong: true }) }),
     /unexpected metadata payload/,
@@ -100,21 +100,21 @@ test("битый payload без name/symbol отклоняется понятн�
   );
 });
 
-test("HTTP-ошибка классифицируется со статусом", async () => {
+test("an HTTP error is classified with the status", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("T-NOPE", { fetcher: async () => ({ ok: false, status: 404, json: async () => ({}) }) }),
     (err) => err instanceof IssuerError && err.status === 404 && /HTTP 404/.test(err.message),
   );
 });
 
-test("отказ сети оборачивается в IssuerError", async () => {
+test("a network failure is wrapped into an IssuerError", async () => {
   await assert.rejects(
     () => fetchTokenMetadata("T-SpaceX", { fetcher: async () => { throw new Error("ECONNREFUSED"); } }),
     (err) => err instanceof IssuerError && /network: ECONNREFUSED/.test(err.message),
   );
 });
 
-test("битый JSON (res.json кидает) — IssuerError, не сырой SyntaxError", async () => {
+test("a broken JSON (res.json throws) — an IssuerError, not a raw SyntaxError", async () => {
   await assert.rejects(
     () =>
       fetchTokenMetadata("T-SpaceX", {
@@ -124,24 +124,24 @@ test("битый JSON (res.json кидает) — IssuerError, не сырой S
   );
 });
 
-test("мусорный символ режется до похода в сеть", async () => {
+test("a garbage symbol is cut before going to the network", async () => {
   for (const bad of ["", "../etc/passwd", "T SPACE", 42, null]) {
     await assert.rejects(
-      () => fetchTokenMetadata(bad, { fetcher: async () => { throw new Error("не должен вызываться"); } }),
+      () => fetchTokenMetadata(bad, { fetcher: async () => { throw new Error("must not be called"); } }),
       (err) => err instanceof IssuerError && /bad symbol/.test(err.message),
     );
   }
 });
 
-// ---------- attributes: отклонения схемы -> строки/null, без выдумок ----------
+// ---------- attributes: the schema deviations -> strings/null, no inventions ----------
 
-test("attributes не массив -> null; числовые trait-значения проходят строками", async () => {
+test("attributes not an array -> null; numeric trait values pass as strings", async () => {
   const m = await fetchTokenMetadata("T-SpaceX", {
     fetcher: async () =>
       okRes({
         name: "T-SpaceX",
         symbol: "tSpaceX",
-        attributes: "не массив",
+        attributes: "not an array",
       }),
   });
   assert.equal(m.attributes, null);
@@ -151,10 +151,10 @@ test("attributes не массив -> null; числовые trait-значен�
         name: "T-SpaceX",
         symbol: "tSpaceX",
         attributes: [
-          { trait_type: "Multiplier", value: 4 }, // NFT-схемы часто несут числа: строкой, без float
-          { trait_type: "Broken", value: { deep: true } }, // объект -> null, не сериализуем наугад
-          { value: "без trait_type" }, // запись без строкового trait_type не выдумывается
-          "мусор",
+          { trait_type: "Multiplier", value: 4 }, // NFT schemas often carry numbers: as a string, without a float
+          { trait_type: "Broken", value: { deep: true } }, // an object -> null, not serialized on a whim
+          { value: "without a trait_type" }, // a record without a string trait_type is not invented
+          "garbage",
         ],
       }),
   });
@@ -164,36 +164,36 @@ test("attributes не массив -> null; числовые trait-значен�
   ]);
 });
 
-// ---------- Честность: события не синтезируются ----------
+// ---------- Honesty: events are not synthesized ----------
 
-test("честность: в схеме нет полей событий — metadataToEvents у клиента НЕТ", () => {
-  // «Redemption Trigger» в attributes — словесное описание без даты/коэффициента;
-  // модуль принципиально не экспортирует генератор событий, чтобы никто не смог
-  // синтезировать даты из логотипа и trait-строк.
+test("honesty: there are no event fields in the schema — the client has NO metadataToEvents", () => {
+  // "Redemption Trigger" in the attributes — a verbal description without a date/ratio;
+  // the module deliberately does not export an event generator, so nobody could
+  // synthesize dates from a logo and trait strings.
   assert.ok(!("metadataToEvents" in tesseraModule));
 });
 
-test("честность: форма результата — только identity-поля, никаких дат/множителей", async () => {
+test("honesty: the result shape — identity fields only, no dates/multipliers", async () => {
   const m = await fetchTokenMetadata("T-SpaceX", { fetcher: async () => okRes(FIX("tessera-spacex.json")) });
   assert.deepEqual(Object.keys(m).sort(), ["attributes", "description", "externalUrl", "image", "name", "symbol"]);
   for (const a of m.attributes) {
-    assert.ok(!/effectiveDate|activationDate|multiplier/i.test(a.traitType), `неожиданное событийное поле: ${a.traitType}`);
+    assert.ok(!/effectiveDate|activationDate|multiplier/i.test(a.traitType), `an unexpected event field: ${a.traitType}`);
   }
 });
 
-// ---------- metadataSources: легитимные ссылки identity-документа ----------
+// ---------- metadataSources: the legitimate links of the identity document ----------
 
-test("metadataSources: external_url и атрибут Terms and Conditions — в стабильном порядке", () => {
-  const raw = FIX("tessera-spacex.json"); // сырой JSON (snake_case trait_type)
+test("metadataSources: external_url and the Terms and Conditions attribute — in a stable order", () => {
+  const raw = FIX("tessera-spacex.json"); // the raw JSON (snake_case trait_type)
   assert.deepEqual(metadataSources(raw), ["https://www.tessera.pe", "https://terms.tessera.pe"]);
-  // Тот же документ в написании нашего клиента (camelCase traitType И externalUrl —
-  // ROUND7 №6: раньше фейк носил snake_case external_url, которого реальный клиент
-  // не отдаёт, и тест «покрывал» клиентскую форму, закрепляя баг потери ссылки)
+  // The same document in our client's spelling (camelCase traitType AND externalUrl —
+  // ROUND7 #6: earlier the fake wore a snake_case external_url, which the real client
+  // does not serve, and the test "covered" the client shape, cementing the lost-link bug)
   const client = { name: "T-SpaceX", symbol: "tSpaceX", externalUrl: "https://www.tessera.pe", attributes: [{ traitType: "Terms and Conditions", value: "https://terms.tessera.pe" }] };
   assert.deepEqual(metadataSources(client), ["https://www.tessera.pe", "https://terms.tessera.pe"]);
 });
 
-test("metadataSources: без ссылок — пусто, не падаем; мусор — IssuerError", () => {
+test("metadataSources: no links — empty, we do not fall; garbage — IssuerError", () => {
   assert.deepEqual(metadataSources({ name: "x", symbol: "tX" }), []);
   assert.deepEqual(metadataSources({ name: "x", symbol: "tX", attributes: [{ trait_type: "Terms and Conditions", value: 42 }] }), []);
   for (const garbage of [null, 42, "str", [], true]) {

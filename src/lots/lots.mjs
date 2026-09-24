@@ -1,11 +1,11 @@
-// Движок adjusted lots: применяет канонические события (../schema/events.mjs)
-// к списку лотов. Арифметика только целочисленная (BigInt), никакого float.
-// Принцип «тихая ложь хуже падения»: любое невалидное/неприменимое событие
-// бросает ошибку ДО изменения состояния — применение атомарно.
-// Датная семантика: событие касается только лотов, купленных СТРОГО РАНЬШЕ его
-// effectiveDate (купленный в день события — уже по пост-событийным правилам).
-// Отчёт /lots может содержать лоты с acquiredDate:null (tx без blockTime) — см.
-// шапку ../wallet/report.mjs: applyEvents на таком лоте бросает LotError.
+// Adjusted lots engine: applies canonical events (../schema/events.mjs)
+// to a list of lots. Arithmetic is integer-only (BigInt), no float.
+// Principle "a quiet lie is worse than a crash": any invalid/inapplicable event
+// throws BEFORE state changes — application is atomic.
+// Date semantics: an event affects only lots bought STRICTLY BEFORE its
+// effectiveDate (one bought on the event day already follows post-event rules).
+// The /lots report may contain lots with acquiredDate:null (a tx without blockTime) — see
+// the header of ../wallet/report.mjs: applyEvents throws LotError on such a lot.
 import { validateEvent } from "../schema/events.mjs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 
@@ -19,11 +19,11 @@ export class LotError extends Error {
 
 const cloneLots = (lots) => lots.map((l) => ({ ...l }));
 
-// Лот затронут событием, только если куплен строго раньше его effectiveDate.
-// Сравнение — числом (unix-ms) через строгий parseIsoDateMs, никогда лексикографически
-// (пара к timeline.mjs). Лот с acquiredDate null/мусор — LotError (fail-closed):
-// «применим ко всем, раз дата неизвестна» — та самая тихая ложь, из-за которой
-// сплит доставался и лотам, купленным после события.
+// A lot is affected by an event only if bought strictly before its effectiveDate.
+// Comparison is numeric (unix-ms) via strict parseIsoDateMs, never lexicographic
+// (paired with timeline.mjs). A lot with null/garbage acquiredDate — LotError (fail-closed):
+// "apply to everyone since the date is unknown" is exactly the quiet lie because of which
+// the split reached lots bought after the event.
 const heldBefore = (lot, effectiveTs, e) => {
   if (lot.acquiredDate === null || lot.acquiredDate === undefined) {
     throw new LotError(
@@ -41,20 +41,20 @@ const heldBefore = (lot, effectiveTs, e) => {
 
 /**
  * @param {Array<{id:string, mint:string, owner:string, qtyRaw:bigint, acquiredDate:string, basisRaw:bigint}>} lots
- *   qtyRaw/basisRaw — ТОЛЬКО BigInt (ROUND7 №18: JSDoc прежде обещал int — number
- *   умирает голым «Cannot mix BigInt», а не LotError; движок точной арифметики,
- *   конверсию типов на входе не делаем)
- * @param {Array<object>} events — события канонической схемы
+ *   qtyRaw/basisRaw — BigInt ONLY (round 7 fix 18: the JSDoc previously promised int — a number
+ *   dies with a bare "Cannot mix BigInt", not a LotError; this is an exact-arithmetic engine,
+ *   we do no type conversion on input)
+ * @param {Array<object>} events — canonical schema events
  * @returns {{lots: Array, accruals: Array, realized: Array, symbolMap: object, applied: number}}
  *
- * Датная семантика (см. шапку): события, трогающие лоты (SPLIT/DIVIDEND_ACCRUAL/
- * MERGER/REDEEM), применяются только к лотам с acquiredDate строго раньше
- * effectiveDate; сравнение unix-ms (parseIsoDateMs), null/мусор в acquiredDate —
- * LotError. TICKER_CHANGE (карта символов) и MULTIPLIER_CHANGE (no-op на raw-лотах)
- * лоты не трогают и acquiredDate не требуют.
+ * Date semantics (see the header): lot-touching events (SPLIT/DIVIDEND_ACCRUAL/
+ * MERGER/REDEEM) apply only to lots with acquiredDate strictly earlier than
+ * effectiveDate; comparison in unix-ms (parseIsoDateMs), null/garbage in acquiredDate —
+ * LotError. TICKER_CHANGE (a symbol map) and MULTIPLIER_CHANGE (a no-op on raw lots)
+ * touch no lots and require no acquiredDate.
  */
 export function applyEvents(lots, events) {
-  // Фаза 1: полная валидация всех событий до любых изменений (атомарность).
+  // Phase 1: full validation of all events before any changes (atomicity).
   for (const e of events) {
     try {
       validateEvent(e);
@@ -74,24 +74,24 @@ export function applyEvents(lots, events) {
     switch (e.type) {
       case "SPLIT": {
         const { ratioNumerator: N, ratioDenominator: D } = e;
-        const effTs = parseIsoDateMs(e.effectiveDate); // валидировано фазой 1 — не null
+        const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
         for (const lot of lotsOf(e.mint)) {
-          if (!heldBefore(lot, effTs, e)) continue; // куплен после сплита — цена уже пост-сплит
+          if (!heldBefore(lot, effTs, e)) continue; // bought after the split — the price is already post-split
           if (lot.qtyRaw % BigInt(D) !== 0n) {
             throw new LotError(
               `split ${N}/${D}: lot ${lot.id} qty ${lot.qtyRaw} not divisible by ${D}; refusing to round`, e,
             );
           }
           lot.qtyRaw = (lot.qtyRaw / BigInt(D)) * BigInt(N);
-          // basisRaw не меняется: себестоимость лота сохраняется целиком.
+          // basisRaw is unchanged: the lot's cost basis is preserved in full.
         }
         break;
       }
       case "DIVIDEND_ACCRUAL": {
-        const effTs = parseIsoDateMs(e.effectiveDate); // валидировано фазой 1 — не null
+        const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
         const holders = new Map();
         for (const lot of lotsOf(e.mint)) {
-          if (!heldBefore(lot, effTs, e)) continue; // дивиденд — только держателям на экс-дату
+          if (!heldBefore(lot, effTs, e)) continue; // a dividend — holders on the ex-date only
           holders.set(lot.owner, (holders.get(lot.owner) ?? 0n) + lot.qtyRaw);
         }
         for (const [owner, totalQty] of holders) {
@@ -110,10 +110,10 @@ export function applyEvents(lots, events) {
         if (e.exchangeNumerator === undefined) {
           throw new LotError("merger without exchange ratio: refusing to guess", e);
         }
-        const { exchangeNumerator: N, exchangeDenominator: D, newMint } = e; // N старых за D новых
-        const effTs = parseIsoDateMs(e.effectiveDate); // валидировано фазой 1 — не null
+        const { exchangeNumerator: N, exchangeDenominator: D, newMint } = e; // N old for D new
+        const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
         for (const lot of lotsOf(e.mint)) {
-          if (!heldBefore(lot, effTs, e)) continue; // лот после обмена не конвертируется
+          if (!heldBefore(lot, effTs, e)) continue; // a lot after the exchange is not converted
           if (lot.qtyRaw % BigInt(N) !== 0n) {
             throw new LotError(
               `merger ${N}:${D}: lot ${lot.id} qty ${lot.qtyRaw} not divisible by ${N}; refusing to round`, e,
@@ -121,18 +121,18 @@ export function applyEvents(lots, events) {
           }
           lot.qtyRaw = (lot.qtyRaw / BigInt(N)) * BigInt(D);
           lot.mint = newMint;
-          // basisRaw сохраняется.
+          // basisRaw is preserved.
         }
         break;
       }
       case "TICKER_CHANGE": {
-        symbolMap[e.oldSymbol] = e.newSymbol; // лоты не трогаем: минт тот же
+        symbolMap[e.oldSymbol] = e.newSymbol; // lots untouched: same mint
         break;
       }
       case "REDEEM": {
-        // выкуп закрывает позицию на дату выкупа: реализуются и удаляются только лоты,
-        // купленные строго раньше (лот с датой после события не выдуманно не уничтожается)
-        const effTs = parseIsoDateMs(e.effectiveDate); // валидировано фазой 1 — не null
+        // the redemption closes the position on the redemption date: only lots bought strictly
+        // earlier are realized and removed (a lot dated after the event is not inventedly destroyed)
+        const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
         const doomed = lotsOf(e.mint).filter((l) => heldBefore(l, effTs, e));
         const doomedIds = new Set(doomed.map((l) => l.id));
         const byOwner = new Map();
@@ -149,8 +149,8 @@ export function applyEvents(lots, events) {
         break;
       }
       case "MULTIPLIER_CHANGE": {
-        // Сознательный no-op на raw-лотах: множитель живёт в слое отображения
-        // (MultiplierTimeline), raw-балансы xStocks при событиях не меняются.
+        // A deliberate no-op on raw lots: the multiplier lives in the display layer
+        // (MultiplierTimeline); raw xStocks balances do not change on events.
         break;
       }
       default:

@@ -1,26 +1,27 @@
-// Кросс-чек корпоративных событий против рыночной цены вокруг даты.
-// Два типа с ценовой сигнатурой:
+// Cross-check of corporate events against the market price around the date.
+// Two types carry a price signature:
 //
-// 1) MULTIPLIER_CHANGE (дивиденд-ребейз) НЕ меняет цену scaled-единицы —
-//    цена RAW-единицы падает в отношении from/to. Рынок в пулах торгует raw-единицы,
-//    поэтому пул-цена обязана упасть ровно на дивидендную доходность в дату события.
-//    Это отличает честный ребейз от перепутанного сплита/переэмиссии.
+// 1) MULTIPLIER_CHANGE (a dividend rebase) does NOT change the price of a scaled unit —
+//    the RAW-unit price drops in the from/to ratio. The market in pools trades raw units,
+//    so the pool price must drop by exactly the dividend yield on the event date.
+//    This distinguishes an honest rebase from a confused split/reissuance.
 //
-// 2) DIVIDEND_ACCRUAL — начисление с собственной сигнатурой: в экс-дату цена
-//    единицы токена падает примерно НА ДИВИДЕНД (абсолютная величина, не отношение).
-//    Математика — в raw-единицах токена, БЕЗ долларов и без FX:
-//      rawClose = close × 10^decimals        — цена в raw-масштабе;
-//      expectedDropRaw = amountPerUnitRaw    — ожидаемое падение цены (raw-единиц);
-//      actualDropRaw = rawClosePrev − rawCloseEx — фактическая raw-дельта close.
-//    Перевод в доллары честно невозможен: у amountPerUnitRaw в схеме нет валюты
-//    выплаты, а курса выплаты на экс-дату в пайплайне нет. Сравнение ведём ДОЛЯМИ
-//    pre-ex raw-цены (expectedFraction vs actualFraction) — это безразмерно и не
-//    требует ничего сверх свечей; допуски — та же лестница, что у MULTIPLIER_CHANGE
-//    (шум <0.5% → грубая аномалия ±3%; иначе tolerance = max(3%, 60% ожидания)).
+// 2) DIVIDEND_ACCRUAL — an accrual with its own signature: on the ex-date the price
+//    of a token unit drops by roughly THE DIVIDEND (an absolute value, not a ratio).
+//    The math is in raw token units, WITHOUT dollars and without FX:
+//      rawClose = close × 10^decimals        — the price in raw scale;
+//      expectedDropRaw = amountPerUnitRaw    — the expected price drop (raw units);
+//      actualDropRaw = rawClosePrev − rawCloseEx — the actual raw delta of close.
+//    Conversion to dollars is honestly impossible: amountPerUnitRaw in the schema has no
+//    payout currency, and the payout rate on the ex-date is absent from the pipeline.
+//    The comparison is done in FRACTIONS of the pre-ex raw price (expectedFraction vs
+//    actualFraction) — that is dimensionless and needs nothing beyond the candles; the
+//    tolerances are the same ladder as for MULTIPLIER_CHANGE (noise <0.5% → a gross
+//    anomaly is ±3%; otherwise tolerance = max(3%, 60% of the expectation)).
 //
-// Цены — float-наблюдения с полным пониманием шума; количества — по-прежнему BigInt.
-// Даты — через строгий schema/isodate.mjs: Date.parse перекатывает "2026-02-30" на март
-// и парсит наивное время как локаль хоста — «мусорная дата — ошибка, не тихое сравнение».
+// Prices are float observations with a full understanding of the noise; quantities are still BigInt.
+// Dates go through the strict schema/isodate.mjs: Date.parse rolls "2026-02-30" over to March
+// and parses naive time as the host locale — "a garbage date is an error, not a silent comparison".
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 
 export class CrossCheckError extends Error {
@@ -38,9 +39,9 @@ const tsOf = (isoDate) => {
   return Math.floor(t / 1000);
 };
 
-// Общая свечная рамка (семантика раунда 4, одна для обоих типов событий):
-// before — последняя свеча, закрывшаяся ДО события (ts+день <= момент);
-// after — первая свеча, закрывшаяся ПОСЛЕ события (её close уже несёт post-событие).
+// Shared candle frame (round 4 semantics, one frame for both event types):
+// before — the last candle that closed BEFORE the event (ts+day <= the moment);
+// after — the first candle that closed AFTER the event (its close already carries the post-event state).
 function selectAroundEvent(candles, evTs) {
   let before = null;
   let after = null;
@@ -51,7 +52,7 @@ function selectAroundEvent(candles, evTs) {
   return { before, after };
 }
 
-// Даты/окно наблюдения между before- и after-свечами (общее для обоих типов).
+// Dates/observation window between the before- and after-candles (shared by both types).
 function observedWindow(before, after) {
   return {
     beforeDate: new Date(before.ts * 1000).toISOString().slice(0, 10),
@@ -61,9 +62,9 @@ function observedWindow(before, after) {
 }
 
 /**
- * Один MULTIPLIER_CHANGE против дневных свечей.
- * @param {object} event — каноническое MULTIPLIER_CHANGE (multiplierFrom/To — строки)
- * @param {Array<{ts:number, c:number}>} candles — по возрастанию ts
+ * One MULTIPLIER_CHANGE against daily candles.
+ * @param {object} event — a canonical MULTIPLIER_CHANGE (multiplierFrom/To are strings)
+ * @param {Array<{ts:number, c:number}>} candles — ascending by ts
  */
 export function crossCheckMultiplierChange(event, candles) {
   if (event.type !== "MULTIPLIER_CHANGE") {
@@ -72,15 +73,15 @@ export function crossCheckMultiplierChange(event, candles) {
   const evTs = tsOf(event.effectiveDate);
   const { before, after } = selectAroundEvent(candles, evTs);
 
-  // Гварды входа — зеркало crossCheckDividendAccrual (ROUND7 №11): нечисловой/
-  // неположительный множитель — явная ошибка, а не «mismatch» с NaN-отношением
-  // (JSON молча сериализует NaN/Infinity как null — вердикт выглядел бы обоснованным).
+  // Input guards — a mirror of crossCheckDividendAccrual (ROUND7 fix 11): a non-numeric/
+  // non-positive multiplier is an explicit error, not a "mismatch" with a NaN ratio
+  // (JSON silently serializes NaN/Infinity as null — the verdict would have looked substantiated).
   const from = Number(event.multiplierFrom);
   const to = Number(event.multiplierTo);
   if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) {
     throw new CrossCheckError(`bad multiplier: from=${JSON.stringify(event.multiplierFrom)} to=${JSON.stringify(event.multiplierTo)}`);
   }
-  const expectedRatio = from / to; // цена raw-единицы: было NAV/from, стало NAV/to
+  const expectedRatio = from / to; // raw-unit price: it was NAV/from, it became NAV/to
   const delta = Math.abs(1 - expectedRatio);
 
   const base = {
@@ -104,10 +105,10 @@ export function crossCheckMultiplierChange(event, candles) {
   }
 
   if (!Number.isFinite(before.c) || !Number.isFinite(after.c) || before.c <= 0 || after.c <= 0) {
-    // вырожденный пул: close 0/отрицательный/НЕЧИСЛОВОЙ (NaN/Infinity/undefined —
-    // волна B: NaN <= 0 ложен и проходил гвард, давая «mismatch» с null-полями).
-    // observedRatio = ∞/−/NaN — сильный вердикт на мусоре; честное «не видно»,
-    // зеркально дивидендному сиблингу (ROUND7 №11, ROUND9 №5, волна B)
+    // degenerate pool: close 0/negative/NOT-A-NUMBER (NaN/Infinity/undefined —
+    // wave B: NaN <= 0 is false and passed the guard, yielding a "mismatch" with null fields).
+    // observedRatio = ∞/−/NaN — a strong verdict on garbage; an honest "not visible",
+    // mirroring the dividend sibling (ROUND7 fix 11, ROUND9 fix 5, wave B)
     return {
       ...base, observedRatio: null, observed: null,
       verdict: "inconclusive",
@@ -119,8 +120,9 @@ export function crossCheckMultiplierChange(event, candles) {
   const observed = observedWindow(before, after);
 
   if (observed.windowDays > 3) {
-    // дыра в свечах вокруг события (пул не торговался): окно в недели не видит
-    // дивиденд в доли процента — честно говорим «не видно», а не «подозрительно»
+    // a hole in the candles around the event (the pool did not trade): a window of weeks
+    // cannot see a dividend within fractions of a percent — we honestly say "not visible",
+    // not "suspicious"
     return {
       ...base, observedRatio, observed,
       verdict: "inconclusive",
@@ -129,7 +131,7 @@ export function crossCheckMultiplierChange(event, candles) {
   }
 
   if (delta < 0.005) {
-    // дивиденд < 0.5%: ожидание тонет в дневном шуме — проверяем только грубую аномалию
+    // a dividend < 0.5%: the expectation drowns in daily noise — only a gross anomaly is checked
     const dev = Math.abs(1 - observedRatio);
     return {
       ...base, observedRatio, observed,
@@ -152,17 +154,17 @@ export function crossCheckMultiplierChange(event, candles) {
 }
 
 /**
- * Один DIVIDEND_ACCRUAL против дневных свечей — честная дивидендная семантика
- * (см. шапку модуля): в raw-единицах токена, без долларов и без FX.
- * @param {object} event — канонический DIVIDEND_ACCRUAL (amountPerUnitRaw — целое, decimals 0..18)
- * @param {Array<{ts:number, c:number}>} candles — по возрастанию ts
+ * One DIVIDEND_ACCRUAL against daily candles — honest dividend semantics
+ * (see the module header): in raw token units, without dollars and without FX.
+ * @param {object} event — a canonical DIVIDEND_ACCRUAL (amountPerUnitRaw an integer, decimals 0..18)
+ * @param {Array<{ts:number, c:number}>} candles — ascending by ts
  */
 export function crossCheckDividendAccrual(event, candles) {
   if (event.type !== "DIVIDEND_ACCRUAL") {
     throw new CrossCheckError(`expected DIVIDEND_ACCRUAL, got ${event.type}`);
   }
-  // Мусорные поля — ошибка, не тихий вердикт (та же дисциплина, что с датами):
-  // схема это гарантирует, но crossCheckEvents могут скормить и непровалидированное.
+  // Garbage fields are an error, not a silent verdict (the same discipline as with dates):
+  // the schema guarantees this, but crossCheckEvents can be fed unvalidated input too.
   if (!Number.isInteger(event.amountPerUnitRaw) || event.amountPerUnitRaw <= 0) {
     throw new CrossCheckError(`bad amountPerUnitRaw: ${event.amountPerUnitRaw}`);
   }
@@ -174,14 +176,14 @@ export function crossCheckDividendAccrual(event, candles) {
   const { before, after } = selectAroundEvent(candles, evTs);
 
   const base = {
-    type: "DIVIDEND_ACCRUAL", // тип в описании вердикта: у MULTIPLIER_CHANGE полей
-    // multiplierFrom/To достаточно, дивиденд же не отличим от ребейза без метки
+    type: "DIVIDEND_ACCRUAL", // the type in the verdict description: for MULTIPLIER_CHANGE the
+    // multiplierFrom/To fields suffice, while a dividend is indistinguishable from a rebase without a label
     effectiveDate: event.effectiveDate,
     amountPerUnitRaw: event.amountPerUnitRaw,
     decimals: event.decimals,
-    // ожидаемое падение цены — сам дивиденд, в raw-единицах токена
+    // the expected price drop is the dividend itself, in raw token units
     expectedDropRaw: event.amountPerUnitRaw,
-    expectedDropFraction: null, // доля pre-ex цены; известна, когда есть before-свеча
+    expectedDropFraction: null, // a fraction of the pre-ex price; known once a before-candle exists
   };
 
   if (!before || !after) {
@@ -197,14 +199,14 @@ export function crossCheckDividendAccrual(event, candles) {
   }
 
   const scale = 10 ** event.decimals;
-  const rawPrev = before.c * scale; // raw-цена до экс-даты
-  const rawEx = after.c * scale;    // raw-цена первой пост-экс свечи
+  const rawPrev = before.c * scale; // the raw price before the ex-date
+  const rawEx = after.c * scale;    // the raw price of the first post-ex candle
   const observed = observedWindow(before, after);
 
   if (!Number.isFinite(rawPrev) || !Number.isFinite(rawEx) || rawPrev <= 0 || rawEx <= 0) {
-    // вырожденный пул: close 0/отрицательный/НЕЧИСЛОВОЙ с любой стороны (волна B:
-    // NaN проходил rawPrev<=0, expectedFraction становился NaN → «mismatch») —
-    // доля не строится, честное «не видно» (ROUND9 №5 расширен на обе стороны+finite)
+    // degenerate pool: close 0/negative/NOT-A-NUMBER on either side (wave B:
+    // NaN passed rawPrev<=0, expectedFraction became NaN → a "mismatch") —
+    // the fraction cannot be built, an honest "not visible" (ROUND9 fix 5 extended to both sides+finite)
     return {
       ...base, observedDropFraction: null, observed,
       verdict: "inconclusive",
@@ -213,11 +215,11 @@ export function crossCheckDividendAccrual(event, candles) {
   }
 
   const expectedFraction = base.expectedDropRaw / rawPrev;
-  // со знаком: положительная = падение, отрицательная = цена выросла
+  // signed: positive = a drop, negative = the price rose
   const actualFraction = (rawPrev - rawEx) / rawPrev;
 
   if (observed.windowDays > 3) {
-    // та же логика, что у ребейза: недельное окно не видит дивиденд в доли процента
+    // the same logic as for the rebase: a weekly window cannot see a dividend within fractions of a percent
     return {
       ...base, expectedDropFraction: expectedFraction, observedDropFraction: actualFraction, observed,
       verdict: "inconclusive",
@@ -226,7 +228,7 @@ export function crossCheckDividendAccrual(event, candles) {
   }
 
   if (expectedFraction < 0.005) {
-    // дивиденд < 0.5% pre-ex цены: тонет в дневном шуме — проверяем только грубую аномалию
+    // a dividend < 0.5% of the pre-ex price: it drowns in daily noise — only a gross anomaly is checked
     const dev = Math.abs(actualFraction);
     return {
       ...base, expectedDropFraction: expectedFraction, observedDropFraction: actualFraction, observed,
@@ -249,18 +251,18 @@ export function crossCheckDividendAccrual(event, candles) {
 }
 
 /**
- * Все события токена против одного Candle-набора + покрытие истории.
+ * All events of a token against one Candle set + history coverage.
  *
- * ПОРЯДОК ВЕРДИКТОВ — КОНТРАКТ витрины (src/ui/page.mjs склеивает вердикты с
- * MULTIPLIER_CHANGE-событиями по порядковому номеру): сначала все MULTIPLIER_CHANGE
- * в порядке событий (историческое поведение без изменений), затем DIVIDEND_ACCRUAL
- * в порядке событий. Дивидендный вердикт помечен type: "DIVIDEND_ACCRUAL".
+ * VERDICT ORDER — THE VITRINE CONTRACT (src/ui/page.mjs glues verdicts to
+ * MULTIPLIER_CHANGE events by ordinal): first all MULTIPLIER_CHANGE
+ * in event order (historical behavior unchanged), then DIVIDEND_ACCRUAL
+ * in event order. The dividend verdict is labeled type: "DIVIDEND_ACCRUAL".
  * @returns {{verdicts: Array, coverage: {candlesFrom: string|null, candlesTo: string|null, candles: number}}}
  */
 export function crossCheckEvents(events, candles) {
-  // Гард формы свечей (волна B): мусорный ts (NaN/undefined от лежащего шлюза)
-  // раньше доезжал до new Date(NaN*1000) в coverage → RangeError → /crosscheck
-  // падал generic-500, хотя дисциплина модуля — типизированная CrossCheckError.
+  // Candle shape guard (wave B): garbage ts (NaN/undefined from a lying gateway)
+  // used to reach new Date(NaN*1000) in coverage → RangeError → /crosscheck
+  // fell with a generic 500, although the module's discipline is a typed CrossCheckError.
   for (const cd of candles) {
     if (!Number.isFinite(cd.ts)) {
       throw new CrossCheckError(`candle with non-finite ts: ${JSON.stringify(cd.ts)}`);

@@ -1,8 +1,8 @@
-// Парсер аргументов scripts/serve.mjs. Вынесен из скрипта в тестируемый модуль
-// (ROUND7 №10): --port abc раньше проживал весь бут (минуты квот RPC) и падал
-// только на listen; --port=8787 молча игнорировался; --rpc последним аргументом
-// молча убивал env-фолбэк (rpcUrl = undefined → весь бут в честных 503).
-// Гварды ДО любого I/O — по образцу --max-txs, который уже так умел.
+// Arg parser of scripts/serve.mjs. Moved out of the script into a testable module
+// (round 7 fix 10): --port abc used to burn the whole boot (minutes of RPC quota) and failed
+// only at listen; --port=8787 was silently ignored; --rpc as the last argument silently
+// killed the env fallback (rpcUrl = undefined → the whole boot serving honest 503s).
+// Guards BEFORE any I/O — modeled on --max-txs, which already knew how.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer } from "node:net";
 
@@ -21,8 +21,8 @@ function readFlag(argv, name) {
   const eqIdx = argv.findIndex((a) => a.startsWith(eq));
   if (eqIdx !== -1) {
     const value = argv[eqIdx].slice(eq.length);
-    // пустое значение = отсутствующее: "" у host делал listen на ВСЕХ интерфейсах
-    // (ROUND9 №1), у rpc — бут в пустых 503; отказ, а не тихий дефолт-обход
+    // an empty value = missing: "" for host made listen bind ALL interfaces
+    // (round 9 fix 1), for rpc — a boot of empty 503s; reject, not a silent default detour
     if (value === "") throw new ServeArgsError(`--${name} requires a non-empty value`, `--${name}`);
     return value;
   }
@@ -41,7 +41,7 @@ function readFlag(argv, name) {
 /**
  * @param {string[]} argv — process.argv.slice(2)
  * @returns {{port: number, host: string, rpcUrl: string, maxTxs: number}}
- * @throws {ServeArgsError} — флаг без значения; port/maxTxs — не целое/не положительное
+ * @throws {ServeArgsError} — a flag without a value; port/maxTxs — not an integer/not positive
  */
 export function parseServeArgs(argv, env = process.env) {
   if (!Array.isArray(argv)) throw new ServeArgsError("argv must be an array");
@@ -49,8 +49,8 @@ export function parseServeArgs(argv, env = process.env) {
   let port = 8787;
   const portRaw = readFlag(argv, "port");
   if (portRaw !== undefined) {
-    // digits-only (ROUND9 №1b): Number() льготно ест 0x10/1e2 — та же дисциплина,
-    // что у /multiplier?raw (BigInt молча принимает "0x10")
+    // digits-only (round 9 fix 1b): Number() generously eats 0x10/1e2 — the same discipline
+    // as /multiplier?raw (BigInt silently accepts "0x10")
     if (!/^\d+$/.test(portRaw)) {
       throw new ServeArgsError(`--port must be an integer between 1 and 65535, got ${JSON.stringify(portRaw)}`, "--port");
     }
@@ -62,18 +62,18 @@ export function parseServeArgs(argv, env = process.env) {
 
   const host = readFlag(argv, "host") ?? "127.0.0.1";
   if (/\s/.test(host)) {
-    // волна B: «not a host» проходил парсер и ронял listen ПОСЛЕ полного бут-I/O
-    // (реестр+журнал+RPC-квота); пробел в host — всегда опечатка
+    // wave B: "not a host" passed the parser and crashed listen AFTER the full boot I/O
+    // (registry+journal+RPC quota); whitespace in host is always a typo
     throw new ServeArgsError(`--host must not contain whitespace, got ${JSON.stringify(host)}`, "--host");
   }
-  // флаг > env > публичный RPC; env-ключ не должен утекать в cmdline (см. serve.mjs)
+  // flag > env > public RPC; an env key must not leak into the cmdline (see serve.mjs)
   const rpcUrl = readFlag(argv, "rpc") ?? env.LOTWISE_RPC_URL ?? DEFAULT_RPC;
   try {
     const u = new URL(rpcUrl);
     if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("not http(s)");
   } catch {
-    // бут в честные 503 на мусорном URL — легально, но отказ ДО I/O дешевле
-    // (та же семья, что ROUND7 №10 / ROUND9 №1)
+    // booting into honest 503s on a garbage URL is legal, but rejecting BEFORE I/O is cheaper
+    // (the same family as round 7 fix 10 / round 9 fix 1)
     throw new ServeArgsError(`--rpc must be a valid http(s) URL, got ${JSON.stringify(rpcUrl)}`, "--rpc");
   }
 
@@ -82,7 +82,7 @@ export function parseServeArgs(argv, env = process.env) {
   if (maxTxsRaw !== undefined) {
     maxTxs = Number(maxTxsRaw);
     if (!Number.isInteger(maxTxs) || maxTxs <= 0) {
-      // без гварда "--max-txs abc" даёт NaN: `taken >= NaN` всегда false — скан молча без потолка
+      // without the guard "--max-txs abc" yields NaN: `taken >= NaN` is always false — the scan runs silently uncapped
       throw new ServeArgsError(`--max-txs must be an integer > 0, got ${JSON.stringify(maxTxsRaw)}`, "--max-txs");
     }
   }
@@ -90,10 +90,10 @@ export function parseServeArgs(argv, env = process.env) {
   return { port, host, rpcUrl, maxTxs };
 }
 
-// DNS-резолв --host ДО бута (ROUND13 №3): парсер синхронный и видит только лексику —
-// «no-such-host.invalid» прожигал весь бут-I/O (реестр, журнал, ~15 RPC-вызовов
-// истории) и падал только на listen с ENOTFOUND. Один lookup дешевле бута; IP-литералы
-// и localhost резолвятся libc без сети. lookup инжектится для тестов.
+// DNS-resolve --host BEFORE boot (round 13 fix 3): the parser is synchronous and sees only
+// lexics — "no-such-host.invalid" burned the whole boot I/O (the registry, the journal, ~15 RPC calls
+// of history) and failed only at listen with ENOTFOUND. One lookup is cheaper than a boot; IP literals
+// and localhost resolve in libc without the network. lookup is injectable for tests.
 export async function assertHostResolvable(host, lookup = dnsLookup) {
   try {
     await lookup(host);
@@ -102,10 +102,10 @@ export async function assertHostResolvable(host, lookup = dnsLookup) {
   }
 }
 
-// Занятый порт ДО бут-I/O (волна E, E3-4): EADDRINUSE раньше ловился только на listen
-// ПОСЛЕ полного бута — двойной запуск сжигал реестр/журнал/15 RPC-вызовов. Одноразовый
-// bind-проб закрывает типовой случай; гонка «двое пробуют в одну миллисекунду» остаётся
-// за пост-бут EADDRINUSE-отказом (внятный exit 1) — осознанный остаток.
+// A busy port BEFORE boot I/O (wave E, E3-4): EADDRINUSE used to be caught only at listen
+// AFTER the full boot — a double start burned registry/journal/15 RPC calls. A one-off
+// bind probe closes the typical case; the race of "two trying in the same millisecond" remains
+// covered by the post-boot EADDRINUSE failure (a clear exit 1) — a known remainder.
 export function checkPortAvailable(port, host = "127.0.0.1") {
   return new Promise((resolve, reject) => {
     const probe = createServer();

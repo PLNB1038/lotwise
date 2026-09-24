@@ -1,16 +1,17 @@
-// Регрессионные тесты раунда 8 — «список наблюдать» ROUND7.
-//   R8-1: пагинация сигнатур — короткая страница ≠ конец истории (soft caps
-//         индексера): конец только по ПУСТОЙ странице + гвард «нет прогресса»
+// formerly round8-watchlist.test.mjs
+// Round 8 regression tests — the ROUND7 "watch list".
+//   R8-1: signature pagination — a short page ≠ end of history (soft indexer caps):
+//         the end is only on an EMPTY page + a "no progress" guard
 //         (scan.mjs:124, signatures.mjs:15).
-//   R8-2: atomicWriteJson — сохранение mode цели при rename + fsync каталога
-//         (Linux-прод: chmod 600 webhooks.json слетал до 0644; power-loss мог
-//         уронить rename). Хелперы с инжекцией — тестируемы и на Windows.
-//   R8-3: файловый стор подписок — кросс-процессный лок (read-modify-write
-//         терял запись при двух конкурентных CLI-вызовах).
-//   R8-4: SSRF-данлист URL подписок (127/8, 10/8, 172.16/12, 192.168/16,
+//   R8-2: atomicWriteJson — preserving the target's mode across rename + directory fsync
+//         (Linux prod: chmod 600 webhooks.json dropped to 0644; power-loss could
+//         break the rename). Helpers with injection — testable on Windows too.
+//   R8-3: the file store of subscriptions — a cross-process lock (read-modify-write
+//         lost a write with two concurrent CLI calls).
+//   R8-4: SSRF denylist of subscription URLs (127/8, 10/8, 172.16/12, 192.168/16,
 //         169.254/16 + metadata, ::1, fc00::/7, fe80::/10, localhost).
-//   R8-5: транзиентные JSON-RPC ошибки (-32005, «node is behind») — ретрай
-//         с бэкоффом вместо мгновенного фатала всего скана.
+//   R8-5: transient JSON-RPC errors (-32005, "node is behind") — retry
+//         with backoff instead of an instant fatal of the whole scan.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, utimesSync } from "node:fs";
@@ -31,15 +32,15 @@ const sig = (n) => ({
   slot: n, blockTime: 1750000000 + n, err: null,
 });
 
-// ---- R8-1: конец пагинации — только ПУСТАЯ страница ----
+// ---- R8-1: the end of pagination — an EMPTY page only ----
 
-// страницы как функция before: [s1,s2] (полная) → [s3] (КОРОТКАЯ, но не конец!)
-// → [s4] (тоже короткая) → [] (честный конец)
+// pages as a function of before: [s1,s2] (full) → [s3] (SHORT, but not the end!)
+// → [s4] (also short) → [] (an honest end)
 const shortNotEnd = (source, { before }) =>
   before === undefined ? [sig(1), sig(2)] : before.endsWith("2") ? [sig(3)] : before.endsWith("3") ? [sig(4)] : [];
 
-// залипший эндпоинт: одна и та же страница всегда; после 10 звонков отдаём пустую,
-// чтобы ТЕКУЩИЙ (незфикшеный) код тоже терминировал — гвард отличаем по числу звонков
+// a stuck endpoint: the same page always; after 10 calls we serve an empty one,
+// so that the CURRENT (unfixed) code also terminates — we distinguish the guard by the call count
 function stuckClient() {
   let calls = 0;
   return {
@@ -66,37 +67,37 @@ function clientWith(pagesOf, { txs = null } = {}) {
   };
 }
 
-test("scan: короткая страница НЕ конец — хвост истории доезжает, truncated честный false", async () => {
+test("scan: a short page is NOT the end — the tail of the history arrives, truncated is honestly false", async () => {
   const scan = await scanWallet(clientWith(shortNotEnd), OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
-  assert.equal(scan.signatures, 4, "все 4 сигнатуры увидены: s4 за короткой страницей s3");
+  assert.equal(scan.signatures, 4, "all 4 signatures seen: s4 behind the short page s3");
   assert.equal(scan.truncated, false);
 });
 
-test("scan: залипший эндпоинт (одна и та же страница) — терминация гвардом «нет прогресса»", async () => {
+test("scan: a stuck endpoint (the same page over and over) — terminated by the \"no progress\" guard", async () => {
   const { client, calls } = stuckClient();
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
   assert.equal(scan.signatures, 2);
-  assert.ok(calls() <= 3, `гвард должен ломать цикл за 2-3 звонка, а не крутиться до пустой страницы (calls=${calls()})`);
+  assert.ok(calls() <= 3, `the guard must break the loop in 2-3 calls, not spin until an empty page (calls=${calls()})`);
 }, { timeout: 5000 });
 
-test("streamSignatures: те же семантики — короткая страница продолжает, пустая завершает", async () => {
+test("streamSignatures: the same semantics — a short page continues, an empty one ends", async () => {
   const out = [];
   for await (const s of streamSignatures(clientWith(shortNotEnd), SPYx, { limit: 2 })) out.push(s.signature);
   assert.equal(out.length, 4);
   const stuck = stuckClient();
   const stuckStream = [];
   for await (const s of streamSignatures(stuck.client, SPYx, { limit: 2 })) stuckStream.push(s.signature);
-  assert.equal(stuckStream.length, 2, "дубликаты залипшей страницы не выдаются (контракт уникальности)");
-  assert.ok(stuck.calls() <= 3, `гвард в стриме тоже ломает цикл (calls=${stuck.calls()})`);
+  assert.equal(stuckStream.length, 2, "duplicates of the stuck page are not yielded (the uniqueness contract)");
+  assert.ok(stuck.calls() <= 3, `the guard breaks the loop in the stream too (calls=${stuck.calls()})`);
 }, { timeout: 5000 });
 
-test("scan: потолок maxTxs работает как раньше (кап — честный truncated)", async () => {
+test("scan: the maxTxs cap works as before (the cap — an honest truncated)", async () => {
   const scan = await scanWallet(clientWith(shortNotEnd), OWNER, REGISTRY, { limit: 2, maxTxs: 3 });
   assert.equal(scan.signatures, 3);
   assert.equal(scan.truncated, true);
 });
 
-// ---- R8-4: SSRF-данлист ----
+// ---- R8-4: the SSRF denylist ----
 
 const urlRejects = [
   "http://127.0.0.1:8790/hook",
@@ -111,28 +112,28 @@ const urlRejects = [
   "http://localHOST:8790/hook",
 ];
 
-test("подписки: приватные/loopback/link-local/metadata URL отвергаются", () => {
+test("subscriptions: private/loopback/link-local/metadata URLs are rejected", () => {
   for (const url of urlRejects) {
     assert.throws(
       () => validateSubscription({ id: "wh_x", url, symbols: "*", secret: "s", createdAt: "2026-09-23T00:00:00.000Z" }),
       (err) => err instanceof SubscriptionError && /url/.test(err.field ?? ""),
-      `${url} должен быть отвергнут`,
+      `${url} must be rejected`,
     );
   }
 });
 
-test("подписки: публичные URL проходят как раньше", () => {
+test("subscriptions: public URLs pass as before", () => {
   for (const url of ["https://example.com/hook", "https://8.8.8.8/hook", "http://203.0.113.7/webhook"]) {
     assert.doesNotThrow(() =>
       validateSubscription({ id: "wh_x", url, symbols: "*", secret: "s", createdAt: "2026-09-23T00:00:00.000Z", active: true }));
   }
 });
 
-// ---- R8-5: транзиентные JSON-RPC ошибки ----
+// ---- R8-5: transient JSON-RPC errors ----
 
 const jsonRpc = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 
-test("rpc: -32005 «node is behind» — ретраи с бэкоффом, затем успех", async () => {
+test("rpc: -32005 \"node is behind\" — retries with backoff, then success", async () => {
   let n = 0;
   const client = new RpcClient({
     endpoint: "https://rpc.example",
@@ -148,7 +149,7 @@ test("rpc: -32005 «node is behind» — ретраи с бэкоффом, за�
   assert.equal(n, 3);
 });
 
-test("rpc: исчерпание ретраев на -32005 — честный RpcError с кодом", async () => {
+test("rpc: exhausting retries on -32005 — an honest RpcError with the code", async () => {
   let n = 0;
   const client = new RpcClient({
     endpoint: "https://rpc.example",
@@ -156,10 +157,10 @@ test("rpc: исчерпание ретраев на -32005 — честный Rp
     sleep: async () => {}, minIntervalMs: 0, maxRetries: 2,
   });
   await assert.rejects(() => client.call("getMethod", []), (err) => err instanceof RpcError && err.code === -32005);
-  assert.equal(n, 3); // 1 + 2 ретрая
+  assert.equal(n, 3); // 1 + 2 retries
 });
 
-test("rpc: -32015 по-прежнему НЕ ретраится (наш запрос плох)", async () => {
+test("rpc: -32015 is still NOT retried (our request is the bad one)", async () => {
   let n = 0;
   const client = new RpcClient({
     endpoint: "https://rpc.example",
@@ -167,12 +168,12 @@ test("rpc: -32015 по-прежнему НЕ ретраится (наш запр
     sleep: async () => {}, minIntervalMs: 0,
   });
   await assert.rejects(() => client.call("getMethod", []), (err) => err instanceof RpcError && err.code === -32015);
-  assert.equal(n, 1, "не тратим квоту на ретраи детерминированной ошибки");
+  assert.equal(n, 1, "we do not spend quota on retries of a deterministic error");
 });
 
-// ---- R8-2: atomic — mode и fsync каталога (хелперы с инжекцией) ----
+// ---- R8-2: atomic — mode and directory fsync (helpers with injection) ----
 
-test("atomic: copyModeIfExists переносит mode существующей цели на tmp (инжекция fs)", async () => {
+test("atomic: copyModeIfExists carries the existing target's mode onto tmp (fs injection)", async () => {
   const { copyModeIfExists } = await import("../src/fs/atomic.mjs");
   const calls = [];
   const fsTools = {
@@ -181,7 +182,7 @@ test("atomic: copyModeIfExists переносит mode существующей 
   };
   copyModeIfExists("/data/webhooks.json", "/data/.webhooks.json.tmp", { fsTools });
   assert.deepEqual(calls.filter((c) => c[0] === "chmod"), [["chmod", "/data/.webhooks.json.tmp", 0o600]]);
-  // цели нет (stat бросил) — тихо без chmod
+  // no target (stat threw) — quietly without chmod
   const calls2 = [];
   copyModeIfExists("/data/none.json", "/data/.none.json.tmp", {
     fsTools: { statSync: () => { throw new Error("ENOENT"); }, chmodSync: (p, m) => calls2.push(m) },
@@ -189,7 +190,7 @@ test("atomic: copyModeIfExists переносит mode существующей 
   assert.deepEqual(calls2, []);
 });
 
-test("atomic: fsyncDir открывает каталог, fsync'ит и закрывает; отказ — best-effort без броска", async () => {
+test("atomic: fsyncDir opens the directory, fsyncs and closes it; a failure — best-effort without throwing", async () => {
   const { fsyncDir } = await import("../src/fs/atomic.mjs");
   const calls = [];
   const fsTools = {
@@ -199,7 +200,7 @@ test("atomic: fsyncDir открывает каталог, fsync'ит и закр
   };
   fsyncDir("/data", { fsTools });
   assert.ok(calls.some((c) => c[0] === "fsync" && c[1] === 7));
-  // платформа без fsync каталога (win) — не бросает
+  // a platform without directory fsync (win) — does not throw
   const boom = {
     openSync: () => { throw Object.assign(new Error("EINVAL"), { code: "EINVAL" }); },
     fsyncSync: () => {}, closeSync: () => {},
@@ -207,7 +208,7 @@ test("atomic: fsyncDir открывает каталог, fsync'ит и закр
   assert.doesNotThrow(() => fsyncDir("/data", { fsTools: boom }));
 });
 
-test("atomic: atomicWriteJson пишет и поверх существующей цели (контент цел, без броска)", () => {
+test("atomic: atomicWriteJson writes over an existing target (content intact, no throw)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-atomic-r8-"));
   try {
     const target = path.join(dir, "state.json");
@@ -221,9 +222,9 @@ test("atomic: atomicWriteJson пишет и поверх существующе�
   }
 });
 
-// ---- R8-3: кросс-процессный лок стора подписок ----
+// ---- R8-3: the cross-process lock of the subscription store ----
 
-test("подписки: withStoreLock — лок-файл живёт вокруг мутации и снимается", async () => {
+test("subscriptions: withStoreLock — the lock file lives around the mutation and is released", async () => {
   const { withStoreLock } = await import("../src/webhooks/subscriptions.mjs");
   const dir = mkdtempSync(path.join(tmpdir(), "lw-lock-r8-"));
   try {
@@ -235,7 +236,7 @@ test("подписки: withStoreLock — лок-файл живёт вокру�
     }, { sleep: async () => {}, nowMs: () => 1_000 });
     assert.equal(out, "result");
     assert.deepEqual(seen, ["locked:1"]);
-    assert.deepEqual(readLockFiles(dir), [], "лок снят после мутации");
+    assert.deepEqual(readLockFiles(dir), [], "the lock is released after the mutation");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -245,13 +246,13 @@ function readLockFiles(dir) {
   return readdirSync(dir).filter((f) => f.endsWith(".lock"));
 }
 
-test("подписки: withStoreLock ломает ПРОТАХШИЙ лок и ждёт свежий", async () => {
+test("subscriptions: withStoreLock breaks a STALE lock and waits for a fresh one", async () => {
   const { withStoreLock } = await import("../src/webhooks/subscriptions.mjs");
   const dir = mkdtempSync(path.join(tmpdir(), "lw-lock2-r8-"));
   try {
     const store = path.join(dir, "webhooks.json");
     mkdirSync(path.dirname(store), { recursive: true });
-    // протухший: mtime/nowMs сильно старше TTL
+    // stale: mtime/nowMs well older than the TTL
     writeFileSync(store + ".lock", "stale");
     utimesSync(store + ".lock", new Date(0), new Date(0));
     let waited = 0;
@@ -259,13 +260,13 @@ test("подписки: withStoreLock ломает ПРОТАХШИЙ лок и 
       sleep: async () => { waited++; }, nowMs: () => Date.now(), staleMs: 10_000, retryMs: 5,
     });
     assert.equal(out, "ok");
-    assert.ok(waited <= 2, `протухший ломается сразу, без длинного ожидания (waited=${waited})`);
+    assert.ok(waited <= 2, `a stale one is broken immediately, without a long wait (waited=${waited})`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("подписки: конкурентные addSubscription из «двух процессов» не теряют записи (сима через два стора-в-один)", async () => {
+test("subscriptions: concurrent addSubscription from \"two processes\" do not lose writes (simulated via two stores-into-one)", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-store-r8-"));
   try {
     const store = path.join(dir, "webhooks.json");

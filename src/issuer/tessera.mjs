@@ -1,16 +1,16 @@
-// Клиент источника эмитента Tessera (tessera.pe, токены T-OpenAI/T-SpaceX/T-Kalshi).
-// По образцу prestocks.mjs: IssuerError, инжектируемый fetcher, getJson,
-// «числа — строками, без float».
+// Client for the Tessera issuer source (tessera.pe, T-OpenAI/T-SpaceX/T-Kalshi tokens).
+// Modeled after prestocks.mjs: IssuerError, injectable fetcher, getJson,
+// "numbers as strings, no float".
 //
-// ЧЕСТНОЕ ЗАМЕЧАНИЕ О ДАННЫХ (снято с живого CDN 2026-09-22, t-spacex/t-openai/t-kalshi):
-// метаданные Tessera — identity-документ в духе NFT-метаданных и НЕ содержат полей
-// корпоративных событий (ни дат, ни множителей, ни ротаций):
+// HONEST DATA NOTE (taken from the live CDN on 2026-09-22, t-spacex/t-openai/t-kalshi):
+// Tessera metadata is an identity document in the spirit of NFT metadata and contains NO
+// corporate-event fields (no dates, no multipliers, no rotations):
 //   { name, symbol, description, image, external_url,
 //     attributes: [{ trait_type, value }, ...] }
-// Атрибут «Redemption Trigger: Divestment of Underlying Exposure» — словесное
-// описание условия, без даты и коэффициента: событием не является, синтезировать
-// события (даты/множители) из trait-строк — выдумывать данные. Поэтому
-// metadataToEvents здесь НЕТ — только metadataSources() для легитимных ссылок.
+// The "Redemption Trigger: Divestment of Underlying Exposure" attribute is a verbal
+// description of a condition, with no date and no factor: it is not an event, and synthesizing
+// events (dates/multipliers) out of trait strings would be inventing data. Therefore there is
+// NO metadataToEvents here — only metadataSources() for legitimate links.
 export class IssuerError extends Error {
   constructor(msg, { status } = {}) {
     super(msg);
@@ -21,9 +21,9 @@ export class IssuerError extends Error {
 
 const BASE = "https://cdn.tesseralab.co/tessera";
 
-// URL метаданных строятся из символа в нижнем регистре: T-SpaceX -> t-spacex.json
-// (проверено живым CDN и uri минта T-SpaceX из onchain-фикстуры).
-// Путь разрешает только «безопасные» символы токенов — без ../ и прочего мусора.
+// Metadata URLs are built from the lowercased symbol: T-SpaceX -> t-spacex.json
+// (verified against the live CDN and the T-SpaceX mint uri from the on-chain fixture).
+// The path admits only "safe" token symbols — no ../ or other junk.
 const SYMBOL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 async function getJson(url, fetcher = fetch) {
@@ -41,21 +41,21 @@ async function getJson(url, fetcher = fetch) {
   }
 }
 
-// Строка или конечное число -> строка (без float-математики), иначе null.
+// A string or a finite number -> string (no float math), otherwise null.
 const asString = (v) => (typeof v === "string" ? v : typeof v === "number" && Number.isFinite(v) ? String(v) : null);
 
-// Символ в payload Tessera — camelCase-остов БЕЗ дефиса («tSpaceX» для файла
-// t-spacex.json), а в реестре лот-проекта тот же токен записан «T-SpaceX».
-// Поэтому сверка регистронезависимая и по буквенно-цифровому остову: T-SpaceX и
-// tSpaceX дают TSPACEX, а чужой документ (спросили T-SpaceX, отдали tOpenAI ->
-// TOPENAI) ловится как mismatch.
+// The symbol in the Tessera payload is a camelCase skeleton WITHOUT the hyphen ("tSpaceX"
+// for the t-spacex.json file), while the lot registry records the same token as "T-SpaceX".
+// Hence the comparison is case-insensitive and based on the alphanumeric skeleton: T-SpaceX
+// and tSpaceX both give TSPACEX, while a foreign document (asked for T-SpaceX, got tOpenAI ->
+// TOPENAI) is caught as a mismatch.
 const symbolKey = (s) => String(s).toUpperCase().replace(/[^A-Z0-9]/g, "");
 
 /**
- * Метаданные Tessera-токена по символу — план эмитента в текущей схеме
- * (identity-документ; полей событий в схеме нет, см. шапку файла).
- * Все поля — строки или null (attributes — массив пар строк/null).
- * @param {string} symbol например "T-SpaceX" (регистр не важен, в URL приводится к нижнему)
+ * Tessera token metadata by symbol — the issuer plan in the current schema
+ * (an identity document; no event fields in the schema, see the file header).
+ * Every field is a string or null (attributes — an array of string/null pairs).
+ * @param {string} symbol e.g. "T-SpaceX" (case-insensitive, lowercased in the URL)
  * @param {{fetcher?: Function}} opts
  * @returns {Promise<{name: string, symbol: string, description: string|null, image: string|null, externalUrl: string|null, attributes: Array<{traitType: string, value: string|null}>|null}>}
  */
@@ -68,14 +68,14 @@ export async function fetchTokenMetadata(symbol, { fetcher = fetch } = {}) {
   if (typeof j?.name !== "string" || j.name === "" || typeof j?.symbol !== "string" || j.symbol === "") {
     throw new IssuerError(`unexpected metadata payload for ${symbol}`);
   }
-  // Символ в payload обязан соответствовать запрошенному (по остову, см. symbolKey):
-  // файл per-symbol, расхождение = редирект/переименование/чужой документ.
+  // The symbol in the payload must match the requested one (by skeleton, see symbolKey):
+  // the file is per-symbol; a mismatch = redirect/rename/foreign document.
   if (symbolKey(j.symbol) !== symbolKey(symbol)) {
     throw new IssuerError(`metadata symbol mismatch: asked ${symbol}, got ${j.symbol}`);
   }
-  // attributes — статические trait-пары NFT-схемы: trait_type строкой, значение
-  // строкой или конечным числом (числа -> строками), остальное -> null.
-  // Записи без строкового trait_type не выдумываются.
+  // attributes — static trait pairs of the NFT schema: trait_type as a string, the value
+  // as a string or a finite number (numbers -> strings), anything else -> null.
+  // Entries without a string trait_type are not invented.
   let attributes = null;
   if (Array.isArray(j.attributes)) {
     attributes = j.attributes
@@ -93,10 +93,11 @@ export async function fetchTokenMetadata(symbol, { fetcher = fetch } = {}) {
 }
 
 /**
- * Легитимные ссылки-источники из identity-документа: external_url (страница
- * проекта) и атрибут «Terms and Conditions» (оферта эмитента). Принимаются оба
- * написания атрибута — snake_case сырого JSON и camelCase нашего клиента.
- * @returns {string[]} непустые строки-ссылки в стабильном порядке
+ * Legitimate source links from the identity document: external_url (the project
+ * page) and the "Terms and Conditions" attribute (the issuer's offering terms). Both
+ * spellings of the attribute are accepted — the snake_case of the raw JSON and the
+ * camelCase of our client.
+ * @returns {string[]} non-empty link strings in a stable order
  */
 export function metadataSources(metadata) {
   if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
@@ -108,9 +109,9 @@ export function metadataSources(metadata) {
     .filter((a) => a.trait_type === "Terms and Conditions" || a.traitType === "Terms and Conditions")
     .map((a) => a.value)
     .filter((s) => typeof s === "string");
-  // externalUrl — camelCase-вывод нашего же fetchTokenMetadata, external_url — сырой
-  // JSON метаданных: composition двух экспортов не должен терять ссылку проекта
-  // из провенанс-списка (ROUND7 №6); атрибуты уже принимаются в обоих написаниях
+  // externalUrl is the camelCase output of our own fetchTokenMetadata, external_url is the raw
+  // metadata JSON: composing the two exports must not lose the project link from the
+  // provenance list (round 7 fix 6); attributes are already accepted in both spellings
   return [metadata.external_url ?? metadata.externalUrl, ...terms]
     .filter((s) => typeof s === "string" && s.length >= 4);
 }

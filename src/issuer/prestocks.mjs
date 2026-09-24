@@ -1,13 +1,13 @@
-// Клиент источника эмитента PreStocks (prestocks.com, pre-IPO токены).
-// По образцу xstocks.mjs: IssuerError, инжектируемый fetcher, getJson,
-// «числа — строками, без float».
+// Client for the PreStocks issuer source (prestocks.com, pre-IPO tokens).
+// Modeled after xstocks.mjs: IssuerError, injectable fetcher, getJson,
+// "numbers as strings, no float".
 //
-// ЧЕСТНОЕ ЗАМЕЧАНИЕ О ДАННЫХ (снято с живого эндпоинта 2026-09-22):
-// метаданные PreStocks — identity-документ в духе NFT-метаданных и НЕ содержат
-// полей корпоративных событий (ни сплитов, ни дивидендов, ни дат, ни чисел):
+// HONEST DATA NOTE (taken from the live endpoint on 2026-09-22):
+// PreStocks metadata is an identity document in the spirit of NFT metadata and contains NO
+// corporate-event fields (no splits, no dividends, no dates, no numbers):
 //   { name, symbol, description, image, external_url, terms }
-// Маппинг в канонические события — отдельный слой (normalize-prestocks.mjs),
-// mint привязывается снаружи из реестра.
+// Mapping to canonical events is a separate layer (normalize-prestocks.mjs);
+// the mint is bound externally from the registry.
 export class IssuerError extends Error {
   constructor(msg, { status } = {}) {
     super(msg);
@@ -18,9 +18,9 @@ export class IssuerError extends Error {
 
 const BASE = "https://prestocks.com/metadata";
 
-// URL метаданных строятся из символа в нижнем регистре: OPENAI -> openai.json
-// (проверено живым эндпоинтом: /metadata/openai.json -> symbol "OPENAI").
-// Путь разрешает только «безопасные» символы токенов — без ../ и прочего мусора.
+// Metadata URLs are built from the lowercased symbol: OPENAI -> openai.json
+// (verified against the live endpoint: /metadata/openai.json -> symbol "OPENAI").
+// The path admits only "safe" token symbols — no ../ or other junk.
 const SYMBOL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 async function getJson(url, fetcher = fetch) {
@@ -39,11 +39,11 @@ async function getJson(url, fetcher = fetch) {
 }
 
 /**
- * Метаданные PreStocks-токена по символу — план эмитента в текущей схеме
- * (identity-документ; полей событий в схеме нет, см. шапку файла).
- * Все поля ответа — строки или null: в схеме метаданных нет чисел, а любые
- * будущие числовые поля проходят через нормализатор событий строками.
- * @param {string} symbol например "OPENAI" (регистр не важен, в URL приводится к нижнему)
+ * PreStocks token metadata by symbol — the issuer plan in the current schema
+ * (an identity document; no event fields in the schema, see the file header).
+ * Every response field is a string or null: the metadata schema has no numbers, and any
+ * future numeric fields go through the event normalizer as strings.
+ * @param {string} symbol e.g. "OPENAI" (case-insensitive, lowercased in the URL)
  * @param {{fetcher?: Function}} opts
  * @returns {Promise<{name: string, symbol: string, description: string|null, image: string|null, externalUrl: string|null, terms: string|null}>}
  */
@@ -56,8 +56,8 @@ export async function fetchTokenMetadata(symbol, { fetcher = fetch } = {}) {
   if (typeof j?.name !== "string" || j.name === "" || typeof j?.symbol !== "string" || j.symbol === "") {
     throw new IssuerError(`unexpected metadata payload for ${symbol}`);
   }
-  // Символ в payload обязан соответствовать запрошенному (без учёта регистра):
-  // файл per-symbol, расхождение = редирект/переименование/чужой документ.
+  // The symbol in the payload must match the requested one (case-insensitive):
+  // the file is per-symbol; a mismatch = redirect/rename/foreign document.
   if (j.symbol.toUpperCase() !== symbol.toUpperCase()) {
     throw new IssuerError(`metadata symbol mismatch: asked ${symbol}, got ${j.symbol}`);
   }

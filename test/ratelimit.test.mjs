@@ -4,28 +4,28 @@ import { createRateLimiter } from "../src/api/ratelimit.mjs";
 import { createApiServer } from "../src/api/server.mjs";
 import { loadRegistry } from "../src/registry/registry.mjs";
 
-test("createRateLimiter: ровно max за окно, потом отказ с retryAfter, окно сбрасывается", () => {
-  let t = 1_000_000; // управляемые часы: фиксированное окно 10_000мс
+test("createRateLimiter: exactly max per window, then a refusal with retryAfter, the window resets", () => {
+  let t = 1_000_000; // controlled clocks: a fixed window of 10_000ms
   const limiter = createRateLimiter({ windowMs: 10_000, max: 2, now: () => t });
   assert.deepEqual(limiter.check("a"), { allowed: true, retryAfterMs: 0 });
   assert.deepEqual(limiter.check("a"), { allowed: true, retryAfterMs: 0 });
   const denied = limiter.check("a");
   assert.equal(denied.allowed, false);
   assert.ok(denied.retryAfterMs > 0 && denied.retryAfterMs <= 10_000);
-  // ключи изолированы: чужая корзина не мешает
+  // the keys are isolated: a foreign bucket does not interfere
   assert.equal(limiter.check("b").allowed, true);
-  // окно прокатилось — счёт с нуля (t=1_010_000 попадает в окно 1_010_000..1_020_000)
+  // the window rolled over — the count from scratch (t=1_010_000 falls into the window 1_010_000..1_020_000)
   t = 1_010_000;
   assert.deepEqual(limiter.check("a"), { allowed: true, retryAfterMs: 0 });
 });
 
-test("createRateLimiter: мусорные параметры — явный бросок, а не молчаливый unlimited", () => {
+test("createRateLimiter: garbage parameters — an explicit throw, not a silent unlimited", () => {
   assert.throws(() => createRateLimiter({ windowMs: 0, max: 1 }), RangeError);
   assert.throws(() => createRateLimiter({ windowMs: 1000, max: 0 }), RangeError);
   assert.throws(() => createRateLimiter({ windowMs: 1000.5, max: 1 }), RangeError);
 });
 
-// форма скана — по контракту report.mjs (как aScan в api.test.mjs): пустой кошелёк
+// the scan shape — per the report.mjs contract (as aScan in api.test.mjs): an empty wallet
 const scanStub = () => ({ owner: ADDR, signatures: 0, fetched: 0, txs: [], skipped: [], truncated: false, accounts: {} });
 
 async function withLimitedServer(fn, opts = {}) {
@@ -45,12 +45,12 @@ async function withLimitedServer(fn, opts = {}) {
   }
 }
 
-const ADDR = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"; // валидный base58 pubkey (не в реестре — не важно для /lots)
+const ADDR = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"; // a valid base58 pubkey (not in the registry — irrelevant for /lots)
 
-test("/lots: третий скан за окно — 429 с Retry-After, сканер реально звался дважды", async () => {
+test("/lots: a third scan per window — a 429 with Retry-After, the scanner really called twice", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const calls = [];
-  // свой сервер со счётчиком вызовов: важно, что 429 останавливает ДО сканера
+  // our own server with a call counter: what matters is that the 429 stops BEFORE the scanner
   const server = await createApiServer({
     registry,
     events: [],
@@ -69,28 +69,28 @@ test("/lots: третий скан за окно — 429 с Retry-After, ска�
     assert.equal(blocked.status, 429);
     assert.ok(Number(blocked.headers.get("retry-after")) >= 1);
     assert.match((await blocked.json()).error, /rate limit exceeded/);
-    assert.equal(calls.length, 2); // третий запрос не дошёл до сканера
+    assert.equal(calls.length, 2); // the third request did not reach the scanner
   } finally {
     server.close();
   }
 });
 
-test("/lots: мусорные адресы (400 до лимита) не сжигают квоту; /health не лимитирован", async () => {
+test("/lots: garbage addresses (a 400 before the limit) do not burn the quota; /health is not limited", async () => {
   await withLimitedServer(async (base) => {
     for (let i = 0; i < 5; i++) {
       assert.equal((await fetch(`${base}/lots?address=junk${i}`)).status, 400);
     }
-    assert.equal((await fetch(`${base}/lots?address=${ADDR}`)).status, 200); // квота цела
+    assert.equal((await fetch(`${base}/lots?address=${ADDR}`)).status, 200); // the quota intact
     for (let i = 0; i < 5; i++) {
-      assert.equal((await fetch(`${base}/health`)).status, 200); // дешёвые эндпоинты без лимита
+      assert.equal((await fetch(`${base}/health`)).status, 200); // the cheap endpoints without a limit
     }
   });
 });
 
-test("trustProxy: X-Forwarded-For задаёт корзину, без него — адрес сокета (одна корзина)", async () => {
+test("trustProxy: X-Forwarded-For sets the bucket, without it — the socket address (one bucket)", async () => {
   await withLimitedServer(async (base) => {
-    // без trustProxy XFF игнорируется: оба «клиента» делят корзину сокета (max=2),
-    // подделка заголовка не даёт себе новых корзин
+    // without trustProxy the XFF is ignored: both "clients" share the socket bucket (max=2),
+    // forging the header does not give one new buckets
     const h1 = { "x-forwarded-for": "1.1.1.1" };
     const h2 = { "x-forwarded-for": "2.2.2.2" };
     assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h1 })).status, 200);
@@ -99,18 +99,18 @@ test("trustProxy: X-Forwarded-For задаёт корзину, без него �
   }, { trustProxy: false });
 
   await withLimitedServer(async (base) => {
-    // с trustProxy каждый XFF — своя корзина (max=2): оба «клиента» живут независимо
+    // with trustProxy every XFF — its own bucket (max=2): both "clients" live independently
     const h1 = { "x-forwarded-for": "1.1.1.1" };
     const h2 = { "x-forwarded-for": "2.2.2.2" };
     assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h1 })).status, 200);
     assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h2 })).status, 200);
     assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h2 })).status, 200);
-    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h2 })).status, 429); // корзина 2.2.2.2 исчерпана
-    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h1 })).status, 200); // а 1.1.1.1 всё ещё жива
+    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h2 })).status, 429); // the 2.2.2.2 bucket exhausted
+    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: h1 })).status, 200); // while 1.1.1.1 is still alive
   }, { trustProxy: true });
 });
 
-test("rateLimits: null — лимиты выключены (локальные эксперименты)", async () => {
+test("rateLimits: null — the limits off (local experiments)", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const server = await createApiServer({ registry, events: [], walletScanner: scanStub, rateLimits: null });
   const { port } = server.address();

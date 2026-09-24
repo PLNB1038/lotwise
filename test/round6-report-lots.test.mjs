@@ -1,14 +1,14 @@
-// Раунд 6: регрессионные тесты находок
+// Round 6: regression tests for the findings
 //   LW2_excluded_token_adjusted_row_unmarked (src/wallet/report.mjs — adjustedAvailable)
-//   LW2_blocktime_null_lot_vs_applyevents_loterror (стык report↔lots — контракт задокументирован,
-//     поведение НЕ меняется: тест фиксирует стык, чтобы он больше не был молчаливым)
+//   LW2_blocktime_null_lot_vs_applyevents_loterror (the report↔lots seam — the contract documented,
+//     the behavior does NOT change: the test pins the seam so it is no longer silent)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildWalletReport } from "../src/wallet/report.mjs";
 import { MultiplierTimeline } from "../src/lots/timeline.mjs";
 import { applyEvents, LotError } from "../src/lots/lots.mjs";
 
-// строго base58 (алфавит без 0, O, I, l), 32–44 символа — как в lots.test.mjs
+// strictly base58 (alphabet without 0, O, I, l), 32–44 chars — same as in lots.test.mjs
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
 const AAPLx = "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB";
 const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu";
@@ -24,52 +24,52 @@ const buy = (signature, mint, qty, blockTime = 1000) => ({
   signature, slot: 1, blockTime, deltas: [{ owner: OWNER, mint, preRaw: 0n, postRaw: qty, deltaRaw: qty }],
 });
 
-// timeline с НЕединичным множителем: adjusted обязан отличаться от raw — так тест
-// отличает честно посчитанный adjusted от тождественного fallback (scaled=raw)
+// a timeline with a NON-unity multiplier: adjusted must differ from raw — that is how the test
+// distinguishes an honestly computed adjusted from the identical fallback (scaled=raw)
 const timelines = new Map([
   [SPYx, new MultiplierTimeline([
     { type: "MULTIPLIER_CHANGE", effectiveDate: "2026-06-01", multiplierFrom: "1", multiplierTo: "2" },
   ])],
 ]);
 
-// ---- LW2_excluded_token_adjusted_row_unmarked: identity-fallback помечен честно ----
+// ---- LW2_excluded_token_adjusted_row_unmarked: the identity fallback is honestly marked ----
 
-test("adjustedAvailable: таймлайн есть — поля нет, adjusted реально посчитан (≠ raw)", () => {
+test("adjustedAvailable: a timeline exists — no field, adjusted is really computed (≠ raw)", () => {
   const rep = buildWalletReport(scanOf([buy("a", SPYx, 10n)]), { registry, timelines });
   const t = rep.tokens.find((x) => x.symbol === "SPYx");
-  assert.equal(t.adjustedAvailable, undefined, "отсутствие поля = adjusted посчитан таймлайном");
-  assert.equal(t.adjusted.whole, "20", "10 × 2 — посчитано таймлайном, не тождественный fallback");
+  assert.equal(t.adjustedAvailable, undefined, "the absence of the field = adjusted computed by the timeline");
+  assert.equal(t.adjusted.whole, "20", "10 × 2 — computed by the timeline, not the identical fallback");
 });
 
-test("adjustedAvailable: таймлайна нет (identity-fallback scaled=raw) — false, не тихое равенство", () => {
-  // AAPLx без таймлайна: adjusted == raw, но теперь это ПОМЕЧЕНО
+test("adjustedAvailable: no timeline (the identity fallback scaled=raw) — false, not a silent equality", () => {
+  // AAPLx without a timeline: adjusted == raw, but now it is MARKED
   const rep = buildWalletReport(scanOf([buy("a", AAPLx, 10n)]), { registry, timelines });
   const t = rep.tokens.find((x) => x.symbol === "AAPLx");
   assert.equal(t.adjustedAvailable, false);
-  assert.equal(t.adjusted.whole, "10", "fallback не изменил значение — изменилась честность пометки");
+  assert.equal(t.adjusted.whole, "10", "the fallback did not change the value — the honesty of the marking changed");
 });
 
-test("adjustedAvailable: false и на пути /lots → JSON (сериализация не ломается)", () => {
+test("adjustedAvailable: false also on the /lots → JSON path (the serialization does not break)", () => {
   const rep = buildWalletReport(scanOf([buy("a", AAPLx, 10n)], { accounts: { [AAPLx]: { address: "At3", currentRaw: 10n } } }), { registry });
-  const wire = JSON.parse(JSON.stringify(rep)); // тот же путь, что /lots -> res.end
+  const wire = JSON.parse(JSON.stringify(rep)); // the same path as /lots -> res.end
   assert.equal(wire.tokens[0].adjustedAvailable, false);
 });
 
-test("adjustedAvailable: токен на цепи без дельт (старая позиция) — тоже честно помечен", () => {
-  // pushToken вызывается и для мимо-оконного баланса: fallback тот же, пометка обязана совпасть
+test("adjustedAvailable: a token on chain without deltas (an old position) — honestly marked too", () => {
+  // pushToken is called for the out-of-window balance too: the fallback is the same, the marking must match
   const rep = buildWalletReport(scanOf([], { accounts: { [AAPLx]: { address: "At4", currentRaw: 7n } } }), { registry, timelines });
   const t = rep.tokens.find((x) => x.symbol === "AAPLx");
   assert.equal(t.adjustedAvailable, false);
 });
 
-// ---- LW2_blocktime_null_lot_vs_applyevents_loterror: стык задокументирован контрактом ----
+// ---- LW2_blocktime_null_lot_vs_applyevents_loterror: the seam documented by a contract ----
 
-test("стык: лот из отчёта с blockTime:null (acquiredDate:null) ядовит для applyEvents — фильтруй или лови LotError", () => {
-  const txs = [buy("a", SPYx, 10n, null)]; // Solana-реальность: blockTime бывает null
+test("the seam: a report lot with blockTime:null (acquiredDate:null) is poisonous for applyEvents — filter it or catch the LotError", () => {
+  const txs = [buy("a", SPYx, 10n, null)]; // the Solana reality: blockTime can be null
   const rep = buildWalletReport(scanOf(txs), { registry });
   const lot = rep.tokens.find((x) => x.symbol === "SPYx").lots[0];
   assert.equal(lot.acquiredDate, null);
-  // потребитель /lots достраивает движковый контекст (mint/owner/basisRaw в лоте нет)
+  // a /lots consumer assembles the engine context (a lot carries no mint/owner/basisRaw)
   const engineLot = { mint: SPYx, owner: OWNER, basisRaw: 100n, qtyRaw: BigInt(lot.qtyRaw), ...lot };
   const ev = {
     type: "SPLIT", mint: SPYx, effectiveDate: "2026-10-01", status: "confirmed",

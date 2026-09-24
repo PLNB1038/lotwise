@@ -12,8 +12,8 @@ const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
 
 const historyNodes = JSON.parse(readFileSync(path.join(dir, "xstocks-spyx-history-eth.json"), "utf8")).nodes;
 const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { symbol: "SPYx" }), SPYx);
-// ожидаемая численность реестра — из самого файла, чтобы расширение реестра
-// не требовало правки тестов (реестр = источник истины, число токенов не контракт API)
+// the expected registry size — from the file itself, so a registry expansion
+// does not require editing the tests (the registry = the source of truth, the token count is not an API contract)
 const TOKENS = (await loadRegistry("data/tokens.json")).length;
 
 async function withServer(fn) {
@@ -27,7 +27,7 @@ async function withServer(fn) {
   }
 }
 
-test("/health отвечает статистикой", async () => {
+test("/health answers with stats", async () => {
   await withServer(async (base) => {
     const r = await (await fetch(`${base}/health`)).json();
     assert.equal(r.ok, true);
@@ -36,7 +36,7 @@ test("/health отвечает статистикой", async () => {
   });
 });
 
-test("/tokens отдаёт реестр и фильтруется по issuer", async () => {
+test("/tokens serves the registry and filters by issuer", async () => {
   await withServer(async (base) => {
     const all = await (await fetch(`${base}/tokens`)).json();
     assert.equal(all.length, TOKENS);
@@ -46,19 +46,19 @@ test("/tokens отдаёт реестр и фильтруется по issuer", 
   });
 });
 
-test("/events по символу: 4 дивиденда SPYx", async () => {
+test("/events by symbol: the 4 SPYx dividends", async () => {
   await withServer(async (base) => {
     const list = await (await fetch(`${base}/events?symbol=SPYx`)).json();
     assert.equal(list.length, 4);
     assert.ok(list.every((e) => e.type === "MULTIPLIER_CHANGE"));
     const filtered = await fetch(`${base}/events?symbol=SPYx&type=NOPE`);
-    // ROUND13: мусорный type — честный 400 со словарём (тихий [] неотличим от «не было»)
+    // ROUND13: a garbage type — an honest 400 with a dictionary (a silent [] is indistinguishable from "there were none")
     assert.equal(filtered.status, 400);
     assert.match((await filtered.json()).error, /SPLIT/);
   });
 });
 
-test("/events без mint/symbol — понятная 400", async () => {
+test("/events without mint/symbol — a clear 400", async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/events`);
     assert.equal(res.status, 400);
@@ -67,7 +67,7 @@ test("/events без mint/symbol — понятная 400", async () => {
   });
 });
 
-test("/multiplier: до событий = 1, после всех = 1.0057…, scaledQty целочисленный", async () => {
+test("/multiplier: before the events = 1, after all = 1.0057…, scaledQty integral", async () => {
   await withServer(async (base) => {
     const before = await (await fetch(`${base}/multiplier?symbol=SPYx&date=2025-10-30`)).json();
     assert.equal(before.multiplier, "1");
@@ -77,11 +77,11 @@ test("/multiplier: до событий = 1, после всех = 1.0057…, sca
     assert.equal(after.multiplier, "1.005714560286254");
     assert.equal(after.events, 4);
     assert.equal(after.sampleScaledQty.whole, "100571456"); // raw=100000000 × 1.0057…
-    assert.equal(after.sampleScaledQty.exact, false); // пыль честно показана
+    assert.equal(after.sampleScaledQty.exact, false); // the dust honestly shown
   });
 });
 
-test("неизвестный маршрут — 404 со списком эндпоинтов", async () => {
+test("an unknown route — a 404 with the endpoint list", async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/nope`);
     assert.equal(res.status, 404);
@@ -90,11 +90,11 @@ test("неизвестный маршрут — 404 со списком эндп
   });
 });
 
-// ---- раунд-2: валидация ввода API ----
+// ---- round 2: the API input validation ----
 
-test("/multiplier: raw только цифры — hex/отрицательные/мусор = 400", async () => {
+test("/multiplier: raw digits only — hex/negatives/garbage = 400", async () => {
   await withServer(async (base) => {
-    // BigInt молча принимает "0x10" (=16) и "-5" — это тихая ложь, не удобство
+    // BigInt silently accepts "0x10" (=16) and "-5" — that is a quiet lie, not a convenience
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=0x10`)).status, 400);
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=-5`)).status, 400);
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&raw=1.5`)).status, 400);
@@ -104,7 +104,7 @@ test("/multiplier: raw только цифры — hex/отрицательны�
   });
 });
 
-test("/onchain: мусорная дата = 400, date-only в день активации pending не врёт", async () => {
+test("/onchain: a garbage date = 400, a date-only on the pending activation day does not lie", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const server = await createApiServer({
     registry, events,
@@ -120,13 +120,13 @@ test("/onchain: мусорная дата = 400, date-only в день акти�
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${base}/onchain?symbol=SPYx&date=garbage`)).status, 400);
     const r = await (await fetch(`${base}/onchain?symbol=SPYx&date=2026-06-18`)).json();
-    assert.equal(r.onChainEffective, "1.005714560286254"); // pending активен в свой день
+    assert.equal(r.onChainEffective, "1.005714560286254"); // the pending active on its day
   } finally {
     server.close();
   }
 });
 
-test("/health: journal-статистика присутствует, когда передана", async () => {
+test("/health: the journal stats present when passed", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const server = await createApiServer({ registry, events, journalStats: { replayed: 2, unavailable: 1 } });
   const { port } = server.address();
@@ -138,9 +138,9 @@ test("/health: journal-статистика присутствует, когда
   }
 });
 
-// ---- раунд-4: изоляция кривого минта и строгие даты query ----
+// ---- round 4: the isolation of a broken mint and strict query dates ----
 
-test("кривая цепочка одного минта не валит сервер: токен исключён из витрины, остальные живы", async () => {
+test("a broken chain of one mint does not kill the server: the token excluded from the vitrine, the rest alive", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const bad = registry.find((t) => t.symbol === "T-SpaceX");
   const poisoned = [
@@ -151,26 +151,26 @@ test("кривая цепочка одного минта не валит сер
       multiplierFrom: "5", multiplierTo: "6", reason: "On-chain rebase",
     },
   ];
-  // раньше createApiServer падал здесь же: TimelineError (chain discontinuity) на старте
+  // earlier createApiServer fell right here: TimelineError (chain discontinuity) at startup
   const server = await createApiServer({ registry, events: poisoned });
   const { port } = server.address();
   try {
     const base = `http://127.0.0.1:${port}`;
-    assert.equal((await fetch(`${base}/health`)).status, 200); // сервер жив
+    assert.equal((await fetch(`${base}/health`)).status, 200); // the server alive
     const excludedRes = await fetch(`${base}/events?symbol=T-SpaceX`);
-    assert.equal(excludedRes.status, 400); // раунд 6: честный отказ вместо тихого []
-    assert.match((await excludedRes.json()).error, /excluded/i); // события кривого минта не отдаются частично
+    assert.equal(excludedRes.status, 400); // round 6: an honest refusal instead of a silent []
+    assert.match((await excludedRes.json()).error, /excluded/i); // the broken mint's events are not served partially
     const good = await (await fetch(`${base}/events?symbol=SPYx`)).json();
-    assert.equal(good.length, 4); // остальные токены с данными
+    assert.equal(good.length, 4); // the other tokens with data
     const rows = await (await fetch(`${base}/summary`)).json();
-    assert.equal(rows.find((r) => r.symbol === "T-SpaceX").events, 0); // честная деградация
+    assert.equal(rows.find((r) => r.symbol === "T-SpaceX").events, 0); // an honest degradation
     assert.equal(rows.find((r) => r.symbol === "SPYx").events, 4);
   } finally {
     server.close();
   }
 });
 
-test("/onchain: дата валидируется ДО вызова ридера — мусор не греет кэш реальным RPC", async () => {
+test("/onchain: the date is validated BEFORE calling the reader — garbage does not warm the cache with a real RPC", async () => {
   const registry = await loadRegistry("data/tokens.json");
   let calls = 0;
   const server = await createApiServer({
@@ -183,25 +183,25 @@ test("/onchain: дата валидируется ДО вызова ридера
   const { port } = server.address();
   try {
     const res = await fetch(`http://127.0.0.1:${port}/onchain?symbol=SPYx&date=garbage`);
-    assert.equal(res.status, 400); // 400, а не 503
-    assert.equal(calls, 0); // ридер не вызван
+    assert.equal(res.status, 400); // a 400, not a 503
+    assert.equal(calls, 0); // the reader not called
   } finally {
     server.close();
   }
 });
 
-test("строгий формат даты в query: '2026-1-1' и время без пояса = 400 (локальная полночь врёт)", async () => {
+test("a strict date format in the query: '2026-1-1' and a time without a zone = 400 (a local midnight would lie)", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const server = await createApiServer({ registry, events });
   const { port } = server.address();
   try {
     const base = `http://127.0.0.1:${port}`;
-    // "2026-1-1" Date.parse съедает как ЛОКАЛЬНУЮ полночь; время без пояса — тоже локальное
+    // "2026-1-1" Date.parse eats as a LOCAL midnight; a time without a zone — also local
     for (const bad of ["2026-1-1", "2026-01-01T00:00", "01-01-2026", "2026-13-01"]) {
       assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&date=${bad}`)).status, 400, bad);
       assert.equal((await fetch(`${base}/onchain?symbol=SPYx&date=${bad}`)).status, 400, bad);
     }
-    // валидные формы проходят: date-only (полночь UTC) и полный RFC3339 с поясом
+    // the valid forms pass: date-only (midnight UTC) and a full RFC3339 with a zone
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&date=2026-01-01`)).status, 200);
     assert.equal((await fetch(`${base}/multiplier?symbol=SPYx&date=2026-01-01T00:00:00Z`)).status, 200);
   } finally {
@@ -209,12 +209,12 @@ test("строгий формат даты в query: '2026-1-1' и время б
   }
 });
 
-// ---- раунд-7: /accruals — движок начислений applyEvents подключён к API ----
-// Синтетика по образцу dividend-e2e: минт/владелец — валидный base58 (без 0/O/I/l),
-// в живом data/tokens.json отсутствуют; walletScanner мокается, сеть не нужна.
+// ---- round 7: /accruals — the applyEvents accrual engine connected to the API ----
+// Synthetics modeled on dividend-e2e: the mint/owner — a valid base58 (without 0/O/I/l),
+// absent from the live data/tokens.json; the walletScanner is mocked, no network needed.
 
-const A_MINT = "DivAccMint" + "1".repeat(34); // 44 символа
-const A_ADDR = "DivAccAddr" + "1".repeat(34); // 44 символа
+const A_MINT = "DivAccMint" + "1".repeat(34); // 44 chars
+const A_ADDR = "DivAccAddr" + "1".repeat(34); // 44 chars
 const A_SYMBOL = "ACRx";
 const aRegistry = [{ mint: A_MINT, symbol: A_SYMBOL, name: "Accrual Test Token", decimals: 6, issuer: "test" }];
 
@@ -228,7 +228,7 @@ const divEvent = (effectiveDate, amountPerUnitRaw) =>
     decimals: 6,
   }], A_MINT)[0];
 
-// blockTime в скане — секунды (report.mjs: new Date(blockTime * 1000)); null — tx без blockTime
+// blockTime in the scan — seconds (report.mjs: new Date(blockTime * 1000)); null — a tx without a blockTime
 const aBuy = (signature, qty, isoDate) => ({
   signature, slot: 1,
   blockTime: isoDate === null ? null : Math.floor(Date.parse(isoDate) / 1000),
@@ -238,7 +238,7 @@ const aScan = (txs) => ({
   owner: A_ADDR, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, accounts: {},
 });
 
-const NO_SCANNER = Symbol("no-scanner"); // сентинел: walletScanner в сервер НЕ передаётся вовсе
+const NO_SCANNER = Symbol("no-scanner"); // a sentinel: the walletScanner is not passed to the server at all
 async function withAccrualServer(fn, { events = [], txs = [], scanner = null } = {}) {
   const server = await createApiServer({
     registry: aRegistry,
@@ -253,8 +253,8 @@ async function withAccrualServer(fn, { events = [], txs = [], scanner = null } =
   }
 }
 
-test("/accruals: два дивиденда — по строке на событие, BigInt строками, датный гейт по каждому", async () => {
-  // покупки: L1 до обеих экс-дат, L2 между ними, L3 после обеих
+test("/accruals: two dividends — a row per event, BigInt as strings, the date gate per each", async () => {
+  // the buys: L1 before both ex-dates, L2 between them, L3 after both
   const txs = [
     aBuy("a", 1_000_000n, "2026-09-01"),
     aBuy("b", 2_000_000n, "2026-09-12"),
@@ -266,7 +266,7 @@ test("/accruals: два дивиденда — по строке на событ
     assert.equal(r.status, 200);
     const rows = await r.json();
     assert.equal(rows.length, 2);
-    // дивиденд 09-10: в базе только L1 (строго раньше); L2/L3 куплены после экс-даты
+    // the dividend of 09-10: only L1 in the base (strictly earlier); L2/L3 bought after the ex-date
     assert.deepEqual(rows[0], {
       symbol: A_SYMBOL,
       effectiveDate: "2026-09-10",
@@ -274,7 +274,7 @@ test("/accruals: два дивиденда — по строке на событ
       totalRaw: "2000000", // 2 × 1 000 000
       lotsConsidered: 1,
     });
-    // дивиденд 09-15: L1 + L2, L3 мимо
+    // the dividend of 09-15: L1 + L2, L3 missed
     assert.deepEqual(rows[1], {
       symbol: A_SYMBOL,
       effectiveDate: "2026-09-15",
@@ -285,56 +285,56 @@ test("/accruals: два дивиденда — по строке на событ
   }, { events, txs });
 });
 
-test("/accruals: лот с acquiredDate:null (tx без blockTime) исключён ДО движка — 200, а не 500", async () => {
-  // applyEvents на таком лоте бросает LotError (fail-closed, контракт в шапке
-  // report.mjs); эндпоинт обязан отфильтровать яд: начисление считается по здоровым
-  // лотам, ядовитый в базу не попадает и выдачу не роняет
+test("/accruals: a lot with acquiredDate:null (a tx without a blockTime) is excluded BEFORE the engine — a 200, not a 500", async () => {
+  // applyEvents on such a lot throws LotError (fail-closed, the contract in the header
+  // of report.mjs); the endpoint must filter the poison: the accrual is computed over the healthy
+  // lots, the poisoned one does not get into the base and does not crash the output
   const txs = [aBuy("poison", 9_000_000n, null), aBuy("ok", 1_000_000n, "2026-09-01")];
   await withAccrualServer(async (base) => {
     const r = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
     assert.equal(r.status, 200);
     const rows = await r.json();
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].totalRaw, "2000000"); // 2 × 1 000 000 — только здоровый лот
+    assert.equal(rows[0].totalRaw, "2000000"); // 2 × 1 000 000 — the healthy lot only
     assert.equal(rows[0].lotsConsidered, 1);
   }, { events: [divEvent("2026-09-10", 2)], txs });
 });
 
-test("/accruals: пустая выдача честным [] — нет дивидендных событий или нет позиции", async () => {
+test("/accruals: an empty output as an honest [] — either no dividend events or no position", async () => {
   const txs = [aBuy("a", 1_000_000n, "2026-09-01")];
   await withAccrualServer(async (base) => {
-    // позиция есть, но дивидендных событий нет (стор пуст) — «начислений не было», 200 []
+    // a position exists but no dividend events (an empty store) — "no accruals", a 200 []
     const noEvents = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
     assert.equal(noEvents.status, 200);
     assert.deepEqual(await noEvents.json(), []);
   }, { events: [], txs });
   await withAccrualServer(async (base) => {
-    // события есть, позиции нет — тоже честный [] (событие ≠ начисление)
+    // events exist, no position — also an honest [] (an event ≠ an accrual)
     const noLots = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
     assert.equal(noLots.status, 200);
     assert.deepEqual(await noLots.json(), []);
   }, { events: [divEvent("2026-09-10", 2)], txs: [] });
 });
 
-test("/accruals: конвенция ошибок как у соседей — 400 символ/адрес, 503 без сканера/падение сканера", async () => {
+test("/accruals: the error convention as the neighbors' — 400 for a symbol/address, 503 without a scanner/when the scanner falls", async () => {
   await withAccrualServer(async (base) => {
-    // неизвестный символ — как у /events и /multiplier: 400 «не трекается»
+    // an unknown symbol — like /events and /multiplier: a 400 "not tracked"
     const badSymbol = await fetch(`${base}/accruals?symbol=NOPE&address=${A_ADDR}`);
     assert.equal(badSymbol.status, 400);
     assert.match((await badSymbol.json()).error, /mint or symbol required/);
-    // адрес обязателен и валиден — те же 400, что у /lots
+    // the address is mandatory and valid — the same 400s as /lots
     assert.equal((await fetch(`${base}/accruals?symbol=${A_SYMBOL}`)).status, 400);
     const badAddr = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=abc`);
     assert.equal(badAddr.status, 400);
     assert.match((await badAddr.json()).error, /base58 Solana pubkey/);
   }, { events: [divEvent("2026-09-10", 2)] });
-  // сканер не сконфигурирован — 503, как у /lots
+  // the scanner is not configured — a 503, like /lots
   await withAccrualServer(async (base) => {
     const r = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
     assert.equal(r.status, 503);
     assert.match((await r.json()).error, /wallet scanner not configured/);
   }, { events: [divEvent("2026-09-10", 2)], scanner: NO_SCANNER });
-  // сканер падает — 503 с причиной, сервер жив
+  // the scanner falls — a 503 with a reason, the server alive
   await withAccrualServer(async (base) => {
     const r = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
     assert.equal(r.status, 503);

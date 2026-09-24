@@ -19,18 +19,18 @@ const good = {
   verified: "carried",
 };
 
-test("валидная запись проходит", () => {
+test("a valid record passes", () => {
   assert.equal(validateRegistryEntry({ ...good }), true);
 });
 
-test("битый минт / неизвестный issuer / пустой символ отклоняются", () => {
+test("a broken mint / an unknown issuer / an empty symbol are rejected", () => {
   assert.throws(() => validateRegistryEntry({ ...good, mint: "0OIl" }), RegistryError);
   assert.throws(() => validateRegistryEntry({ ...good, issuer: "solayer" }), RegistryError);
   assert.throws(() => validateRegistryEntry({ ...good, symbol: "" }), RegistryError);
   assert.throws(() => validateRegistryEntry({ ...good, decimals: 8.5 }), RegistryError);
 });
 
-test("дубликаты минтов и символов отклоняются на уровне списка", () => {
+test("duplicate mints and symbols are rejected at the list level", () => {
   const a = { ...good };
   const dupMint = { ...good, symbol: "OTHERx", mint: good.mint };
   const dupSym = { ...good, mint: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp" };
@@ -39,40 +39,40 @@ test("дубликаты минтов и символов отклоняются
   assert.deepEqual(validateRegistry([a]), [a]);
 });
 
-test("реальный data/tokens.json валиден и покрывает все эмитенты", async () => {
+test("the real data/tokens.json is valid and covers all the issuers", async () => {
   const list = await loadRegistry("data/tokens.json");
-  assert.ok(list.length >= 20, `ожидали >=20 токенов, получили ${list.length}`);
+  assert.ok(list.length >= 20, `expected >=20 tokens, got ${list.length}`);
   const byIssuer = getTokensByIssuer(list);
   for (const issuer of ["backed", "backpack", "prestocks", "tessera"]) {
-    assert.ok(byIssuer[issuer].length > 0, `нет токенов эмитента ${issuer}`);
+    assert.ok(byIssuer[issuer].length > 0, `no tokens of the issuer ${issuer}`);
   }
-  // минты и символы уникальны — уже проверено validateRegistry внутри loadRegistry
+  // the mints and the symbols are unique — already verified by validateRegistry inside loadRegistry
   assert.ok(findBySymbol(list, "TSLAx"));
   assert.ok(findBySymbol(list, "SPACEX"));
   assert.ok(findBySymbol(list, "T-OpenAI"));
   assert.equal(findBySymbol(list, "NOPE"), null);
 });
 
-test("отсутствующий файл даёт понятную ошибку", async () => {
+test("a missing file gives a clear error", async () => {
   await assert.rejects(() => loadRegistry("data/nope.json"), RegistryError);
 });
 
-test("конвенция минтов эмитентов: backed=Xs…, prestocks=Pr… (гипотеза issuerOf реестра)", async () => {
+test("the mints convention of the issuers: backed=Xs…, prestocks=Pr… (the issuerOf hypothesis of the registry)", async () => {
   const list = await loadRegistry("data/tokens.json");
   for (const t of list) {
     if (t.issuer === "backed") {
-      assert.ok(t.mint.startsWith("Xs"), `${t.symbol}: backed-минт обязан начинаться с Xs (${t.mint.slice(0, 6)}…)`);
+      assert.ok(t.mint.startsWith("Xs"), `${t.symbol}: a backed mint must start with Xs (${t.mint.slice(0, 6)}…)`);
     }
     if (t.issuer === "prestocks") {
-      assert.ok(t.mint.startsWith("Pr"), `${t.symbol}: prestocks-минт обязан начинаться с Pr (${t.mint.slice(0, 6)}…)`);
+      assert.ok(t.mint.startsWith("Pr"), `${t.symbol}: a prestocks mint must start with Pr (${t.mint.slice(0, 6)}…)`);
     }
   }
 });
 
-test("план недели 1: реестр >=30 токенов, decimals обогащены у всех (null = не довели)", async () => {
+test("the week-1 plan: the registry >=30 tokens, the decimals enriched for all (null = not finished)", async () => {
   const list = await loadRegistry("data/tokens.json");
-  assert.ok(list.length >= 30, `план недели 1 требует >=30 токенов, сейчас ${list.length}`);
+  assert.ok(list.length >= 30, `the week-1 plan requires >=30 tokens, now ${list.length}`);
   for (const t of list) {
-    assert.ok(Number.isInteger(t.decimals), `${t.symbol}: decimals=${t.decimals}, ожидаем integer после enrich`);
+    assert.ok(Number.isInteger(t.decimals), `${t.symbol}: decimals=${t.decimals}, an integer expected after enrich`);
   }
 });

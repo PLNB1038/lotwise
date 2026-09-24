@@ -1,37 +1,37 @@
-// check-issuers — регулярная сверка «реестр ↔ источники эмитентов»: ловим расхождения
-// (эмитент сменил минт / переиздал токен / убрал актив). Строго read-only: ТОЛЬКО отчёт,
-// реестр не правится.
+// check-issuers — periodic "registry ↔ issuer sources" reconciliation: we catch divergences
+// (the issuer changed the mint / re-issued the token / dropped the asset). Strictly read-only:
+// the report ONLY, the registry is never edited.
 //
-// Запуск из корня репо:
+// Run from the repo root:
 //   node scripts/check-issuers.mjs
 //   node scripts/check-issuers.mjs --json
-// Флаги:
-//   --json                только JSON-отчёт {results, summary} в stdout
-//   --registry <путь>     путь к реестру (по умолчанию data/tokens.json; нужен тестам)
-//   --throttle-ms <мс>    пауза между HTTP-запросами (по умолчанию 1500; нужен тестам)
-//   -h, --help            справка
-// Коды выхода: 0 — подтверждённых расхождений нет, 1 — есть fail, 2 — ошибка запуска/чтения.
+// Flags:
+//   --json                JSON report {results, summary} only, in stdout
+//   --registry <path>     path to the registry (default data/tokens.json; needed by tests)
+//   --throttle-ms <ms>    pause between HTTP requests (default 1500; needed by tests)
+//   -h, --help            help
+// Exit codes: 0 — no confirmed divergences, 1 — there is a fail, 2 — launch/read error.
 //
-// Что проверяется по эмитентам (источники — существующие клиенты src/issuer/*, без их правки):
-//   backed (xStocks) — multiplier-эндпоинт отвечает и знает символ: currentMultiplier присутствует
-//                      (как в fetchCurrentMultiplier, сеть Solana);
-//   prestocks        — метаданные /metadata/<symbol>.json: symbol в payload совпадает с
-//                      реестровым регистронезависимо (проверку делает сам fetchTokenMetadata);
-//   tessera          — cdn-метаданные cdn.tesseralab.co/tessera/<символ-в-нижнем>.json:
-//                      symbol в payload сверяется с реестровым регистронезависимо по
-//                      буквенно-цифровому остову (T-SpaceX vs tSpaceX — сверку делает
-//                      сам fetchTokenMetadata из src/issuer/tessera.mjs);
-//   backpack         — публичного API нет: статус skipped/no-source, клиент НЕ выдумывается.
+// What is checked per issuer (sources — the existing clients in src/issuer/*, without editing them):
+//   backed (xStocks) — the multiplier endpoint answers and knows the symbol: currentMultiplier is present
+//                      (same as in fetchCurrentMultiplier, Solana network);
+//   prestocks        — /metadata/<symbol>.json metadata: symbol in the payload matches the
+//                      registry entry case-insensitively (the check is done by fetchTokenMetadata itself);
+//   tessera          — cdn metadata cdn.tesseralab.co/tessera/<lowercased-symbol>.json:
+//                      symbol in the payload is compared with the registry entry case-insensitively over
+//                      the alphanumeric skeleton (T-SpaceX vs tSpaceX — the check is done by
+//                      fetchTokenMetadata itself from src/issuer/tessera.mjs);
+//   backpack         — no public API: status skipped/no-source, the client is NOT invented.
 //
-// Осознанные решения:
-// - Сетевой отказ — НЕ расхождение с эмитентом: статус skipped, а не fail. fail = только
-//   подтверждённое расхождение (404 — актив убрали, чужой symbol — переиздали/сменили,
-//   битый payload — источник сломан). Полный обрыв сети даёт exit 0 при нулевом ok:
-//   аудит честно говорит «проверить не смогли», а не «всё разошлось».
-// - Запросы идут последовательно с паузой throttleMs (вежливость к публичным API);
-//   skipped-токены (backpack) запросов не делают и паузу не тратят.
-// - Всё через инжектируемый fetcher (по умолчанию глобальный fetch) — тесты без сети.
-// - Строка отчёта несёт mint: реестр стоит на минтах, символ — не уникальный ключ.
+// Deliberate decisions:
+// - A network failure is NOT a divergence from the issuer: status skipped, not fail. fail = a
+//   confirmed divergence only (404 — the asset was removed, a foreign symbol — re-issued/changed,
+//   a broken payload — the source is broken). A total network outage yields exit 0 with zero ok:
+//   the audit honestly says "could not check", not "everything diverged".
+// - Requests go sequentially with a throttleMs pause (politeness toward public APIs);
+//   skipped tokens (backpack) make no requests and spend no pause.
+// - Everything through an injectable fetcher (default the global fetch) — tests run without network.
+// - The report row carries mint: the registry is keyed on mints, the symbol is not a unique key.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -49,17 +49,17 @@ const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 class UsageError extends Error {}
 
-const USAGE = `использование: node scripts/check-issuers.mjs [флаги]
-  --json                только JSON-отчёт {results, summary} в stdout
-  --registry <путь>     путь к реестру (по умолчанию data/tokens.json)
-  --throttle-ms <мс>    пауза между HTTP-запросами (по умолчанию 1500)
-  -h, --help            эта справка
-Коды выхода: 0 — подтверждённых расхождений нет, 1 — есть fail, 2 — ошибка запуска/чтения.`;
+const USAGE = `usage: node scripts/check-issuers.mjs [flags]
+  --json                JSON report {results, summary} only, in stdout
+  --registry <path>     path to the registry (default data/tokens.json)
+  --throttle-ms <ms>    pause between HTTP requests (default 1500)
+  -h, --help            this help
+Exit codes: 0 — no confirmed divergences, 1 — there is a fail, 2 — launch/read error.`;
 
-// GET+JSON удалён: tessera теперь проверяется клиентом src/issuer/tessera.mjs,
-// у всех трёх источников — свои клиенты с одинаковыми классами ошибок.
+// The GET+JSON stub is gone: tessera is now checked by the client src/issuer/tessera.mjs,
+// all three sources have their own clients with the same error classes.
 
-// URL-строители зеркалят клиентов — для отчёта (какой эндпоинт проверялся).
+// URL builders mirror the clients — for the report (which endpoint was checked).
 const xstocksMultiplierUrl = (symbol, network) =>
   `${XSTOCKS_BASE}/${encodeURIComponent(symbol)}/multiplier?network=${encodeURIComponent(network)}`;
 const prestocksMetadataUrl = (symbol) =>
@@ -68,8 +68,8 @@ const tesseraMetadataUrl = (symbol) =>
   `${TESSERA_BASE}/${encodeURIComponent(symbol.toLowerCase())}.json`;
 
 /**
- * Проверка одного токена реестра против источника его эмитента.
- * Сетевой отказ -> skipped (проверить не смогли), остальное -> fail (расхождение).
+ * Check one registry token against its issuer's source.
+ * A network failure -> skipped (could not check), everything else -> fail (divergence).
  * @returns {Promise<{mint: string, symbol: string, issuer: string, status: "ok"|"skipped"|"fail", reason: string|null, url: string|null}>}
  */
 export async function checkToken(token, { fetcher = fetch, network = "Solana" } = {}) {
@@ -79,36 +79,36 @@ export async function checkToken(token, { fetcher = fetch, network = "Solana" } 
       case "backed": {
         const url = xstocksMultiplierUrl(token.symbol, network);
         const m = await fetchCurrentMultiplier(token.symbol, network, { fetcher });
-        // «Источник знает символ» = currentMultiplier присутствует и число.
-        if (m.currentMultiplier === null) throw new IssuerError(`currentMultiplier отсутствует для ${token.symbol}`);
+        // "The source knows the symbol" = currentMultiplier present and numeric.
+        if (m.currentMultiplier === null) throw new IssuerError(`currentMultiplier missing for ${token.symbol}`);
         return { ...base, status: "ok", reason: null, url };
       }
       case "prestocks": {
         const url = prestocksMetadataUrl(token.symbol);
-        await fetchPrestocksMetadata(token.symbol, { fetcher }); // сверку symbol делает клиент
+        await fetchPrestocksMetadata(token.symbol, { fetcher }); // the client does the symbol check
         return { ...base, status: "ok", reason: null, url };
       }
       case "tessera": {
         const url = tesseraMetadataUrl(token.symbol);
-        await fetchTesseraMetadata(token.symbol, { fetcher }); // сверку symbol делает клиент
+        await fetchTesseraMetadata(token.symbol, { fetcher }); // the client does the symbol check
         return { ...base, status: "ok", reason: null, url };
       }
       case "backpack":
-        // Публичного API нет (в реестре sourceUrl «stockbasis-verified») — честный пропуск.
+        // No public API (registry sourceUrl says "stockbasis-verified") — an honest skip.
         return { ...base, status: "skipped", reason: "no-source", url: null };
       default:
-        throw new IssuerError(`неизвестный эмитент: ${JSON.stringify(token.issuer)} — нет источника для сверки`);
+        throw new IssuerError(`unknown issuer: ${JSON.stringify(token.issuer)} — no source to reconcile against`);
     }
   } catch (err) {
-    // Конвенция клиентов: сеть приходит строкой «network: ...» — это skipped.
+    // Client convention: network arrives as a "network: ..." string — that is skipped.
     const status = /^network:/.test(String(err?.message)) ? "skipped" : "fail";
     return { ...base, status, reason: String(err?.message ?? err), url: null };
   }
 }
 
 /**
- * Последовательная сверка всего реестра с throttle между РЕАЛЬНЫМИ запросами
- * (skipped-токены запросов не делают и паузу не тратят).
+ * Sequential reconciliation of the whole registry with a throttle between REAL requests
+ * (skipped tokens make no requests and spend no pause).
  * @param {Array<{mint: string, symbol: string, issuer: string}>} tokens
  */
 export async function checkRegistry(
@@ -148,37 +148,37 @@ export function parseArgs(argv) {
     else if (arg === "-h" || arg === "--help") opts.help = true;
     else if (arg === "--registry") {
       const value = argv[++i];
-      if (value === undefined) throw new UsageError("--registry требует путь");
+      if (value === undefined) throw new UsageError("--registry requires a path");
       opts.registry = value;
     } else if (arg === "--throttle-ms") {
       const value = argv[++i];
-      if (value === undefined) throw new UsageError("--throttle-ms требует число миллисекунд");
+      if (value === undefined) throw new UsageError("--throttle-ms requires a number of milliseconds");
       const n = Number(value);
-      if (!Number.isInteger(n) || n < 0) throw new UsageError(`--throttle-ms: ждём целое >= 0, получено «${value}»`);
+      if (!Number.isInteger(n) || n < 0) throw new UsageError(`--throttle-ms: expected an integer >= 0, got "${value}"`);
       opts.throttleMs = n;
     } else {
-      throw new UsageError(`неизвестный флаг: ${arg}`);
+      throw new UsageError(`unknown flag: ${arg}`);
     }
   }
   return opts;
 }
 
 function printHuman(registryPath, results, summary) {
-  console.log("[check-issuers] сверка реестра с источниками эмитентов (read-only)");
-  console.log(`[check-issuers] реестр: ${path.resolve(registryPath)}; токенов: ${results.length}`);
+  console.log("[check-issuers] reconciling the registry against issuer sources (read-only)");
+  console.log(`[check-issuers] registry: ${path.resolve(registryPath)}; tokens: ${results.length}`);
   for (const r of results) {
     const mark = r.status === "ok" ? "ok     " : r.status === "skipped" ? "skipped" : "FAIL   ";
     const detail =
-      r.status === "ok" ? "источник отвечает, символ известен" : r.reason;
+      r.status === "ok" ? "source responds, symbol is known" : r.reason;
     console.log(`  [${mark}] ${r.symbol} (${r.issuer}): ${detail}`);
   }
   const verdict = summary.clean
-    ? "подтверждённых расхождений нет"
-    : "есть расхождения — сверить вручную!";
-  console.log(`[check-issuers] ИТОГ: ok=${summary.ok}, skipped=${summary.skipped}, fail=${summary.fail} — ${verdict}`);
+    ? "no confirmed divergences"
+    : "there are divergences — reconcile manually!";
+  console.log(`[check-issuers] TOTAL: ok=${summary.ok}, skipped=${summary.skipped}, fail=${summary.fail} — ${verdict}`);
 }
 
-// Возвращает код выхода (0/1/2), ничего не пишет в файлы.
+// Returns the exit code (0/1/2), writes nothing to files.
 export async function main(argv = []) {
   let opts;
   try {
@@ -196,11 +196,11 @@ export async function main(argv = []) {
   try {
     tokens = JSON.parse(readFileSync(opts.registry, "utf8"));
   } catch (err) {
-    console.error(`[check-issuers] реестр ${opts.registry} не читается: ${err.message}`);
+    console.error(`[check-issuers] registry ${opts.registry} is unreadable: ${err.message}`);
     return 2;
   }
   if (!Array.isArray(tokens)) {
-    console.error(`[check-issuers] реестр ${opts.registry}: ожидался массив токенов`);
+    console.error(`[check-issuers] registry ${opts.registry}: expected an array of tokens`);
     return 2;
   }
   const results = await checkRegistry(tokens, { fetcher: fetch, sleep: defaultSleep, throttleMs: opts.throttleMs });
@@ -210,9 +210,9 @@ export async function main(argv = []) {
   return summary.clean ? 0 : 1;
 }
 
-// CLI-режим только при прямом запуске (тесты импортируют функции без побочек).
+// CLI mode only when run directly (tests import the functions without side effects).
 const invokedAs = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 const isSelf =
   import.meta.url === invokedAs ||
   (process.platform === "win32" && import.meta.url.toLowerCase() === invokedAs.toLowerCase());
-if (isSelf) process.exitCode = await main(process.argv.slice(2)); // exitCode, не exit: см. волна D2 (undici-краш)
+if (isSelf) process.exitCode = await main(process.argv.slice(2)); // exitCode, not exit: see wave D2 (undici crash)

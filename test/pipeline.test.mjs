@@ -1,6 +1,6 @@
-// Сквозной smoke: два «эндпоинта» (два RpcClient с моками) сканируют минт из
-// реестра, ingest собирает дельты, reconcile их сверяет, lots применяет событие.
-// Доказывает, что модули стыкуются в один пайплайн без клея-времянок.
+// An end-to-end smoke: two "endpoints" (two RpcClients with mocks) scan a mint from
+// the registry, ingest assembles the deltas, reconcile verifies them, lots applies an event.
+// It proves that the modules join into one pipeline without ad-hoc glue.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { loadRegistry, findBySymbol } from "../src/registry/registry.mjs";
@@ -12,10 +12,10 @@ import { applyEvents } from "../src/lots/lots.mjs";
 
 const OWNER = "Owner11111111111111111111111111111111111111111";
 
-// Мок-эндпоинт: минт подхватывает из первого getSignaturesForAddress (реестровый),
-// getSignaturesForAddress → 2 сигнатуры; getTransaction по каждой.
+// A mock endpoint: it picks up the mint from the first getSignaturesForAddress (the registry one),
+// getSignaturesForAddress → 2 signatures; getTransaction per each.
 function endpointMock({ mutateTx = false, dropSignature = false } = {}) {
-  let knownMint = null; // станет известен из первого запроса стрима
+  let knownMint = null; // will become known from the first request of the stream
   const delta = (owner, from, to) => ({
     err: null,
     preTokenBalances: [{ owner, mint: knownMint, uiTokenAmount: { amount: from } }],
@@ -35,7 +35,7 @@ function endpointMock({ mutateTx = false, dropSignature = false } = {}) {
     if (method === "getTransaction") {
       let tx = mkTx[params[0]] ? mkTx[params[0]]() : null;
       if (tx && mutateTx && params[0] === "sig_2") {
-        tx.meta.postTokenBalances[0].uiTokenAmount.amount = "2999999"; // «второй эндпоинт видел другое»
+        tx.meta.postTokenBalances[0].uiTokenAmount.amount = "2999999"; // "the second endpoint saw something different"
       }
       return { ok: true, status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: tx }) };
     }
@@ -62,7 +62,7 @@ async function scanEndpoint(client, mint) {
   return { source: "x", entries };
 }
 
-test("согласованные эндпоинты → ok, verified-дельты попадают в lots", async () => {
+test("consistent endpoints → ok, the verified deltas get into lots", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const token = findBySymbol(registry, "TSLAx");
 
@@ -73,7 +73,7 @@ test("согласованные эндпоинты → ok, verified-дельт�
   const verified = mergeVerified(r);
   assert.equal(verified.length, 2);
 
-  // дельты → лоты (упрощённо: первая дельта купила, вторая докупила)
+  // the deltas → lots (simplified: the first delta bought, the second bought more)
   const lot = { id: "L1", mint: token.mint, owner: OWNER, qtyRaw: 1_000_000n + 1_000_000n, acquiredDate: "2026-09-18", basisRaw: 500_000_000n };
   const { lots } = applyEvents([lot], [{
     type: "SPLIT", mint: token.mint, effectiveDate: "2026-10-01", status: "confirmed",
@@ -82,7 +82,7 @@ test("согласованные эндпоинты → ok, verified-дельт�
   assert.equal(lots[0].qtyRaw, 6_000_000n);
 });
 
-test("эндпоинт B видел другую дельту → конфликт → unverified, запись выброшена", async () => {
+test("the endpoint B saw a different delta → a conflict → unverified, the record thrown out", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const token = findBySymbol(registry, "TSLAx");
 
@@ -91,10 +91,10 @@ test("эндпоинт B видел другую дельту → конфлик
   const r = reconcileSnapshots(a, b);
   assert.equal(verdict(r), "unverified");
   assert.equal(r.stats.conflicts, 1);
-  assert.equal(mergeVerified(r).length, 1); // sig_1 дважды подтверждён — остаётся
+  assert.equal(mergeVerified(r).length, 1); // sig_1 confirmed twice — it stays
 });
 
-test("эндпоинт B не досчитал транзакцию → partial, недосчёт честен", async () => {
+test("the endpoint B did not finish reading a transaction → partial, the undercount is honest", async () => {
   const registry = await loadRegistry("data/tokens.json");
   const token = findBySymbol(registry, "TSLAx");
 

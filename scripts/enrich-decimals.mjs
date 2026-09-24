@@ -1,26 +1,26 @@
-// Разовое обогащение data/tokens.json: decimals из Jupiter Price API v3 (батчем).
-// Запуск из корня: node scripts/enrich-decimals.mjs [--registry data/tokens.json] [--api https://lite-api.jup.ag]
-// Логика в src/registry/enrich.mjs (тестируемость, раунд 6): запись атомарна
-// (atomicWriteJson), а при filled=0 файл не перезаписывается вовсе — раньше каждая
-// прогулка скрипта повторяла окно обрыва записи без причины.
-// Волна E (E3-3): отказ через process.exitCode — process.exit над живым undici-сокетом
-// крашил процесс на win (0xC0000409), ломая контракт кодов выхода для cron-обёрток
-// (остаток D2-фикса, который перевёл на exitCode только два соседних CLI).
+// One-off enrichment of data/tokens.json: decimals from the Jupiter Price API v3 (batched).
+// Run from the repo root: node scripts/enrich-decimals.mjs [--registry data/tokens.json] [--api https://lite-api.jup.ag]
+// The logic lives in src/registry/enrich.mjs (testability, round 6): the write is atomic
+// (atomicWriteJson), and at filled=0 the file is not rewritten at all — previously every
+// script run repeated the interrupted-write window for no reason.
+// Wave E (E3-3): failure via process.exitCode — process.exit over a live undici socket
+// crashed the process on win (0xC0000409), breaking the exit-code contract for cron wrappers
+// (the remainder of the D2 fix, which moved only the two neighboring CLIs to exitCode).
 import { readFileSync } from "node:fs";
 import { enrichDecimalsFile } from "../src/registry/enrich.mjs";
 
 const argv = process.argv.slice(2);
-// Грамматика = serve (ROUND7 №10): «--flag value» И «--flag=value»; пустое значение и
-// флаг без значения — ОТКАЗ ДО любого I/O (волна F1 [P2]: «?? дефолт» съедал null
-// ошибки, скрипт печатал отказ, а потом всё равно шёл в сеть и переписывал реестр).
-// Возвращает: string | undefined (флага нет) | null (флаг битый — вызывающий обязан прерваться).
+// Grammar = serve (ROUND7 #10): both "--flag value" AND "--flag=value"; an empty value and
+// a flag without a value — REFUSAL BEFORE any I/O (wave F1 [P2]: the "?? default" ate null
+// errors, the script printed a refusal, and then still went to the network and rewrote the registry).
+// Returns: string | undefined (no flag) | null (broken flag — the caller must abort).
 const readFlag = (name) => {
   const eq = `--${name}=`;
   const eqIdx = argv.findIndex((a) => a.startsWith(eq));
   if (eqIdx !== -1) {
     const value = argv[eqIdx].slice(eq.length);
-    // Волна H4 [P3]: «--api=--evil» раньше уезжал в runtime (сырой ENOENT/undici-стек,
-    // exit 1) вместо usage-отказа exit 2 — паритет с space-формой
+    // Wave H4 [P3]: "--api=--evil" used to escape into the runtime (a raw ENOENT/undici stack,
+    // exit 1) instead of a usage refusal with exit 2 — parity with the space form
     if (value === "" || value.startsWith("--")) {
       console.error(`--${name} requires a non-empty value`);
       return null;
@@ -55,13 +55,13 @@ if (!badFlag) {
   } else {
     const prices = await res.json();
 
-    // счётчик пустых decimals — ДО обогащения (волна B): после мутации список уже
-    // полон и каждый повторный прогон врал «0/31»
+    // counter of missing decimals — BEFORE enrichment (wave B): after the mutation the list is
+    // already full and every repeated run lied "0/31"
     const missingBefore = list.filter((t) => t.decimals === null || t.decimals === undefined).length;
     const { filled, unknown, skipped, written } = enrichDecimalsFile(REGISTRY, prices);
-    if (!written) console.log("filled=0 — data/tokens.json не перезаписан (нечего писать)");
-    console.log(`decimals заполнено: ${filled}/${missingBefore} без decimals на входе`);
-    console.log(unknown.length ? `НЕ найдены в Jupiter: ${unknown.join(", ")}` : "все минты известны Jupiter");
-    if (skipped?.length) console.warn(`ПРОПУЩЕНЫ (мусорные decimals от Jupiter): ${skipped.map((x) => `${x.mint} (${x.reason})`).join(", ")}`);
+    if (!written) console.log("filled=0 — data/tokens.json not rewritten (nothing to write)");
+    console.log(`decimals filled: ${filled}/${missingBefore} without decimals on input`);
+    console.log(unknown.length ? `NOT found in Jupiter: ${unknown.join(", ")}` : "all mints known to Jupiter");
+    if (skipped?.length) console.warn(`SKIPPED (garbage decimals from Jupiter): ${skipped.map((x) => `${x.mint} (${x.reason})`).join(", ")}`);
   }
 }
