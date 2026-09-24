@@ -409,8 +409,11 @@ test("логотип: знак Lotwise в шапке — самодостато�
   assert.ok(!/\b(src|href)\s*=/i.test(svg), "никаких src/href — знак ничем не ссылается наружу");
   assert.ok(!/<script/i.test(svg) && !/javascript:/i.test(svg), "без скриптов");
   assert.ok(!/url\(/i.test(svg), "без url() — никаких внешних подгрузок");
-  assert.equal((svg.match(/<rect\b/g) || []).length, 4, "стек из четырёх лотов-полос на месте");
-  assert.ok(svg.includes("accent"), "пересчитанный лот помечен акцентным классом");
+  // Раунд 18: знак переведён на монограмму «L» (та же геометрия, что фавиконка и
+  // README): ствол-ось + акцентная нога + точка-событие; 2 rect вместо стека полос
+  assert.equal((svg.match(/<rect\b/g) || []).length, 2, "монограмма L: ствол и акцентная нога");
+  assert.ok(/<circle/.test(svg), "точка-событие на стволе");
+  assert.ok(svg.includes("accent"), "нога-лот помечена акцентным классом");
   assert.ok(html.indexOf("brand-mark") < html.indexOf("<h1"), "знак стоит в шапке, перед заголовком");
 });
 

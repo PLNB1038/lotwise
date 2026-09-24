@@ -173,7 +173,7 @@ test("vitrine: отчёт кошелька показывает время ге�
     now: "2026-09-23T20:31:00.000Z",
     counts: { signatures: 5, fetched: 5, skipped: 0 }, truncated: false, complete: true, tokens: [],
   });
-  assert.ok(els.get("wallet-out").innerHTML.includes("2026-09-23T20:31"), "время генерации отчёта видно (кэш ≤10мин отличим от свежего скана)");
+  assert.ok(els.get("wallet-out").innerHTML.includes("2026-09-23 20:31"), "время генерации отчёта видно (кэш ≤10мин отличим от свежего скана; раунд 18: дата без полной ISO-каши)");
 });
 
 // ---- D1-5 [P3]: бут-гварды ----

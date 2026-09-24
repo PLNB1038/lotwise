@@ -76,19 +76,29 @@ export function renderPage() {
   footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
   footer code { font-family: var(--mono); color: var(--accent); }
   .err { color: var(--warn); font-size: 13px; }
+  /* Волна I1 (мобайл): адрес не вылезает за экран, колонка множителя не режется
+     краем — на узких экранах она сворачивается (значение есть в карточке токена),
+     длинные числа переносятся, а не рвут сетку */
+  @media (max-width: 640px) {
+    main { padding: 16px 10px 48px; }
+    .row { flex-direction: column; align-items: stretch; gap: 6px; }
+    .row label { width: 100%; }
+    #addr-in { width: 100%; }
+    .kv { grid-template-columns: 1fr; }
+    #token-table th:nth-child(5), #token-table td:nth-child(5) { display: none; }
+    th, td { word-break: break-word; }
+  }
 </style>
 </head>
 <body>
 <main>
   <header class="brand">
     <svg class="brand-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true" focusable="false">
-      <!-- знак Lotwise: стек налоговых лотов на оси событий; акцентный лот — пересчитанный корпсобытием -->
-      <line x1="5.25" y1="4.75" x2="5.25" y2="27.5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
-      <circle cx="5.25" cy="13" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/>
-      <rect x="10" y="5" width="17" height="3.5" rx="1.75" fill="currentColor"/>
-      <rect x="10" y="11.25" width="20" height="3.5" rx="1.75" fill="#58a6ff" class="accent"/>
-      <rect x="10" y="17.5" width="13" height="3.5" rx="1.75" fill="currentColor"/>
-      <rect x="10" y="23.75" width="10" height="3.5" rx="1.75" fill="currentColor"/>
+      <!-- знак Lotwise (монограмма L, как фавиконка и README): ось-ствол событий,
+           акцентная нога — adjusted lot, точка на стволе — само событие -->
+      <rect x="4.5" y="4" width="4" height="24" rx="2" fill="currentColor"/>
+      <rect x="4.5" y="24.5" width="21" height="3.5" rx="1.75" fill="#58a6ff" class="accent"/>
+      <circle cx="6.5" cy="13" r="2.3" fill="#58a6ff" class="accent"/>
     </svg>
     <h1><span>Lotwise</span> — corporate actions engine for tokenized equities</h1>
   </header>
@@ -110,19 +120,19 @@ export function renderPage() {
     <div class="card">
       <p>The event schema includes <code>DIVIDEND_ACCRUAL</code>: an issuer-declared amount per
         unit (exact raw integer and decimals), credited by the FIFO lot engine to every holder on
-        the ex-date. Until Sep 22, 2026 the registry held only growth and pre-IPO tokens, so this
-        path had no real material. It now covers classic dividend payers from issuer Backed
-        (xStocks) — JPMx (JPMorgan Chase), KOx (Coca-Cola), Vx (Visa), XOMx (Exxon Mobil) — plus
-        QQQx (Nasdaq-100 ETF), the ETF sibling of the tracked SPYx. Mints were taken from the
-        issuer API and verified on mainnet (Token-2022, 8 decimals). As of that expansion none of
-        them has a normalized corporate action yet — their rows show multiplier 1 until the first
-        dividend or split reaches the pipeline.</p>
+        the ex-date. Classic dividend payers from issuer Backed (xStocks) — JPMx (JPMorgan Chase),
+        KOx (Coca-Cola), Vx (Visa), XOMx (Exxon Mobil), plus QQQx (Nasdaq-100 ETF), the ETF sibling
+        of the tracked SPYx — joined the registry on Sep 22, 2026 (mints from the issuer API,
+        verified on mainnet, Token-2022, 8 decimals). Their dividend history already flows through
+        the pipeline as dated multiplier events — each accrual bumps the supply multiplier, every
+        row carries its source link; per-unit amounts become accrual events the moment the issuer
+        publishes declarations.</p>
     </div>
   </section>
 
   <section>
     <h2>Tracked tokens</h2>
-    <table>
+    <table id="token-table">
       <thead><tr><th>Symbol</th><th>Name</th><th>Issuer</th><th class="num">Events</th><th class="num">Multiplier today</th></tr></thead>
       <tbody id="tokens"></tbody>
     </table>
@@ -137,7 +147,7 @@ export function renderPage() {
       </div>
       <p class="note">Scans the wallet history on-chain and rebuilds tax lots for tracked tokens.
         Raw balances are shown as stored on-chain; the adjusted view applies the multiplier timeline.
-        A first scan of an active wallet can take a minute on public RPC.</p>
+        A first scan of an active wallet can take several minutes on public RPC.</p>
       <div id="wallet-out"></div>
     </div>
   </section>
@@ -245,7 +255,7 @@ function renderTokens(list) {
   });
 }
 
-function select(symbol) {
+function select(symbol, scroll) {
   var t = null;
   for (var i = 0; i < state.tokens.length; i++) {
     if (state.tokens[i].symbol === symbol) { t = state.tokens[i]; break; }
@@ -265,7 +275,9 @@ function select(symbol) {
   loadEvents(t);
   loadPlanes(t);
   calc();
-  document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
+  // Волна I1 (UX): автопрыжок при загрузке страницы вышибал пользователя с первого
+  // экрана (заголовок + адресное поле) к таблице токенов. Скролл — только на клик.
+  if (scroll !== false) document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
 }
 
 function eventsError(msg) {
@@ -495,6 +507,20 @@ function fmtUi(rawStr, decimals) {
   return sign + s.slice(0, -decimals) + '.' + s.slice(-decimals);
 }
 
+// Волна I1 (UX): «fetch failed» без объяснения пугает. Человеческая фраза для
+// сетевого класса, оригинал — в тултипе (честность не теряем, доступность даём).
+function humanScanError(body, rawMsg) {
+  var m = String(rawMsg || (body && body.error) || '');
+  var kind = body && body.kind;
+  if (kind === 'rate-limit' || /HTTP 429|rate limit/i.test(m)) {
+    return 'Rate limit reached (public RPC) — wait a moment and scan again.';
+  }
+  if (kind === 'network' || /fetch failed|failed to fetch|network/i.test(m)) {
+    return 'Solana RPC is unreachable right now — this demo runs on public infrastructure. Try again in a minute.';
+  }
+  return m || 'scan failed';
+}
+
 function scanWalletUi() {
   var addr = (el('addr-in').value || '').trim();
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) {
@@ -502,24 +528,44 @@ function scanWalletUi() {
     return;
   }
   var myAddr = addr; // захват адреса: ответ чужого скана рендерить нельзя
-  el('wallet-out').innerHTML = '<p class="note">Scanning wallet on-chain — first scan of an active wallet can take up to a minute.</p>';
+  // Волна I1: кнопка гаснет на время скана + честный счётчик времени — раньше
+  // «Scanning…» висел без прогресса минуты, и кнопку можно было жать повторно.
+  var btn = document.getElementById('scan-btn');
+  btn.disabled = true;
+  var started = Date.now();
+  el('wallet-out').innerHTML =
+    '<p class="note">Scanning wallet on-chain — an active wallet can take several minutes on public RPC. <span id="scan-elapsed">0s</span></p>';
+  var tick = (typeof setInterval === 'function')
+    ? setInterval(function () {
+        var s = document.getElementById('scan-elapsed');
+        if (s) s.textContent = Math.round((Date.now() - started) / 1000) + 's';
+      }, 1000)
+    : 0;
+  var finish = function () {
+    if (tick) clearInterval(tick);
+    btn.disabled = false;
+  };
   fetch('/lots?address=' + encodeURIComponent(addr))
     .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
     .then(function (res) {
       // гонка Scan/Scan: пользователь поправил адрес, пока шёл долгий скан — дозревший
       // ответ старого адреса не перезаписывает витрину (тот же класс гвардов,
       // что у state.selected для токенов)
-      if ((el('addr-in').value || '').trim() !== myAddr) return;
+      if ((el('addr-in').value || '').trim() !== myAddr) { finish(); return; }
       if (!res.ok) {
-        el('wallet-out').innerHTML = '<p class="err">' + esc(res.body.error || 'scan failed') + '</p>';
+        finish();
+        var orig = (res.body && res.body.error) || 'scan failed';
+        el('wallet-out').innerHTML = '<p class="err" title="' + esc(orig) + '">' + esc(humanScanError(res.body)) + '</p>';
         return;
       }
+      finish();
       renderWallet(res.body);
     })
     .catch(function (e) {
       // та же гонка для ошибок: ругаться на упавший запрос чужого адреса — ложь
-      if ((el('addr-in').value || '').trim() !== myAddr) return;
-      el('wallet-out').innerHTML = '<p class="err">' + esc(e.message) + '</p>';
+      if ((el('addr-in').value || '').trim() !== myAddr) { finish(); return; }
+      finish();
+      el('wallet-out').innerHTML = '<p class="err" title="' + esc(e.message) + '">' + esc(humanScanError(null, e.message)) + '</p>';
     });
 }
 
@@ -528,9 +574,11 @@ function renderWallet(rep) {
   // исключённые токены в отчёте: их множитель — дефолт, adjusted не вычислялся
   var excludedCount = 0;
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
+  // Волна I1: полная ISO-метка времени читается тяжело — дата+минуты UTC
+  var when = String(rep.now || '—').replace('T', ' ').slice(0, 16) + (rep.now ? ' UTC' : '');
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
-    '<dt>report generated at</dt><dd>' + esc(rep.now || '—') + '</dd>' +
+    '<dt>report generated at</dt><dd>' + esc(when) + '</dd>' +
     '<dt>signatures scanned</dt><dd>' + esc(c.signatures) + ' (' + esc(c.fetched) + ' fetched, ' + esc(c.skipped) + ' skipped)</dd>' +
     '<dt>scan window</dt><dd>' + (rep.truncated ? 'truncated at cap — older history not scanned' : 'full history') + '</dd>' +
     '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' +
@@ -543,14 +591,18 @@ function renderWallet(rep) {
         // сообщил adjustedAvailable:false (excluded-минт). Сырой fallback-баланс нельзя
         // показывать как «adjusted (exact)» — это та же тихая ложь «adjusted = raw».
         var noAdjusted = t.excluded || t.adjustedAvailable === false;
+        // Волна I1: простыня гэпов сводится к одной строке, полный список — в тултип
+        var gapsFull = t.gaps.map(function (g) {
+          return g.missingQtyRaw + ' base units predate the scan window' + (g.date ? ' (by ' + String(g.date).replace('T', ' ').slice(0, 16) + ' UTC)' : '');
+        }).join('; ');
         var gaps = t.gaps.length
-          ? '<dt class="err">scan gap</dt><dd class="err">' + t.gaps.map(function (g) {
-              return esc(g.missingQtyRaw) + ' base units predate the scan window' + (g.date ? ' (by ' + esc(g.date) + ')' : '');
-            }).join('; ') + '</dd>'
+          ? '<dt class="err">scan gap</dt><dd class="err" title="' + esc(gapsFull) + '">' + esc(t.gaps[0].missingQtyRaw) +
+              ' base units predate the scan window' + (t.gaps.length > 1 ? ' +' + (t.gaps.length - 1) + ' more (hover)' : '') + '</dd>'
           : '';
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
-          '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd' +
-            ((Number(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance) < 0) ? ' class="err"' : '') + '>' +
+          '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd>' +
+            // Волна I1: отрицательный дельта-окна — НЕ ошибка, а артефакт окна скана:
+            // красным он читался как «у тебя проблемы»; объяснение — в самой метке
             esc(fmtUi(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance, t.decimals)) + ' ' + esc(t.symbol) +
             ' <span class="note">(' + esc(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance) + ' base units)</span></dd>' +
           '<dt>scan vs live chain</dt><dd>' + (t.reconciles
@@ -588,7 +640,7 @@ fetch('/health').then(function (r) {
     state.tokens = list;
     renderStats(h, list);
     renderTokens(list);
-    if (list.length) select(list[0].symbol); // самый событийный токен, без хардкода
+    if (list.length) select(list[0].symbol, false); // самый событийный токен, без хардкода и БЕЗ автопрыжка (волна I1)
   });
 }).catch(function (e) {
   el('stats').innerHTML = '<div class="stat"><b class="err">API unavailable</b><i>' + esc(e.message) + ' — retry in a moment</i></div>';
