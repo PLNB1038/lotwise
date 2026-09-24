@@ -397,7 +397,7 @@ test("50 одновременных запросов по смешанным м�
         ["/summary", 200],
         ["/tokens?issuer=tessera", 200],
         [`/events?symbol=SPYx`, 200],
-        [`/events?symbol=SPYx&type=NOPE`, 200],
+        [`/events?symbol=SPYx&type=NOPE`, 400], // ROUND13: мусорный type — честный отказ, не тихий []
         [`/events`, 400],
         [`/multiplier?symbol=SPYx&raw=100000000&date=2026-07-01`, 200],
         [`/multiplier?symbol=SPYx&raw=abc`, 400],

@@ -22,7 +22,10 @@ export class RpcError extends Error {
 // URL (с кредами userinfo) в TypeError, провайдер может эхнуть ключ в тексте
 // JSON-RPC ошибки — раньше всё это доезжало до 503-тел ЛЮБОМУ посетителю и в
 // boot-лог, при том что баннер маскирует origin. Единая точка: конструктор ошибки.
-const URL_IN_MESSAGE = /https?:\/\/\S+/g;
+// ROUND13: флаг i — undici эхоит URL вербатимом, схема в верхнем регистре
+// («HTTP://user:secret@…» — опечатка/регистронезависимый ввод) промахивалась мимо
+// редакции и уезжала в 503-тело посетителю.
+const URL_IN_MESSAGE = /https?:\/\/\S+/gi;
 const redactUrls = (msg) => String(msg).replace(URL_IN_MESSAGE, "[url]");
 
 const TRANSIENT_RPC_CODES = new Set([-32005]);

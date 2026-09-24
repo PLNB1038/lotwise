@@ -42,7 +42,7 @@ GET only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for any
 | Endpoint | Purpose |
 |---|---|
 | `/summary` | All tracked tokens with event counts and current multipliers |
-| `/tokens?issuer=` | Registry listing, optional issuer filter |
+| `/tokens?issuer=` | Registry listing, optional issuer filter (`backed`, `prestocks`, `backpack`, `tessera`) |
 | `/events?symbol=&type=` | Canonical events for one token, optional type filter |
 | `/multiplier?symbol=&date=&raw=` | Multiplier at a date plus a raw-to-adjusted sample with exact dust |
 | `/onchain?symbol=&date=` | Issuer-reported vs on-chain multiplier reconcile verdict |
@@ -91,6 +91,7 @@ curl "http://127.0.0.1:8787/crosscheck?symbol=OPENAI"
 - `ui/` the report page.
 - `webhooks/` subscription store and HMAC-SHA256 signed deliveries with retries (`scripts/webhook-deliver.mjs` CLI).
 - `fs/` atomic file writes.
+- `cli/` the serve flag grammar: `--flag value` and `--flag=value` forms, malformed values rejected before any I/O, and the host is resolved before boot starts spending RPC quota.
 
 Live on-chain findings observed during development: SPACEX multiplier `1` → `5` effective 2026-06-10, OPENAI `1` → `1.4861347` effective 2026-07-17. Tessera tokens have no rebase mechanism; their multiplier is `1`, and the API says so plainly.
 

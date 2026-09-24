@@ -8,6 +8,7 @@ import { isValidAddress } from "../wallet/scan.mjs";
 import { buildWalletReport } from "../wallet/report.mjs";
 import { crossCheckEvents } from "../events/crosscheck.mjs";
 import { isValidIsoDate, parseIsoDateMs } from "../schema/isodate.mjs";
+import { EVENT_TYPES } from "../schema/events.mjs";
 import { renderPage } from "../ui/page.mjs";
 import { createRateLimiter } from "./ratelimit.mjs";
 
@@ -349,7 +350,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     }
     if (url.pathname === "/tokens") {
       const issuer = q.get("issuer");
-      return json(res, 200, issuer ? registry.filter((t) => t.issuer === issuer) : registry);
+      if (issuer !== null) {
+        // ROUND13: тихий [] на ?issuer=Backed (README сам пишет «xStocks/Backed 16»)
+        // неотличим от «токенов нет» — конвенция symbol/mint: отказ со словарём.
+        const known = new Set(registry.map((t) => t.issuer));
+        if (!known.has(issuer)) {
+          const dict = known.size ? `; valid: ${[...known].sort().join(", ")}` : "";
+          return json(res, 400, { error: `unknown issuer ${JSON.stringify(issuer)}${dict}` });
+        }
+        return json(res, 200, registry.filter((t) => t.issuer === issuer));
+      }
+      return json(res, 200, registry);
     }
     if (url.pathname === "/events") {
       const mint = resolveMint(q);
@@ -368,6 +379,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       }
       const list = eventsByMint.get(mint) ?? [];
       const type = q.get("type");
+      if (type !== null && !EVENT_TYPES.includes(type)) {
+        // ROUND13: тот же контракт, что у issuer — мусорный type тихим [] неотличим
+        // от «событий этого типа не было»
+        return json(res, 400, { error: `unknown type ${JSON.stringify(type)}; valid: ${EVENT_TYPES.join(", ")}` });
+      }
       return json(res, 200, type ? list.filter((e) => e.type === type) : list);
     }
     if (url.pathname === "/multiplier") {

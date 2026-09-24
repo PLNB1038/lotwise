@@ -3,6 +3,7 @@
 // только на listen; --port=8787 молча игнорировался; --rpc последним аргументом
 // молча убивал env-фолбэк (rpcUrl = undefined → весь бут в честных 503).
 // Гварды ДО любого I/O — по образцу --max-txs, который уже так умел.
+import { lookup as dnsLookup } from "node:dns/promises";
 
 export class ServeArgsError extends Error {
   constructor(msg, flag) {
@@ -86,4 +87,16 @@ export function parseServeArgs(argv, env = process.env) {
   }
 
   return { port, host, rpcUrl, maxTxs };
+}
+
+// DNS-резолв --host ДО бута (ROUND13 №3): парсер синхронный и видит только лексику —
+// «no-such-host.invalid» прожигал весь бут-I/O (реестр, журнал, ~15 RPC-вызовов
+// истории) и падал только на listen с ENOTFOUND. Один lookup дешевле бута; IP-литералы
+// и localhost резолвятся libc без сети. lookup инжектится для тестов.
+export async function assertHostResolvable(host, lookup = dnsLookup) {
+  try {
+    await lookup(host);
+  } catch (err) {
+    throw new ServeArgsError(`--host does not resolve: ${err.code ?? err.message} (${JSON.stringify(host)})`, "--host");
+  }
 }

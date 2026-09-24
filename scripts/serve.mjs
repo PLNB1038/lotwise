@@ -9,7 +9,7 @@ import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot } from "../src/events/journal.mjs";
-import { parseServeArgs, ServeArgsError } from "../src/cli/flags.mjs";
+import { parseServeArgs, ServeArgsError, assertHostResolvable } from "../src/cli/flags.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,6 +43,18 @@ const rpcDisplay = (() => {
     return "(malformed rpc url)";
   }
 })();
+
+// ROUND13 №3: DNS-резолв хоста до бут-I/O — раньше мусорный --host проживал весь бут
+// (реестр+журнал+RPC-квота) и умирал только на listen с невнятным ENOTFOUND.
+try {
+  await assertHostResolvable(host);
+} catch (err) {
+  if (err instanceof ServeArgsError) {
+    console.error(`[serve] ${err.message}`);
+    process.exit(1);
+  }
+  throw err;
+}
 
 // Реестр: усечённый data/tokens.json (обрыв в окне записи enrich-decimals)
 // раньше ронял процесс ЦЕЛИКОМ — RegistryError на top-level без catch → unhandled

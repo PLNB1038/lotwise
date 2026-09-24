@@ -51,8 +51,10 @@ test("/events по символу: 4 дивиденда SPYx", async () => {
     const list = await (await fetch(`${base}/events?symbol=SPYx`)).json();
     assert.equal(list.length, 4);
     assert.ok(list.every((e) => e.type === "MULTIPLIER_CHANGE"));
-    const filtered = await (await fetch(`${base}/events?symbol=SPYx&type=NOPE`)).json();
-    assert.deepEqual(filtered, []);
+    const filtered = await fetch(`${base}/events?symbol=SPYx&type=NOPE`);
+    // ROUND13: мусорный type — честный 400 со словарём (тихий [] неотличим от «не было»)
+    assert.equal(filtered.status, 400);
+    assert.match((await filtered.json()).error, /SPLIT/);
   });
 });
 
