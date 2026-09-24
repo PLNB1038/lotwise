@@ -1,5 +1,7 @@
 # <img src="assets/logo-mark.svg" alt="Lotwise" width="28" height="28"> Lotwise
 
+[![tests](https://github.com/PLNB1038/lotwise/actions/workflows/tests.yml/badge.svg)](https://github.com/PLNB1038/lotwise/actions/workflows/tests.yml)
+
 
 A corporate actions engine for tokenized equities on Solana. Lotwise normalizes splits, dividends, mergers, ticker changes and multiplier rebases across xStocks, PreStocks, Backpack and Tessera tokens into adjusted tax lots, and serves them over a REST API with a self-hosted report page.
 
@@ -118,7 +120,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-668 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+680 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 
