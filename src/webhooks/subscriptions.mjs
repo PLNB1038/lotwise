@@ -445,23 +445,47 @@ export async function deliverWebhook(
  * Счётчики: delivered — (событие, подписка) с 2xx; failed — исчерпали ретраи;
  * skipped — пары без попытки: выключенная подписка под матчем или событие без
  * единого адресата («некому» — не провал, отдельная строка отчёта).
+ * symbolToMint (волна I2): Map символ→минт из реестра. Канонические события
+ * символ НЕ несут (схема mint-only) — без карты подписка по тикеру молча давала
+ * 0 доставок при exit 0 (тихая неудача, находка интегратора). С картой символы
+ * подписки резолвятся в минты ДО матчинга; символ вне карты — warning (опечатка
+ * видна сразу), доставка не блокируется.
  * @param {Array} events — канонические события
  * @param {Array} subs — подписки (например, listSubscriptions(path))
- * @param {{fetcher?: Function, sleep?: Function, timeoutMs?: number, nowMs?: number}} [opts]
+ * @param {{fetcher?: Function, sleep?: Function, timeoutMs?: number, nowMs?: number,
+ *          symbolToMint?: Map<string,string>}} [opts]
  * @returns {Promise<{delivered: number, skipped: number, failed: number,
  *                     deliveries: Array<{subscriptionId: string, eventType: string,
  *                                        ok: boolean, attempts: number, statuses: Array, error: string|null}>,
  *                     warnings: string[]}>}
  */
 export async function deliverToAll(events, subs, opts = {}) {
-  const { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, nowMs = Date.now() } = opts;
+  const { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, nowMs = Date.now(), symbolToMint = null } = opts;
   for (const event of events) validateEvent(event); // fail-fast до любых отправок
+
+  // Волна I2: резолв символов подписок в минты по реестру. Каноническое событие
+  // символа не несёт — без этого шага подписка ["SPYx"] матчится только с сырыми
+  // symbol-полями операторского файла и молча не доставляет ничего.
+  const symbolWarnings = new Set();
+  let effectiveSubs = subs;
+  if (symbolToMint instanceof Map && symbolToMint.size > 0) {
+    effectiveSubs = subs.map((sub) => {
+      if (sub.symbols === "*") return sub;
+      const mints = [];
+      for (const s of sub.symbols) {
+        const mint = symbolToMint.get(s);
+        if (mint !== undefined) mints.push(mint);
+        else symbolWarnings.add(`подписка ${sub.id}: идентификатор ${JSON.stringify(s)} не найден в реестре — матчится только с сырыми symbol/newSymbol полями событий`);
+      }
+      return mints.length > 0 ? { ...sub, symbols: [...sub.symbols, ...mints] } : sub;
+    });
+  }
 
   const counters = { delivered: 0, skipped: 0, failed: 0 };
   const deliveries = [];
-  const warnings = [];
+  const warnings = [...symbolWarnings];
   for (const event of events) {
-    const matches = matchSubscriptions(subs, eventContext(event));
+    const matches = matchSubscriptions(effectiveSubs, eventContext(event));
     let attempted = 0;
     for (const sub of matches) {
       if (!sub.active) {

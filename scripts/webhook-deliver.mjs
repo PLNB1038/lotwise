@@ -32,6 +32,7 @@ import {
   SubscriptionError,
 } from "../src/webhooks/subscriptions.mjs";
 import { EventValidationError } from "../src/schema/events.mjs";
+import { loadRegistry } from "../src/registry/registry.mjs";
 
 const defaultSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -125,9 +126,20 @@ export async function main(argv = [], { fetcher = fetch, sleep = defaultSleep } 
     console.error(`[webhook-deliver] подписки: ${err.message}`);
     return 2;
   }
+  // Волна I2 (интегратор): реестр для резолва символов подписок — канонические
+  // события несут только mint, подписка ["SPYx"] без карты молча не доставляла
+  // ничего. Пути — от CWD, как у --subscriptions. Нет/битый реестр — warning
+  // и матчинг без карты (прежнее поведение), не отказ доставки.
+  let symbolToMint = null;
+  try {
+    const registry = await loadRegistry("data/tokens.json");
+    symbolToMint = new Map(registry.map((t) => [t.symbol, t.mint]));
+  } catch (err) {
+    console.warn(`[webhook-deliver] реестр не загружен (${err.message}) — подписки по символам матчатся только с событиями, несущими symbol/newSymbol`);
+  }
   let report;
   try {
-    report = await deliverToAll(events, subs, { fetcher, sleep });
+    report = await deliverToAll(events, subs, { fetcher, sleep, symbolToMint });
   } catch (err) {
     // Битое событие по схеме — проблема входных данных, а не доставки.
     const what = err instanceof EventValidationError || err instanceof SubscriptionError ? "события невалидны" : "доставка сорвана";

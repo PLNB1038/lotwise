@@ -91,7 +91,11 @@ Response shape (a real `/events` row, truncated):
 
 Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit.
 
-Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy, else the socket): 12 wallet scans/min, 60 on-chain/price calls/min; configure via `RATE_LIMIT_SCAN_PER_MIN` / `RATE_LIMIT_RPC_PER_MIN`. Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree`; `/crosscheck` verdicts are the five values listed above.
+Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy, else the socket): 12 wallet scans/min, 60 on-chain/price calls/min; configure via `RATE_LIMIT_SCAN_PER_MIN` / `RATE_LIMIT_RPC_PER_MIN`. Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree` — the verdict compares the issuer plan (`api`, evaluated at the requested date) against `onChainEffective` (the mint's current `active` multiplier with an already-activated `pending` applied); the raw `active` value may legitimately differ from `api` when a pending rebase sits in between. `/crosscheck` verdicts are the five values listed above.
+
+### Webhooks
+
+The API is read-only; deliveries are initiated by an operator or cron through the CLI, not by the server. Subscriptions live in `data/webhooks.json` (`{id, url, symbols, secret, createdAt, active}`), where `symbols` is `"*"` or an array of registry symbols and/or mints — the CLI resolves registry symbols to mints before matching (canonical events carry only the mint); an identifier found in neither is reported in the warnings. Deliver with `node scripts/webhook-deliver.mjs --events data/events.json` (or stdin); exit codes 0/1/2 mean no-failures / some deliveries failed / usage-or-input error. Payloads are POSTed with `X-Lotwise-Event`, a deterministic `X-Lotwise-Delivery` id (dedupe across reruns on the receiver side) and `X-Lotwise-Signature: sha256=<HMAC-SHA256 of the exact body>`; retries back off 1s → 4s. Subscription URLs must be public: the SSRF denylist refuses private, loopback, CGNAT and metadata addresses at the literal level (DNS names are not resolved — testing against a public DNS name that maps to loopback is possible and is an accepted operator-level risk).
 
 ## Architecture
 
@@ -120,7 +124,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-680 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+684 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 
