@@ -2,7 +2,6 @@
 // MVP data showcase: registry, events, multiplier at a date + the showcase page.
 import { createServer } from "node:http";
 import { MultiplierTimeline } from "../lots/timeline.mjs";
-import { applyEvents } from "../lots/lots.mjs";
 import { reconcileMultiplier } from "../issuer/scaled-ui.mjs";
 import { isValidAddress } from "../wallet/scan.mjs";
 import { buildWalletReport } from "../wallet/report.mjs";
@@ -76,10 +75,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     const xff = req.headers["x-forwarded-for"];
     if (trustProxy && typeof xff === "string" && xff.trim() !== "") {
       const parts = xff.split(",");
-      // an empty last element (trailing comma/space) is not a key: the shared ""
-      // bucket collapsed distinct clients (round 9 fix 6); the honest fallback is the socket
+      // An empty last element (trailing comma/space) is not a key: the shared ""
+      // bucket collapsed distinct clients (round 9 fix 6); the honest fallback is the socket.
+      // Round 22 (security): a hop that is not an IP-shaped string is not a key EITHER —
+      // rotating garbage XFF hops used to mint a fresh bucket per request (300/300 at a
+      // limit of 2/min) and bloat the bucket map. IP-shaped: hex digits, dots and colons
+      // only, at most an IPv6 textual length.
       const key = parts[parts.length - 1].trim();
-      if (key !== "") return key;
+      if (key !== "" && key.length <= 45 && /^[0-9a-fA-F.:]+$/.test(key)) return key;
     }
     return req.socket?.remoteAddress ?? "unknown";
   };
@@ -134,6 +137,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // chaos finding).
       const isHead = req.method === "HEAD";
       if (req.method !== "GET" && !isHead) {
+        // round 22 (security): consume the request body — a slow-body client kept the socket
+        // alive up to requestTimeout (300s) after the 405, draining connection capacity
+        req.resume();
         return json(res, 405, { error: "method not allowed" }, { Allow: "GET, HEAD" });
       }
       const q = url.searchParams;
@@ -285,12 +291,24 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // A tx without blockTime cannot be ordered against the ex-date and a scan gap means
       // history the window never saw: both flag the base as incomplete instead of lying.
       const symbol = byMint.get(mint)?.symbol ?? null;
+      // Round 22 (finance-v2 F1): the engine's semantic dedup (round 21, lots.mjs) is
+      // NOT on this route's path — the ex-date rewrite maps store events directly, so the
+      // same dividend from two sources (a press page and an API node) doubled the income.
+      // The identical gate, at the layer that actually consumes the events.
+      const seenDividends = new Set();
+      const uniqueDividends = dividends.filter((e) => {
+        const key = `${mint}|${parseIsoDateMs(e.effectiveDate)}|${e.amountPerUnitRaw}`;
+        if (seenDividends.has(key)) return false;
+        seenDividends.add(key);
+        return true;
+      });
       try {
-        const rows = dividends.map((e) => {
+        const rows = uniqueDividends.map((e) => {
           const exMs = parseIsoDateMs(e.effectiveDate);
           let base = 0n;
           let considered = 0;
-          let incomplete = token.gaps.length > 0;
+          // F3 (round 22): a truncated scan window silently understates the ex-date base too
+          let incomplete = token.gaps.length > 0 || Boolean(scan.truncated);
           for (const tx of scan.txs) {
             const d = tx.deltas.find((x) => x.owner === report.owner && x.mint === mint);
             if (!d) continue;
@@ -298,13 +316,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
             if (tx.blockTime * 1000 < exMs) { base += d.deltaRaw; considered++; }
           }
           const amount = BigInt(e.amountPerUnitRaw);
+          // Round 22 (F4): a negative base means the window saw only disposals before the
+          // ex-date — the true position predates it. A number here (say -100) is something
+          // an integrator would subtract; the honest answer is null + the incomplete flag.
+          const negative = base < 0n;
           return {
             symbol,
             effectiveDate: e.effectiveDate,
             amountPerUnitRaw: String(amount), // BigInt does not serialize in JSON — strings go out
-            totalRaw: String(base * amount),
+            totalRaw: negative ? null : String(base * amount),
             lotsConsidered: considered, // how many window transactions formed the ex-date base
-            ...(incomplete ? { baseIncomplete: true } : {}),
+            ...(incomplete || negative ? { baseIncomplete: true } : {}),
           };
         });
         return json(res, 200, rows);

@@ -418,7 +418,14 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
     const existing = loadJournalOnchain(journalPath);
     if (existing.ok) {
       for (const [mint, entry] of Object.entries(existing.journal)) {
-        if (!(mint in merged)) merged[mint] = entry;
+        // Round 22 (security): a "__proto__"/"constructor" key from a foreign file is neither a mint nor data —
+        // "in" matched it against the prototype (the entry silently vanished on save), and a plain
+        // assignment would mutate the prototype instead of adding data. Skipped LOUDLY.
+        if (mint === "__proto__" || mint === "constructor" || mint === "prototype") {
+          console.error("[journal] merge: skipped a dangerous journal key (" + String(mint) + ") — not a mint");
+          continue;
+        }
+        if (!Object.hasOwn(merged, mint)) merged[mint] = entry;
       }
     }
     atomicWriteJson(journalPath, merged);

@@ -640,12 +640,20 @@ function renderWallet(rep) {
           (openBasis > 0n ? ', basis ' + esc(fmtUi(String(openBasis), 6)) + ' USDC' : '') +
           (lotsUnknown > 0 ? ' <span class="note">(' + lotsUnknown + ' lot' + (lotsUnknown > 1 ? 's' : '') + ' unpriced — bought without a USDC leg)</span>' : '') +
           (t.realized ? '' : (t.realizedCount ? ', realized ' + t.realizedCount + ' disposals' : '')) + '</dd>';
+        var proceedsOnly = realized.filter(function (r) { return r.proceedsKnown === true && r.pnlRaw === null && r.pnlRaw !== undefined; });
+        var proceedsOnlySum = proceedsOnly.reduce(function (a, r) { return a + BigInt(r.proceedsRaw); }, 0n);
         var pnlRow = realized.length
           ? '<dt>realized P&L (USDC)</dt><dd>' + (pricedDisposals.length
               ? '<span class="' + (pnl >= 0n ? 'verdict ok' : 'err') + '">' + esc(fmtUi(String(pnl), 6)) + '</span>' +
                 ' <span class="note">proceeds ' + esc(fmtUi(String(proceeds), 6)) +
                 (unpriced > 0 ? ', ' + unpriced + ' disposal' + (unpriced > 1 ? 's' : '') + ' unpriced' : '') + '</span>'
-              : '<span class="note">no priced disposals — the sales had no USDC leg</span>') + '</dd>'
+              : proceedsOnly.length
+                // round 22 (F5): the sale HAD a USDC leg — its proceeds are money the wallet
+                // really received; only the cost side is unknown. That is not "no leg".
+                ? '<span class="note">proceeds ' + esc(fmtUi(String(proceedsOnlySum), 6)) + ' USDC booked on ' +
+                  proceedsOnly.length + ' disposal' + (proceedsOnly.length > 1 ? 's' : '') +
+                  ' — basis unknown (bought without a USDC leg), P&L not computed</span>'
+                : '<span class="note">no priced disposals — the sales had no USDC leg</span>') + '</dd>'
           : '';
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
           '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd>' +

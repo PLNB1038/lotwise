@@ -403,6 +403,10 @@ export async function deliverWebhook(
   event,
   { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, deliveryId, nowMs = Date.now() } = {},
 ) {
+  // round 22 (security): validate the event BEFORE the envelope — deliverToAll checks every
+  // event, but a direct deliverWebhook call built X-Lotwise-* headers from unvalidated input
+  // (the undici barrier saved the wire; the contract should not depend on it)
+  validateEvent(event);
   const id = deliveryId ?? deterministicDeliveryId(sub, event);
   // The envelope and signature are fixed BEFORE the attempts: all retries carry the same
   // payload and the same signature (the receiver verifies the signature on every repeat).

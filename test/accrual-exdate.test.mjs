@@ -130,9 +130,56 @@ test("accruals: a scan gap (spend without coverage) flags the base incomplete", 
   await withServer(async (base) => {
     const rows = await (await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
     assert.equal(rows[0].baseIncomplete, true, "the window never saw the opening balance — the ex-date base is not guaranteed");
-    assert.equal(rows[0].totalRaw, "-100", "the window knows only the disposal: -100 × 1, flagged incomplete");
+    assert.equal(rows[0].totalRaw, null, "round 22 (F4): a negative base is not a number — the window knows only the disposal; null, not -100 an integrator would subtract");
   }, {
     events: [divEvent("2026-02-01", 1)],
     txs: [aTx("s1", -100n, "2026-01-15")], // sells what predates the window: a gap
   });
+});
+
+// Round 22 (finance-v2 F1): the engine's semantic dividend dedup (round 21) must reach
+// the ONLY live consumer. One dividend reaching the store from two sources (a press page
+// and an API node) used to double /accruals rows after the ex-date rewrite bypassed the engine.
+test("accruals: the same dividend from two sources — a single row, not doubled income", async () => {
+  const div = (sources) =>
+    bindMintAndValidate([{
+      type: "DIVIDEND_ACCRUAL",
+      effectiveDate: "2026-02-01",
+      status: "confirmed",
+      sources,
+      amountPerUnitRaw: 2,
+      decimals: 6,
+    }], A_MINT)[0];
+  await withServer(async (base) => {
+    const rows = await (await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
+    assert.equal(rows.length, 1, "one economics — one row");
+    assert.equal(rows[0].totalRaw, "400", "200 × 2, not doubled");
+  }, {
+    events: [div(["https://issuer.example/press/q1"]), div(["https://api.issuer.example/nodes/q1"])],
+    txs: [aTx("b1", 200n, "2026-01-01")],
+  });
+});
+
+// Round 22 (F3): a truncated scan window silently understated the ex-date base — the
+// flag now travels like gaps and undated transactions do.
+test("accruals: a truncated window flags the base incomplete (history beyond the cap is unknown)", async () => {
+  const { scanWallet } = await import("../src/wallet/scan.mjs");
+  void scanWallet;
+  const events = [divEvent("2026-02-01", 2)];
+  const txs = [aTx("b1", 200n, "2026-01-01")];
+  await (async () => {
+    const server = await createApiServer({
+      registry: aRegistry,
+      events,
+      walletScanner: async () => ({ owner: A_ADDR, signatures: 1, fetched: 1, txs, skipped: [], truncated: true, accounts: {} }),
+    });
+    const { port } = server.address();
+    try {
+      const rows = await (await fetch(`http://127.0.0.1:${port}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
+      assert.equal(rows[0].baseIncomplete, true, "the cap cut the window — the ex-date base is not guaranteed");
+      assert.equal(rows[0].totalRaw, "400", "what the window saw is still reported");
+    } finally {
+      server.close();
+    }
+  })();
 });

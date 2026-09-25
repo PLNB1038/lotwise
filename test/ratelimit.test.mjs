@@ -122,3 +122,20 @@ test("rateLimits: null — the limits off (local experiments)", async () => {
     server.close();
   }
 });
+
+// Round 22 (security): XFF rotation used to mint a fresh bucket per request — the last
+// hop was trusted as a bare string (300/300 at a limit of 2/min). A hop that is not an
+// IP address is now refused as a key: the request falls back to the shared socket bucket.
+test("trustProxy: rotating GARBAGE XFF hops does not mint new buckets — the socket bucket applies", async () => {
+  await withLimitedServer(async (base) => {
+    const rot = (n) => ({ "x-forwarded-for": `attacker-fake-client-${n}` });
+    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: rot(1) })).status, 200);
+    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: rot(2) })).status, 200);
+    for (let i = 3; i <= 5; i++) {
+      assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: rot(i) })).status, 429,
+        `rotation attempt ${i}: no new bucket for a non-IP hop`);
+    }
+    // a REAL ip hop still gets its own bucket next to the exhausted socket bucket
+    assert.equal((await fetch(`${base}/lots?address=${ADDR}`, { headers: { "x-forwarded-for": "9.9.9.9" } })).status, 200);
+  }, { trustProxy: true });
+});

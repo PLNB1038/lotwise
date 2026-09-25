@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { loadJournalOnchain, saveJournalAtomic, preserveCorruptedJournal } from "../src/events/journal.mjs";
+import { loadJournalOnchain, saveJournalAtomic, saveJournalMerged, preserveCorruptedJournal } from "../src/events/journal.mjs";
 
 const JOURNAL = {
   Mint11111111111111111111111111111111: {
@@ -183,4 +183,31 @@ test("journal: saveJournalAtomic skips the write when the serialization is uncha
   assert.equal(readFileSync(p, "utf8"), before, "the file bytes are untouched");
   const third = saveJournalAtomic(p, { ["Mint11111111111111111111111111111111"]: { lastEffective: "7", observedAt: "2026-09-02T00:00:00.000Z", events: [] } });
   assert.equal(third.written, true, "a changed observation writes again");
+});
+
+// round 22 (security): a __proto__ key in a foreign journal file is skipped LOUDLY on
+// merge — it used to silently vanish ("in" matched the prototype) or would have mutated
+// it; real mints survive the merge alongside
+test("saveJournalMerged: a dangerous key is skipped loudly, real mints survive", (t) => {
+  const dir = freshDir();
+  const p = path.join(dir, "onchain-journal.json");
+  const M = "Mint11111111111111111111111111111111";
+  const foreign = {};
+  foreign.__proto__ = undefined; // (no-op for the prototype in this construction)
+  const fileJournal = JSON.parse('{"' + String.fromCharCode(95,95) + 'proto' + String.fromCharCode(95,95) + '":{"lastEffective":"9"},"' + M + '":{"lastEffective":"5","observedAt":"2026-09-01T00:00:00.000Z","events":[]}}');
+  writeFileSync(p, JSON.stringify(fileJournal));
+  const mine = { Other11111111111111111111111111111111: { lastEffective: "1", observedAt: "2026-09-02T00:00:00.000Z", events: [] } };
+  saveJournalMerged(p, mine);
+  const after = JSON.parse(readFileSync(p, "utf8"));
+  assert.equal(after[M].lastEffective, "5", "the foreign real mint survived");
+  assert.equal(after.Other11111111111111111111111111111111.lastEffective, "1", "the fresh mint is there");
+  assert.equal(Object.prototype.hasOwnProperty.call(after, String.fromCharCode(95,95) + "proto" + String.fromCharCode(95,95)), false, "the dangerous key did not become data");
+  const errLog = t.mock.method(console, "error", () => {});
+  try {
+    writeFileSync(p, JSON.stringify(fileJournal)); // the dangerous file is back on disk
+    saveJournalMerged(p, mine);
+  } finally {
+    errLog.mock.restore();
+  }
+  assert.equal(errLog.mock.callCount(), 1, "the skip is loud — silently dropping is the bug this pins");
 });

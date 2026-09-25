@@ -739,3 +739,32 @@ test("wallet UI: an old cached report (no realized array) renders exactly as bef
   assert.ok(!html.includes("realized P"), "no P&L row for a report that predates pricing");
   assert.ok(!html.includes("unpriced"), "no unpriced notes on a legacy report");
 });
+
+// round 22 (F5): proceeds booked without a basis deserve their own sentence — not the
+// "no USDC leg" text that hides the money the sales DID bring in
+test("wallet UI: known proceeds with unknown basis — shown as proceeds, not 'no priced disposals'", async () => {
+  const rep = {
+    owner: ADDR_A,
+    counts: { signatures: 2, fetched: 2, skipped: 0, relevantTxs: 2 },
+    truncated: false, complete: true,
+    tokens: [{
+      symbol: "SPYx", name: "S&P 500", decimals: 8,
+      rawBalance: "0", netDeltaRaw: "0", onchainNow: "0", reconciles: true,
+      multiplier: { now: "1", events: 0 },
+      adjusted: { exact: true, whole: "0", remainder: "0", den: "1" },
+      lots: [],
+      realized: [
+        { date: "2026-03-01T00:00:00.000Z", qtyRaw: "1", basisRaw: null, basisKnown: false, proceedsRaw: "9000000", proceedsKnown: true, pnlRaw: null },
+      ],
+      realizedCount: 1, realizedQtyRaw: "1", gaps: [],
+    }],
+  };
+  const { sb, els } = runScanClient((url) => url.startsWith("/lots?") ? { ok: true, status: 200, body: rep } : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const html = els.get("wallet-out").innerHTML;
+  assert.ok(html.includes("proceeds 9.000000 USDC booked"), "the money the sale brought in is shown");
+  assert.ok(html.includes("basis unknown"), "the reason P&L is absent is named");
+  assert.ok(!html.includes("no priced disposals"), "the misleading 'no leg' sentence is gone for this case");
+});

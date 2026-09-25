@@ -52,7 +52,7 @@ export function metadataToEvents(metadata, { sourceUrl = "https://prestocks.com/
   const unknown = Object.keys(metadata).filter((k) => !KNOWN_KEYS.has(k));
   if (unknown.length > 0) {
     console.error(
-      `[normalize-prestocks] ${metadata.symbol}: unknown keys in metadata ${JSON.stringify(unknown)} — the issuer's schema has changed; event fields may have appeared. Events are NOT extracted from them yet (zero interpretation), a note for the operator.`,
+      `[normalize-prestocks] ${JSON.stringify(metadata.symbol)}: unknown keys in metadata ${JSON.stringify(unknown)} — the issuer's schema has changed; event fields may have appeared. Events are NOT extracted from them yet (zero interpretation), a note for the operator.`,
     );
   }
   // No events out of identity fields: a REDEEM derived from an offer link or

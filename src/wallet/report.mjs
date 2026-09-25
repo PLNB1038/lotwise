@@ -64,8 +64,11 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     const usdc = (tx.moneyDeltas ?? []).reduce((acc, m) => (m.owner === owner ? acc + m.deltaRaw : acc), 0n);
     const buys = mine.filter((d) => d.deltaRaw > 0n);
     const sells = mine.filter((d) => d.deltaRaw < 0n);
-    const buyBasis = buys.length === 1 && usdc < 0n ? -usdc : null;
-    const sellProceeds = sells.length === 1 && usdc > 0n ? usdc : null;
+    // Round 22 (finance-v2 F2): the rule is EXACTLY ONE tracked token in the tx (mine.length === 1) —
+    // a mixed sell-A/buy-B swap prices NEITHER leg: the net USDC of a two-legged swap is
+    // nobody's basis (README: several tracked tokens — honestly unknown).
+    const buyBasis = mine.length === 1 && buys.length === 1 && usdc < 0n ? -usdc : null;
+    const sellProceeds = mine.length === 1 && sells.length === 1 && usdc > 0n ? usdc : null;
 
     for (const d of mine) {
       const s = stateOf(d.mint);

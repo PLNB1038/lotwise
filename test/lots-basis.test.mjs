@@ -257,3 +257,49 @@ test("proceeds: a PARTIAL consumption of a lot splits its basis proportionally (
   assert.equal(p2.basisRaw, "6000000", "the remaining 6/10 — the lot's basis never double-counts");
   assert.equal(BigInt(p1.basisRaw) + BigInt(p2.basisRaw), 10n * 10n ** 6n);
 });
+
+// Round 22 (finance-v2 F2): a MIXED tx — sold token A, bought token B against the net
+// USDC — must not price either leg. The rule requires EXACTLY ONE tracked token in the tx
+// (mine.length === 1), not "exactly one buy"; the net USDC of a two-legged swap is nobody's
+// basis (README: "several tracked tokens inside one tx — basisKnown: false, never an
+// invented number").
+test("basis: a mixed sell-A/buy-B tx prices NEITHER leg (net USDC is nobody's basis)", () => {
+  const MINT_B = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF4X";
+  const reg2 = [...REG, { symbol: "NVDAx", name: "n", mint: MINT_B, decimals: 8, issuer: "backed" }];
+  const scan = {
+    owner: OWNER,
+    txs: [
+      t(1, 1000, [d(MINT, 60n)], [money(-100n * 10n ** 6n)]), // open A with a clean basis
+      // sell 60 A AND buy 100 B in one tx; net USDC −40 (received 100 for A, paid 60... net −40)
+      t(2, 2000, [d(MINT, -60n), d(MINT_B, 100n)], [money(-40n * 10n ** 6n)]),
+    ],
+    skipped: [], truncated: false, signatures: 2, fetched: 2,
+  };
+  const rep = buildWalletReport(scan, { registry: reg2 });
+  const b = rep.tokens.find((x) => x.mint === MINT_B);
+  assert.equal(b.lots[0].basisKnown, false, "the buy-B leg of a mixed tx is unpriced — the net USDC is not its basis");
+  assert.equal(b.lots[0].basisRaw, null);
+  const a = rep.tokens.find((x) => x.mint === MINT);
+  const sale = a.realized.find((r) => r.qtyRaw === "60");
+  assert.equal(sale.proceedsKnown, false, "the sell-A leg of the same tx is unpriced too");
+  assert.equal(sale.proceedsRaw, null);
+});
+
+test("basis: the mirrored mixed tx (buy A / sell B with net USDC in) prices neither leg", () => {
+  const MINT_B = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF4X";
+  const reg2 = [...REG, { symbol: "NVDAx", name: "n", mint: MINT_B, decimals: 8, issuer: "backed" }];
+  const scan = {
+    owner: OWNER,
+    txs: [
+      t(1, 1000, [d(MINT_B, 100n)], [money(-90n * 10n ** 6n)]),
+      t(2, 2000, [d(MINT, 60n), d(MINT_B, -100n)], [money(50n * 10n ** 6n)]), // buy A + sell B, net +50 USDC in
+    ],
+    skipped: [], truncated: false, signatures: 2, fetched: 2,
+  };
+  const rep = buildWalletReport(scan, { registry: reg2 });
+  const a = rep.tokens.find((x) => x.mint === MINT);
+  assert.equal(a.lots[0].basisKnown, false, "the buy-A leg of a mixed tx is unpriced");
+  const b = rep.tokens.find((x) => x.mint === MINT_B);
+  const sale = b.realized[0];
+  assert.equal(sale.proceedsKnown, false, "the sell-B leg is unpriced — the net +50 USDC is not its proceeds");
+});
