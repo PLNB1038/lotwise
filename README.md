@@ -39,7 +39,7 @@ Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana
 
 ## API
 
-GET only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March.
+GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March.
 
 | Endpoint | Purpose |
 |---|---|
@@ -85,7 +85,7 @@ Response shape (a real `/events` row, truncated):
 ```json
 {"type":"MULTIPLIER_CHANGE","effectiveDate":"2026-02-02T21:47:00.000Z","status":"confirmed",
  "sources":["https://api.xstocks.fi/api/v2/public/assets/JPMx/multiplier/history?network=Ethereum#node:…"],
- "multiplierFrom":"1.0040015369331659","multiplierTo":"1.0071547908304908","reason":"Dividend",
+ "multiplierFrom":"1.0040015369331659","multiplierTo":"1.007154790830491","reason":"Dividend",
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
@@ -124,7 +124,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-684 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+692 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

@@ -56,6 +56,27 @@ test("webhooks: a symbol outside the registry — a warning, delivery is not blo
     "the typo is visible in the report warnings");
 });
 
+// Round 20: a MINT identifier is a documented way to subscribe (README §Webhooks:
+// "symbols and/or mints") — it matches the canonical event directly and must NOT
+// produce a "not found in the registry" warning on every delivery run. The warning
+// channel is load-bearing: a false alarm trains the operator to ignore it.
+test("webhooks: a mint-identifier subscription delivers without a false registry warning", async () => {
+  const map = new Map([["SPYx", SPYX_MINT]]);
+  const rep = await deliverToAll([event], [sub([SPYX_MINT])], { fetcher: ok200, sleep: sleep0, symbolToMint: map });
+  assert.equal(rep.delivered, 1, "the mint subscription matches the canonical event directly");
+  assert.equal(rep.warnings.length, 0, "a registry mint is a valid identifier — no warning");
+});
+
+test("webhooks: a mixed [symbol, mint] subscription — one delivery, zero warnings", async () => {
+  const map = new Map([["SPYx", SPYX_MINT]]);
+  let posts = 0;
+  const fetcher = async () => { posts++; return new Response("ok", { status: 200 }); };
+  const rep = await deliverToAll([event], [sub(["SPYx", SPYX_MINT])], { fetcher, sleep: sleep0, symbolToMint: map });
+  assert.equal(rep.delivered, 1, "one subscription — exactly one delivery, no duplicates");
+  assert.equal(posts, 1);
+  assert.equal(rep.warnings.length, 0, "both identifiers are registry-known");
+});
+
 test("webhooks: the CLI resolves symbols via data/tokens.json — a subscription symbol matches a mint-only event", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-i2-"));
   try {

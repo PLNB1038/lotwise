@@ -469,13 +469,18 @@ export async function deliverToAll(events, subs, opts = {}) {
   const symbolWarnings = new Set();
   let effectiveSubs = subs;
   if (symbolToMint instanceof Map && symbolToMint.size > 0) {
+    // Round 20: the map is keyed by symbols, but a mint identifier is a documented way
+    // to subscribe too (README §Webhooks) and matches the canonical event as-is. Only
+    // an identifier in NEITHER the keys nor the values is a warning — a false alarm on
+    // every run would train the operator to ignore the channel.
+    const registryMints = new Set(symbolToMint.values());
     effectiveSubs = subs.map((sub) => {
       if (sub.symbols === "*") return sub;
       const mints = [];
       for (const s of sub.symbols) {
         const mint = symbolToMint.get(s);
         if (mint !== undefined) mints.push(mint);
-        else symbolWarnings.add(`subscription ${sub.id}: identifier ${JSON.stringify(s)} not found in the registry — matched only against raw symbol/newSymbol event fields`);
+        else if (!registryMints.has(s)) symbolWarnings.add(`subscription ${sub.id}: identifier ${JSON.stringify(s)} not found in the registry — matched only against raw symbol/newSymbol event fields`);
       }
       return mints.length > 0 ? { ...sub, symbols: [...sub.symbols, ...mints] } : sub;
     });

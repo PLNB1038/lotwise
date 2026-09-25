@@ -567,3 +567,128 @@ test("vm: the filter hides #tokens rows without the substring in symbol+name (ca
   assert.equal(spy.style.display, "", "an empty filter — all rows visible");
   assert.equal(ko.style.display, "", "an empty filter — all rows visible");
 });
+
+// ---- round 20: mutation pins — the wave-I1 UX contracts and the esc round-trip ----
+// The round-20 mutation audit: mE (a frozen scan timer), mF (a re-clickable Scan button)
+// and mG (rate-limit no longer classified) each survived the whole suite, as did mI
+// (deleting the '&' rule of esc). These tests pin the contracts behind those lines.
+
+test("esc: the full escape table is pinned — the & rule carries the data-symbol round-trip", () => {
+  const els = new Map();
+  const makeEl = (id) => ({
+    id, value: "", innerHTML: "", textContent: "", className: "", style: {}, attrs: {},
+    getAttribute(n) { return this.attrs[n] ?? null; }, scrollIntoView() {},
+  });
+  const sb = {
+    document: {
+      getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+      querySelectorAll: () => [],
+    },
+    fetch: () => new Promise(() => {}), // the boot chains hang; esc/renderTokens need no network
+  };
+  vm.createContext(sb);
+  const m = renderPage().match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(m, "script block is in place");
+  new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb);
+
+  // (a) every rule of the table is load-bearing on its own (the mI mutation removed '&')
+  assert.equal(sb.esc("&"), "&amp;");
+  assert.equal(sb.esc("<"), "&lt;");
+  assert.equal(sb.esc(">"), "&gt;");
+  assert.equal(sb.esc('"'), "&quot;");
+  assert.equal(sb.esc("'"), "&#39;");
+
+  // (b) the invariant the table protects: a registry symbol may itself LOOK like an
+  // entity ('A&amp;B' passes validateRegistryEntry) — the rendered attribute must decode
+  // back to the exact symbol, or the row onclick selects nothing (a silent no-op).
+  const decodeAttr = (v) => v.replace(/&(amp|lt|gt|quot|#39);/g, (_, e) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" }[e]));
+  for (const hostile of ["A&amp;B", "S&P 500", '<x>"\'', "SPYx"]) {
+    sb.renderTokens([{ symbol: hostile, name: "row", issuer: "Backed", events: 1, currentMultiplier: "1" }]);
+    const attr = els.get("tokens").innerHTML.match(/data-symbol="([^"]*)"/)[1];
+    assert.equal(decodeAttr(attr), hostile, `the attribute round-trips the symbol ${JSON.stringify(hostile)}`);
+  }
+});
+
+// A harness variant with a fake clock and a capturable setInterval: the scan timer
+// logic lives inside the interval callback, invisible to the plain runClient harness.
+function runScanClient(route) {
+  const els = new Map();
+  const makeEl = (id) => ({
+    id, value: "", innerHTML: "", textContent: "", className: "", style: {}, attrs: {},
+    getAttribute(n) { return this.attrs[n] ?? null; }, scrollIntoView() {},
+  });
+  const timers = { ticks: [], cleared: 0 };
+  let now = 1_000_000;
+  const FakeDate = Object.assign(function () { return { toISOString: () => "2026-09-25T00:00:00.000Z" }; }, {});
+  FakeDate.now = () => now;
+  const sb = {
+    document: {
+      getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
+      querySelectorAll: () => [],
+    },
+    fetch: (url) => {
+      const hit = route(url);
+      const p = hit instanceof Promise ? hit : Promise.resolve(hit);
+      return p.then((res) => res === undefined
+        ? new Promise(() => {})
+        : { ok: res.ok, status: res.status, json: async () => res.body });
+    },
+    setInterval: (fn, ms) => { timers.ticks.push({ fn, ms }); return timers.ticks.length; },
+    clearInterval: () => { timers.cleared += 1; },
+    Date: FakeDate,
+  };
+  vm.createContext(sb);
+  const m = renderPage().match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(m, "script block is in place");
+  new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb);
+  return { sb, els, timers, advance: (ms) => { now += ms; } };
+}
+
+test("scan UX: the button dims and an honest elapsed timer ticks real seconds (mE/mF pins)", async () => {
+  let resolve;
+  const slow = new Promise((r) => { resolve = r; }); // the chain scan "takes a while"
+  const { sb, els, timers, advance } = runScanClient((url) => url.startsWith("/lots?") ? slow : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+
+  assert.equal(els.get("scan-btn").disabled, true, "the button is disabled while the scan runs");
+  assert.ok(els.get("wallet-out").innerHTML.includes('id="scan-elapsed"'), "an elapsed placeholder is visible from second zero");
+  assert.equal(timers.ticks.length, 1, "a single interval drives the timer");
+
+  advance(3000); // three seconds of wall-clock pass
+  timers.ticks[0].fn();
+  assert.equal(els.get("scan-elapsed").textContent, "3s", "the label shows the real elapsed seconds, not a frozen 0s");
+
+  resolve({ ok: true, status: 200, body: repA });
+  await flush();
+  assert.equal(els.get("scan-btn").disabled, false, "the button re-enables after the scan");
+  assert.equal(timers.cleared, 1, "the interval is cleared on finish");
+  assert.ok(els.get("wallet-out").innerHTML.includes(ADDR_A), "the report replaced the scanning note");
+});
+
+test("scan UX: a 429 without a kind — the human rate-limit sentence, the original in the tooltip (mG pin)", async () => {
+  const { sb, els, timers } = runScanClient((url) => url.startsWith("/lots?")
+    ? { ok: false, status: 429, body: { error: "HTTP 429 — too many requests" } }
+    : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const html = els.get("wallet-out").innerHTML;
+  assert.ok(html.includes("Rate limit reached"), "the human phrase for the rate-limit class (no kind field — the regexp arm decides)");
+  assert.ok(html.includes('title="HTTP 429'), "the original message is kept in the tooltip");
+  assert.ok(!html.includes("undefined"), "no garbage leaked into the note");
+  assert.equal(els.get("scan-btn").disabled, false, "the button re-enabled after the failure");
+  assert.equal(timers.cleared, 1, "the timer stopped");
+});
+
+test("scan UX: a network failure (a fetch reject) — the unreachable sentence, not a bare stack", async () => {
+  const { sb, els } = runScanClient((url) => url.startsWith("/lots?")
+    ? Promise.reject(new Error("fetch failed"))
+    : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const html = els.get("wallet-out").innerHTML;
+  assert.ok(html.includes("Solana RPC is unreachable"), "the human phrase for the network class");
+  assert.ok(html.includes("fetch failed"), "the original error kept in the tooltip");
+});
