@@ -164,8 +164,8 @@ test("a zero pre-ex price — inconclusive, not a division by zero", () => {
     { ts: d("2026", "06", "10"), c: 0 },
   ]);
   assert.equal(r.verdict, "inconclusive");
-  // ROUND9 #5: the guard of both sides — a note about the close AROUND the ex-date (it used to be "pre-ex")
-  assert.match(r.note, /unusable close around the ex-date/); // round 10: a finite guard, a wider wording
+  // the guard of both sides — a note about the close AROUND the ex-date (it used to be "pre-ex")
+  assert.match(r.note, /unusable close around the ex-date/); // a finite guard, a wider wording
 });
 
 test("a broken event — a refusal, not a guess: the type, the date, the amount, the decimals", () => {

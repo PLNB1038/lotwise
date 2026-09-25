@@ -9,7 +9,7 @@ import { parseIsoDateMs } from "../schema/isodate.mjs";
 import { canonicalDecimalString, EVENT_TYPES } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
 
-// Canonicalization of a journal entry AT READ TIME (round 9 fix 15): a journal written by a
+// Canonicalization of a journal entry AT READ TIME : a journal written by a
 // build predating canonicalization carries the raw RPC representation ("5.0") — a string
 // diff against the canonical chain ("5") emitted a phantom MULTIPLIER_CHANGE of the same
 // magnitude. Canonicalizes lastEffective and the multiplier fields of history. An already
@@ -46,19 +46,19 @@ function canonicalizeEntry(entry) {
  *   entry===priorEntry (same reference) when the chain is unreachable — saved unchanged;
  *   unavailableV1 — a v1 entry (no events) with a multiplier ≠ "1" and an unreachable chain:
  *   backfill migration is impossible, the vitrine will show multiplier 1 — the warn must fire,
- *   otherwise "the real 5" silently looks like 1 (a quiet lie, round 4);
+ *   otherwise "the real 5" silently looks like 1 (a quiet lie,;
  *   corrupted — the priorEntry is corrupted (events present but not an array): the history
  *   is distrusted, the step ran fail-closed (see the body of planJournalStep).
  */
 export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
-  // Round 7 (journal adversarial tests): an entry with events-NOT-an-array is
+  // an entry with events-NOT-an-array is
   // CORRUPTED, not "no history". Previously v1/v2 were told apart only by
   // Array.isArray(events), so a garbage field (the string "1→5" instead of an array) silently
   // turned the entry into a "first observation": the replay was empty, backfill re-emitted
   // a duplicate event, and the file stayed shape-valid — the corruption checks
   // could not see it. An absent field (undefined) is a legitimate v1 entry (backfill
   // migration); ANY other non-array value is corruption. Fail-closed semantics
-  // modeled on round 6 (corruption is an explicit state, the evidence survives the write):
+  // modeled on (corruption is an explicit state, the evidence survives the write):
   //   (1) a loud console.error to the operator with the FULL evidence — the broken entry
   //       is serialized into the log; this is the only evidence spot available to the planner:
   //       the journal path never reaches here, and only the serve layer (bootJournalOnchain)
@@ -71,12 +71,12 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
   //   (4) with an unreachable chain entry: null — the broken entry on disk is not touched,
   //       recovery is only possible from the chain fact (the evidence survives the step).
   const priorIsObject = priorEntry !== null && priorEntry !== undefined && typeof priorEntry === "object";
-  // ROUND7 fix 4 + ROUND9 fix 4: a PRIMITIVE entry and an ARRAY entry are the same corruption
+  // +: a PRIMITIVE entry and an ARRAY entry are the same corruption
   // as events-not-an-array. An array is also typeof "object" but is not an entry in structure
   // ({lastEffective, events}): it used to slip into "no history" (base=null), backfill
   // re-emitted a duplicate, the final persist clobbered the evidence; loadJournalOnchain
   // rejects an array at the TOP of the file as corruption — per-entry must do the same.
-  // Round 21 (SRE P2-3): an events array with an INVALID ELEMENT is the same corruption —
+  // an events array with an INVALID ELEMENT is the same corruption —
   // a future/downgraded writer's record used to survive every boot: the replay validation
   // threw, the token was silently dead each session, and the broken record was rewritten
   // to disk forever. An element is trusted only as a non-null object with a KNOWN event
@@ -120,7 +120,7 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
   }
   // The v2 marker of an entry is the events array; v1 entries (without it) are run through
   // backfill: this way a deployed instance self-heals without a manual file migration.
-  // Canonicalization happens BEFORE all comparisons (round 9 fix 15): replay/diff see
+  // Canonicalization happens BEFORE all comparisons : replay/diff see
   // canonical strings.
   const prior = canonicalizeEntry(priorEntry);
   const base = priorIsObject && Array.isArray(prior.events) ? prior : null;
@@ -147,7 +147,7 @@ export function issuerChainComplete(nodes) {
   let oldest = null;
   let oldestTs = Number.POSITIVE_INFINITY;
   for (const n of nodes) {
-    // The same strict parser as the whole date pipeline (schema/isodate.mjs) — round 6,
+    // The same strict parser as the whole date pipeline (schema/isodate.mjs) —,
     // LW2_issuer_chain_complete_dateparse_divergence: this used to be Date.parse, which
     // rolled "2026-02-30T00:00:00Z" over to March 2 and parsed naive time as LOCAL —
     // nodes with such dates passed the gate and then crashed further down
@@ -172,7 +172,7 @@ export function issuerChainComplete(nodes) {
   return { complete: true, reason: null };
 }
 
-// ---- journal persistence (round 5, LW_journal_write_non_atomic) ----
+// ---- journal persistence ----
 // A direct writeFileSync over a live file, interrupted midway (crash/kill in the boot
 // window, disk), left a truncated JSON that on the next start was silently treated as
 // a "first run" (empty journal) — an unrecoverable loss of the entire event history.
@@ -186,13 +186,13 @@ export function issuerChainComplete(nodes) {
  * directory (rename across devices does not work), is fsync'ed and renamed
  * over the target file. An interruption at any moment leaves the previous whole
  * version in place of the journal; the temp file is cleaned up after a failed rename.
- * Since round 6 this delegates to the shared atomicWriteJson (src/fs/atomic.mjs) — the same
+ * Since this delegates to the shared atomicWriteJson (src/fs/atomic.mjs) — the same
  * implementation is used by the tokens.json writers.
  * @param {string} journalPath — path to onchain-journal.json
  * @param {object} journal — map { mint: entry }
  */
 export function saveJournalAtomic(journalPath, journal) {
-  // Round 21 (SRE P3-4): a boot with an unchanged journal used to rewrite the whole file
+  // a boot with an unchanged journal used to rewrite the whole file
   // every time (a 55 MB journal = a 55 MB rewrite per boot, forever). The journal changes
   // only when an observation changes — an identical serialization skips the write entirely.
   // "\n" — the trailing newline atomicWriteJson appends, kept identical for the comparison
@@ -229,7 +229,7 @@ export function loadJournalOnchain(journalPath) {
   }
   let parsed;
   try {
-    // Round 21 (SRE P3-5): a UTF-8 BOM (an editor's fingerprint) makes JSON.parse throw,
+    // a UTF-8 BOM (an editor's fingerprint) makes JSON.parse throw,
     // and a perfectly valid journal went to the corrupted quarantine for it.
     parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch (err) {
@@ -243,7 +243,7 @@ export function loadJournalOnchain(journalPath) {
 }
 
 /**
- * Save the corrupted journal file as evidence BEFORE the first overwrite. Since round 6
+ * Save the corrupted journal file as evidence BEFORE the first overwrite. Earlier,
  * this delegates to the shared preserveCorruptedFile (src/fs/atomic.mjs): it retries rename
  * under other names (AV/indexers hold the file for a moment — a "transient" failure is often
  * cleared by a second attempt) and falls back to copy if rename never succeeded.
@@ -256,7 +256,7 @@ export function preserveCorruptedJournal(journalPath, opts = {}) {
 }
 
 /**
- * Journal boot (round 6, LW2_journal_evidence_clobber_on_failed_preserve): load +
+ * Journal boot, LW2_journal_evidence_clobber_on_failed_preserve): load +
  * evidence save — a single entry point for scripts/serve.mjs. The key guarantee: if the evidence
  * could NOT be saved (preserveFailed), the corrupted original stays in place — and the boot
  * MUST run in read-only mode (persistJournalOnBoot will refuse to write),
@@ -296,7 +296,7 @@ export function bootJournalOnchain(journalPath, opts = {}) {
 export function persistJournalOnBoot(journalPath, journal, { preserveFailed = false } = {}) {
   if (preserveFailed) return { written: false, readonly: true, error: null };
   try {
-    // Wave E (E3-2): merge-under-lock, not a snapshot over the disk — a foreign write
+    // merge-under-lock, not a snapshot over the disk — a foreign write
     // landed in the "boot read → persisted" window used to be silently clobbered.
     saveJournalMerged(journalPath, journal);
     return { written: true, readonly: false, error: null };
@@ -309,7 +309,7 @@ export function persistJournalOnBoot(journalPath, journal, { preserveFailed = fa
 const SYNC_WAIT_CELL = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(SYNC_WAIT_CELL, 0, 0, ms);
 
-// pid liveness (ROUND9 fix 9 semantics from the webhook store-lock): an existing process =
+// pid liveness : an existing process =
 // a live owner, EPERM = someone else's but alive; ESRCH = dead. kill is injected to pin
 // the EPERM branch (on Windows a one-user suite never gets EPERM from process.kill for
 // foreign pids).
@@ -328,19 +328,18 @@ export function isPidAlive(pid, kill = process.kill) {
 
 // Exclusive lock file. The contents are load-bearing: {pid, createdAt} — via pid, a dead
 // owner is broken IMMEDIATELY (an orphan after kill -9), while a live SIGSTOPped process
-// with an old mtime is NOT broken (wave F1 reproduced the TOCTOU of R9 fix 9 for the second
-// lock — closed). Legacy/non-JSON contents — by mtime alone, as in the webhook lock.
+// with an old mtime is NOT broken . Legacy/non-JSON contents — by mtime alone, as in the webhook lock.
 // A future mtime (clock skew) is also a candidate for breaking: waiting staleMs from
 // "tomorrow" is pointless.
 // nowMs is injected (the rate-limiter pattern) — the "exactly staleMs" boundary is pinned
 // deterministically.
 // Returns an fd or null (not taken — degradation; boot must not crash because of a lock).
 export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, nowMs }) {
-  // Wave H4 [P4]: garbage nowMs (null/NaN) used to leak into the age arithmetic
+  // garbage nowMs (null/NaN) used to leak into the age arithmetic
   // (null − mtime = "deep future" = breaking a fresh lock) — we validate the injection.
   if (typeof nowMs !== "function" && !Number.isFinite(nowMs)) nowMs = Date.now;
   const now = typeof nowMs === "function" ? nowMs() : nowMs;
-  // Wave H4 [P3]: the attempt counter is a false metric on Windows (Atomics.wait(5) really
+  // the attempt counter is a false metric on Windows (Atomics.wait(5) really
   // takes ~15.6ms): 700 attempts = 10.9-12s of blocking instead of the "~3.5s" from the
   // R14 comment. The honest ceiling is the wall clock: degradation no later than ~staleMs
   // regardless of OS.
@@ -362,14 +361,14 @@ export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, now
         })();
         if (meta !== null && Number.isInteger(meta?.pid)) {
           // a lock with a pid: a dead owner is broken IMMEDIATELY (an orphan after kill -9
-          // does not burn staleMs — wave F1-4), a live one is not broken AT ALL (a SIGSTOPped
+          // does not burn staleMs), a live one is not broken AT ALL (a SIGSTOPped
           // owner does not lose the update — R9 fix 9), regardless of mtime
           if (!isPidAlive(meta.pid)) unlinkSync(lockPath);
         } else {
           const age = now - statSync(lockPath).mtimeMs;
           // legacy lock — mtime semantics; the future counts only BEYOND ±staleMs:
           // NTFS rounds mtime up by fractions of a ms — a fresh lock must not look like
-          // a "minus-a-millisecond future" (the round 15 pitfall)
+          // a "minus-a-millisecond future" (the pitfall)
           if (age > staleMs || age < -staleMs) unlinkSync(lockPath);
         }
       } catch {
@@ -395,11 +394,11 @@ export function acquireSyncLock(lockPath, { staleMs, attempts, retryPauseMs, now
 }
 
 /**
- * Merge-under-lock of the journal (wave E, E3-2). The boot is not the only writer: a manual
+ * Merge-under-lock of the journal . The boot is not the only writer: a manual
  * fix or a second process could land an entry in the window between the read at startup and
  * the final persist; a snapshot over the disk clobbered it. Under the lock file we re-read
  * the disk and merge BY MINT: our entries are fresher (they win for their mints), foreign
- * mints survive. File unreadable/broken — we write our own snapshot (as before round 14:
+ * mints survive. File unreadable/broken — we write our own snapshot (as before:
  * the preserve decision lives at the persistJournalOnBoot level). Lock not acquired (a live
  * neighbor holds it longer than staleMs, disk full) — we write without the lock: no worse
  * than the status quo.
@@ -417,7 +416,7 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
   try {
     let merged = { ...journal };
     const existing = loadJournalOnchain(journalPath);
-    // round 24 (ops S2): the boot path rewrote the WHOLE journal on every boot even with
+    // the boot path rewrote the WHOLE journal on every boot even with
     // zero changes (a 50 MB file = a 50 MB rewrite per boot). The loaded file's raw text
     // is already in hand: an identical serialization skips the write entirely.
     const serialized = JSON.stringify(merged, null, 1) + "\n";
@@ -426,7 +425,7 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
     }
     if (existing.ok) {
       for (const [mint, entry] of Object.entries(existing.journal)) {
-        // Round 22 (security): a "__proto__"/"constructor" key from a foreign file is neither a mint nor data —
+        // a "__proto__"/"constructor" key from a foreign file is neither a mint nor data —
         // "in" matched it against the prototype (the entry silently vanished on save), and a plain
         // assignment would mutate the prototype instead of adding data. Skipped LOUDLY.
         if (mint === "__proto__" || mint === "constructor" || mint === "prototype") {
@@ -455,7 +454,7 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
 }
 
 /**
- * Round 24 (ops S5): a killed writer leaves .tmp debris forever (18.6 MB after ten
+ * a killed writer leaves .tmp debris forever (18.6 MB after ten
  * kill -9 cycles in the round-24 repro; nothing in the repo ever swept them). A tmp file
  * is garbage by definition — the atomic write either renamed it into place or the process
  * died mid-write. Only ANCIENT files are swept: a live concurrent writer's fresh tmp is

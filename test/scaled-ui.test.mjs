@@ -52,7 +52,7 @@ test("before the pending activation: the effective = active; the divergence from
   assert.equal(matched.verdict, "ok");
 });
 
-// ---- round 2: the reconcile of the plans on the date boundary ----
+// ----: the reconcile of the plans on the date boundary ----
 
 test("the pending activates ON the day of its date even by a date-only query", () => {
   const onChain = {
@@ -74,7 +74,7 @@ test("a garbage reconcile date — ScaledUiError, not a quiet string comparison"
   );
 });
 
-// ---- round 4: the guards of the on-chain state parser ----
+// ----: the guards of the on-chain state parser ----
 
 // A synthetic mint with scaledUiAmountConfig in the given state.
 const mintWith = (state) => ({

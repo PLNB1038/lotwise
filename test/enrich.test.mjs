@@ -258,7 +258,7 @@ test("the real data/tokens.json is consistent: every record's sourceDecimals —
   }
 });
 
-// ---- round 21 (SRE P2-1): the CLI's own exit contract on a broken registry ----
+// ---- (SRE P2-1): the CLI's own exit contract on a broken registry ----
 // serve degrades a corrupt registry with evidence and a /health flag, webhook-deliver exits
 // 2 — enrich used to die with a raw SyntaxError stack and exit 1, and a non-array file
 // slipped through as a silent "filled=0" success. The wrapper now refuses before any I/O.

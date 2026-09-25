@@ -1,5 +1,5 @@
 // Arg parser of scripts/serve.mjs. Moved out of the script into a testable module
-// (round 7 fix 10): --port abc used to burn the whole boot (minutes of RPC quota) and failed
+// : --port abc used to burn the whole boot (minutes of RPC quota) and failed
 // only at listen; --port=8787 was silently ignored; --rpc as the last argument silently
 // killed the env fallback (rpcUrl = undefined → the whole boot serving honest 503s).
 // Guards BEFORE any I/O — modeled on --max-txs, which already knew how.
@@ -22,7 +22,7 @@ function readFlag(argv, name) {
   if (eqIdx !== -1) {
     const value = argv[eqIdx].slice(eq.length);
     // an empty value = missing: "" for host made listen bind ALL interfaces
-    // (round 9 fix 1), for rpc — a boot of empty 503s; reject, not a silent default detour
+    // , for rpc — a boot of empty 503s; reject, not a silent default detour
     if (value === "") throw new ServeArgsError(`--${name} requires a non-empty value`, `--${name}`);
     return value;
   }
@@ -49,7 +49,7 @@ export function parseServeArgs(argv, env = process.env) {
   let port = 8787;
   const portRaw = readFlag(argv, "port");
   if (portRaw !== undefined) {
-    // digits-only (round 9 fix 1b): Number() generously eats 0x10/1e2 — the same discipline
+    // digits-onlyb): Number() generously eats 0x10/1e2 — the same discipline
     // as /multiplier?raw (BigInt silently accepts "0x10")
     if (!/^\d+$/.test(portRaw)) {
       throw new ServeArgsError(`--port must be an integer between 1 and 65535, got ${JSON.stringify(portRaw)}`, "--port");
@@ -62,7 +62,7 @@ export function parseServeArgs(argv, env = process.env) {
 
   const host = readFlag(argv, "host") ?? "127.0.0.1";
   if (/\s/.test(host)) {
-    // wave B: "not a host" passed the parser and crashed listen AFTER the full boot I/O
+    // "not a host" passed the parser and crashed listen AFTER the full boot I/O
     // (registry+journal+RPC quota); whitespace in host is always a typo
     throw new ServeArgsError(`--host must not contain whitespace, got ${JSON.stringify(host)}`, "--host");
   }
@@ -73,7 +73,7 @@ export function parseServeArgs(argv, env = process.env) {
     if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("not http(s)");
   } catch {
     // booting into honest 503s on a garbage URL is legal, but rejecting BEFORE I/O is cheaper
-    // (the same family as round 7 fix 10 / round 9 fix 1)
+    // (the same family as /
     throw new ServeArgsError(`--rpc must be a valid http(s) URL, got ${JSON.stringify(rpcUrl)}`, "--rpc");
   }
 
@@ -90,7 +90,7 @@ export function parseServeArgs(argv, env = process.env) {
   return { port, host, rpcUrl, maxTxs };
 }
 
-// DNS-resolve --host BEFORE boot (round 13 fix 3): the parser is synchronous and sees only
+// DNS-resolve --host BEFORE boot : the parser is synchronous and sees only
 // lexics — "no-such-host.invalid" burned the whole boot I/O (the registry, the journal, ~15 RPC calls
 // of history) and failed only at listen with ENOTFOUND. One lookup is cheaper than a boot; IP literals
 // and localhost resolve in libc without the network. lookup is injectable for tests.
@@ -102,7 +102,7 @@ export async function assertHostResolvable(host, lookup = dnsLookup) {
   }
 }
 
-// A busy port BEFORE boot I/O (wave E, E3-4): EADDRINUSE used to be caught only at listen
+// A busy port BEFORE boot I/O : EADDRINUSE used to be caught only at listen
 // AFTER the full boot — a double start burned registry/journal/15 RPC calls. A one-off
 // bind probe closes the typical case; the race of "two trying in the same millisecond" remains
 // covered by the post-boot EADDRINUSE failure (a clear exit 1) — a known remainder.
@@ -126,7 +126,7 @@ export function checkPortAvailable(port, host = "127.0.0.1") {
 }
 
 /**
- * Round 21 (SRE P3-1): an env limit that is SET but invalid (garbage, 0, negative,
+ * an env limit that is SET but invalid (garbage, 0, negative,
  * 1e21 — beyond Number.MAX_SAFE_INTEGER, which silently disables the limiter) used to
  * fall back to the default without a word. The fallback stays (operators keep booting),
  * but it is now loud, and the ceiling is the safe-integer range.

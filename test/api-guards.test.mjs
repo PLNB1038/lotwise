@@ -1,6 +1,6 @@
-// formerly round7-guards.test.mjs
-// Round 7 regression tests of the Lotwise review — "guards" (wave 4).
-// ROUND7 findings:
+
+// regression tests of the Lotwise review — "guards" .
+// regression findings:
 //   #8  XFF buckets keyed on the FIRST element (client-supplied in an appending chain) —
 //       rotating the header mints unlimited buckets; the key must be the LAST
 //       element (the one our trusted proxy appended).
@@ -31,7 +31,7 @@ import { loadRegistry } from "../src/registry/registry.mjs";
 const MINT = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
 const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu";
 
-// ---- ROUND7 #8: the rate-limit key = the LAST XFF element ----
+// ---- the rate-limit key = the LAST XFF element ----
 
 test("ratelimit: spoofing the first XFF element does not mint buckets — the key is the last one", async () => {
   const registry = await loadRegistry("data/tokens.json");
@@ -59,9 +59,9 @@ test("ratelimit: spoofing the first XFF element does not mint buckets — the ke
   }
 });
 
-// ---- ROUND7 #9: esc() for numeric-by-contract fields of the vitrine ----
+// ---- esc() for numeric-by-contract fields of the vitrine ----
 
-// the page client script in vm with a DOM stub (the ui.test.mjs pattern, round 4)
+// the page client script in vm with a DOM stub (the ui.test.mjs pattern,
 function runClient() {
   const els = new Map();
   const makeEl = (id) => ({
@@ -112,7 +112,7 @@ test("vitrine: multiplier.events — a string field is escaped too", () => {
   assert.ok(html.includes("&lt;script&gt;"));
 });
 
-// ---- ROUND7 #10: the serve.mjs flag parser ----
+// ---- the serve.mjs flag parser ----
 
 test("flags: --port=8787 (equals form) parses, not silently ignored", () => {
   assert.equal(parseServeArgs(["--port=18899"]).port, 18899);
@@ -143,7 +143,7 @@ test("flags: the --max-txs guard moved into the parser without losing the messag
   assert.equal(parseServeArgs(["--max-txs", "500"]).maxTxs, 500);
 });
 
-// ---- ROUND7 #14: tx === null let undefined through ----
+// ---- tx === null let undefined through ----
 
 test("tx: an RPC response without result and without error — an honest null (skip), not a TypeError of the whole scan", async () => {
   const lyingGateway = { call: async () => undefined };
@@ -151,7 +151,7 @@ test("tx: an RPC response without result and without error — an honest null (s
   assert.equal(out, null);
 });
 
-// ---- ROUND7 #15: the pending multiplier is validated like active ----
+// ---- the pending multiplier is validated like active ----
 
 test("scaled-ui: pending garbage (\"abc\") — ScaledUiError, symmetric to active", () => {
   const mint = {
@@ -163,7 +163,7 @@ test("scaled-ui: pending garbage (\"abc\") — ScaledUiError, symmetric to activ
   assert.throws(() => parseScaledUiAmount(mint), (err) => err instanceof ScaledUiError && /newMultiplier|pending/i.test(err.message));
 });
 
-// ---- ROUND7 #6: metadataSources accepts the output of our own client ----
+// ---- metadataSources accepts the output of our own client ----
 
 test("tessera metadataSources: camelCase externalUrl (the client output) is not lost", () => {
   const out = tesseraSources({
@@ -178,7 +178,7 @@ test("prestocks metadataSources: camelCase externalUrl (the client output) is no
   assert.deepEqual(out, ["https://prestocks.com/openai", "https://prestocks.com/terms"]);
 });
 
-// ---- ROUND7 #13: toDecimalString — exponential number notation ----
+// ---- toDecimalString — exponential number notation ----
 
 test("xstocks normalize: a multiplier number 1e-7 → an exact positional string, the token does not die", () => {
   const events = multiplierHistoryToEvents([
@@ -200,7 +200,7 @@ test("xstocks normalize: ordinary numbers/strings ride as before", () => {
   assert.equal(events2[0].multiplierTo, "1.5");
 });
 
-// round 21 (F3): the declarations channel is visible in /health like every other source
+// the declarations channel is visible in /health like every other source
 test("/health carries the declarations stats when the server is given them", async () => {
   const server = await createApiServer({ registry: [], declarationsStats: { loaded: 2, ok: 1 } });
   const { port } = server.address();
@@ -212,7 +212,7 @@ test("/health carries the declarations stats when the server is given them", asy
   }
 });
 
-// round 21 (SRE P3-1): an env limit that is SET but invalid used to fall back silently
+// an env limit that is SET but invalid used to fall back silently
 // (1e21 even disabled the limiter — Number.isInteger accepts it). Loud warn + default now.
 test("envPositiveInt: unset is silent; invalid values warn loudly and fall back; 1e21 is rejected as unsafe", () => {
   const warns = [];

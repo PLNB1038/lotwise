@@ -1,4 +1,4 @@
-// Adversarial boundaries of the wallet scanner and the FIFO report (round 7).
+// Adversarial boundaries of the wallet scanner and the FIFO report.
 // The ACTUAL behavior is pinned via a mock client (no network, as is the custom in these tests).
 // History: the "GAP:" mark recorded a hole/asymmetry of the current behavior (src was
 // not fixed); the GAPs found in that round (failed-tx, a doubled balance, the maxTxs
@@ -62,7 +62,7 @@ const txOf = (sig_, balances, { slot = 1, blockTime = 1750000000, version } = {}
   },
 });
 
-// a clean report over an assembled scan (as in round5-lots-report)
+// a clean report over an assembled scan (assembled scan fixture)
 const scanOf = (txs, extra = {}) => ({
   owner: OWNER, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, accounts: {}, ...extra,
 });
@@ -72,7 +72,7 @@ const delta1 = (sig_, slot, deltaRaw, blockTime = slot * 100) => ({
   deltas: [{ owner: OWNER, mint: SPYx, preRaw: 0n, postRaw: 0n, deltaRaw }],
 });
 
-// A spy on console.error (as in round6-dedup-warn): the scanner warn is the only expected channel
+// A spy on console.error : the scanner warn is the only expected channel
 async function captureConsoleError(fn) {
   const lines = [];
   const orig = console.error;
@@ -172,7 +172,7 @@ test("scanWallet: duplicates before the cap — the uniques are picked up, trunc
   assert.equal(scan.fetched, 2);
 });
 
-test("scanWallet: pagination by before — the cursor = the last signature of a page; a short page is probed until confirmed as the end (round 8)", async () => {
+test("scanWallet: pagination by before — the cursor = the last signature of a page; a short page is probed until confirmed as the end", async () => {
   const pages = { [OWNER]: [sig("s0", 1), sig("s1", 2), sig("s2", 3), sig("s3", 4), sig("s4", 5)] };
   const txs = {};
   for (const s of ["s0", "s1", "s2", "s3", "s4"]) {

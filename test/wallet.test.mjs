@@ -365,7 +365,7 @@ test("/lots: the scanner threw an RpcError-like — a 503 with kind", async () =
   });
 });
 
-// ---- round 2: the multi-account nature of one mint ----
+// ----: the multi-account nature of one mint ----
 
 test("two accounts of one mint (ATA + legacy): a scan of both, the balance = the sum, the report converges", async () => {
   const registry = await loadRegistry("data/tokens.json");
@@ -418,7 +418,7 @@ test("the chronology by slot: blockTime=null does not break the FIFO order", asy
   assert.deepEqual(scan.txs.map((t) => t.signature), ["early", "late-null-bt"]);
 });
 
-// ---- round 4: invariants and holes of the test coverage ----
+// ----: invariants and holes of the test coverage ----
 
 test("scanWallet: getTransaction returned null — the tx into skipped with an honest reason, fetched counted", async () => {
   const registry = await loadRegistry("data/tokens.json");

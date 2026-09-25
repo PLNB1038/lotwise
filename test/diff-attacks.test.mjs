@@ -1,10 +1,10 @@
-// formerly round15-f1-fixes.test.mjs
-// Round 15 — the fixes of the diff attack (wave F1):
+
+// — the fixes of the diff attack :
 //   F1-1 [P2] enrich: the "?? default" ate the null flag errors — the script printed a refusal
 //        and THEN went to the network/rewrote the registry. Now: a broken flag = exit 2 BEFORE any
 //        I/O (0 requests, the file untouched).
 //   F1-2 [P3] enrich: the equals form --registry=<path> was silently ignored —
-//        the default file was enriched (a repeat of ROUND7 #10a). Now the grammar = serve.
+//        the default file was enriched (the old default-file bug). Now the grammar = serve.
 //   F1-3 [P3] the journal lock: pid liveness (the semantics of R9 #9 from the webhook lock) — a live
 //        stuck owner is NOT broken by mtime; a dead pid is broken immediately.
 //   F1-4 [P3] a future mtime of the lock (a clock skew) — broken immediately, without a 10s wait.

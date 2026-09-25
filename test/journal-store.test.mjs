@@ -1,4 +1,4 @@
-// Round 5, the finding LW_journal_write_non_atomic: the persistence of the on-chain journal.
+// finding LW_journal_write_non_atomic: the persistence of the on-chain journal.
 // (a) the save is atomic (a temp in the same directory + rename, no litter and truncated files);
 // (b) a broken journal file at load — an explicit "corrupted" state, not a quiet "empty journal".
 import test from "node:test";
@@ -159,9 +159,9 @@ test("the interruption scenario: a new write does not clobber the corrupted file
 });
 
 
-// ---- round 21 SRE P3: the journal's own BOM and rewrite hygiene ----
+// ---- SRE P3: the journal's own BOM and rewrite hygiene ----
 
-test("journal: a BOM-prefixed valid journal loads (round 21, SRE P3-5 — not quarantined)", () => {
+test("journal: a BOM-prefixed valid journal loads P3-5 — not quarantined)", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   writeFileSync(p, "\ufeff" + JSON.stringify({ ["Mint11111111111111111111111111111111"]: { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] } }, null, 1) + "\n");
@@ -171,7 +171,7 @@ test("journal: a BOM-prefixed valid journal loads (round 21, SRE P3-5 — not qu
   assert.equal(r.journal["Mint11111111111111111111111111111111"].lastEffective, "5");
 });
 
-test("journal: saveJournalAtomic skips the write when the serialization is unchanged (round 21, SRE P3-4)", () => {
+test("journal: saveJournalAtomic skips the write when the serialization is unchanged P3-4)", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   const journal = { ["Mint11111111111111111111111111111111"]: { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] } };
@@ -185,7 +185,7 @@ test("journal: saveJournalAtomic skips the write when the serialization is uncha
   assert.equal(third.written, true, "a changed observation writes again");
 });
 
-// round 22 (security): a __proto__ key in a foreign journal file is skipped LOUDLY on
+// a __proto__ key in a foreign journal file is skipped LOUDLY on
 // merge — it used to silently vanish ("in" matched the prototype) or would have mutated
 // it; real mints survive the merge alongside
 test("saveJournalMerged: a dangerous key is skipped loudly, real mints survive", (t) => {
@@ -212,7 +212,7 @@ test("saveJournalMerged: a dangerous key is skipped loudly, real mints survive",
   assert.equal(errLog.mock.callCount(), 1, "the skip is loud — silently dropping is the bug this pins");
 });
 
-// round 24 (ops S2): the boot merge path skips the write when nothing changed — a 50 MB
+// the boot merge path skips the write when nothing changed — a 50 MB
 // journal used to be fully rewritten on every boot with zero changes
 test("saveJournalMerged: an unchanged merge does not rewrite the file (the boot path's skip)", () => {
   const dir = freshDir();
@@ -231,7 +231,7 @@ test("saveJournalMerged: an unchanged merge does not rewrite the file (the boot 
   assert.equal(third.written, true, "a real change writes");
 });
 
-// round 24 (ops S5): ancient .tmp debris is swept at boot; a fresh concurrent writer's
+// ancient .tmp debris is swept at boot; a fresh concurrent writer's
 // tmp and a foreign file's tmp are untouchable
 test("sweepStaleTmpFiles: removes only ancient journal .tmp debris", () => {
   const dir = freshDir();

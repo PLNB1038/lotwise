@@ -36,7 +36,7 @@ const KNOWN_KEYS = new Set([
  * Issuer's plan (PreStocks metadata) -> canonical events.
  * The current schema carries only identity fields, so the honest result is [].
  * Unknown keys are NOT silently ignored: possible future event fields
- * (modeled on round 6, "silent data loss") are highlighted to the operator in
+ * (modeled on, "silent data loss") are highlighted to the operator in
  * console.error — observability instead of blocking a token over cosmetics.
  * @param {{name, symbol, description?, image?, external_url?, terms?}} metadata — as fetchTokenMetadata returns OR the raw endpoint JSON
  * @param {{sourceUrl?: string}} [ctx] — source URL for the log note
@@ -72,7 +72,7 @@ export function metadataSources(metadata) {
   }
   // externalUrl — the camelCase output of our own client (src/issuer/prestocks.mjs),
   // external_url — the raw identity JSON: both are legitimate inputs (KNOWN_KEYS blesses
-  // the client form); losing the token page link from sources is not allowed (ROUND7 fix 6)
+  // the client form); losing the token page link from sources is not allowed 
   return [metadata.external_url ?? metadata.externalUrl, metadata.terms].filter((s) => typeof s === "string" && s.length >= 4);
 }
 

@@ -1,7 +1,7 @@
-// Round 21 (finance audit F1): the dividend accrual base is the position held ON THE
+// the dividend accrual base is the position held ON THE
 // EX-DATE, replayed from the scan window's deltas — not today's open FIFO lots. The old
 // endpoint fed the engine the post-sale lot queue, so any sale after the ex-date silently
-// shrank the dividend income (Scenario B of _bughunt/round21-f1: buy 200, ex-date, sell 100
+// shrank the dividend income (buy 200, ex-date, sell 100
 // → the answer was [] or half the truth). Dividends are declared per ex-date holding;
 // the report must not lose them to a later disposal.
 import test from "node:test";
@@ -130,14 +130,14 @@ test("accruals: a scan gap (spend without coverage) flags the base incomplete", 
   await withServer(async (base) => {
     const rows = await (await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
     assert.equal(rows[0].baseIncomplete, true, "the window never saw the opening balance — the ex-date base is not guaranteed");
-    assert.equal(rows[0].totalRaw, null, "round 22 (F4): a negative base is not a number — the window knows only the disposal; null, not -100 an integrator would subtract");
+    assert.equal(rows[0].totalRaw, null, " (F4): a negative base is not a number — the window knows only the disposal; null, not -100 an integrator would subtract");
   }, {
     events: [divEvent("2026-02-01", 1)],
     txs: [aTx("s1", -100n, "2026-01-15")], // sells what predates the window: a gap
   });
 });
 
-// Round 22 (finance-v2 F1): the engine's semantic dividend dedup (round 21) must reach
+// the engine's semantic dividend dedup must reach
 // the ONLY live consumer. One dividend reaching the store from two sources (a press page
 // and an API node) used to double /accruals rows after the ex-date rewrite bypassed the engine.
 test("accruals: the same dividend from two sources — a single row, not doubled income", async () => {
@@ -160,7 +160,7 @@ test("accruals: the same dividend from two sources — a single row, not doubled
   });
 });
 
-// Round 22 (F3): a truncated scan window silently understated the ex-date base — the
+// a truncated scan window silently understated the ex-date base — the
 // flag now travels like gaps and undated transactions do.
 test("accruals: a truncated window flags the base incomplete (history beyond the cap is unknown)", async () => {
   const { scanWallet } = await import("../src/wallet/scan.mjs");
@@ -184,7 +184,7 @@ test("accruals: a truncated window flags the base incomplete (history beyond the
   })();
 });
 
-// Round 24 (contract v4, F1): the store order must not decide money. A tz twin's
+// the store order must not decide money. A tz twin's
 // effectiveDate ("2026-02-01T00:00:00+02:00") has a different INSTANT than "2026-02-01" —
 // the dedup kept the first and ITS instant became the base, so the same declarations in
 // two row orders answered 200 vs a confident "0". The base is now the UTC midnight of the
@@ -202,7 +202,7 @@ test("accruals: tz twins in EITHER store order give the same money (the ex-day's
   }
 });
 
-// Round 24 (F2): the engine's dedup identity is the same calendar day — the route and the
+// the engine's dedup identity is the same calendar day — the route and the
 // library must not diverge on the seam f704599 was fixing.
 test("engine: applyEvents dedups tz twins of one calendar ex-day (parity with the route)", async () => {
   const { applyEvents } = await import("../src/lots/lots.mjs");
@@ -218,7 +218,7 @@ test("engine: applyEvents dedups tz twins of one calendar ex-day (parity with th
   assert.equal(accruals.length, 1, "the engine sees one dividend, like the route");
 });
 
-// Round 24 (F3): a poisoned-date event must not make /events ordering undefined — garbage
+// a poisoned-date event must not make /events ordering undefined — garbage
 // sorts to the end deterministically instead of a NaN comparator.
 test("events: a poisoned-date event sorts to the END, deterministically, valid rows stay chronological", async () => {
   await withServer(async (base) => {

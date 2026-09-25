@@ -75,7 +75,7 @@ function readEvents(opts) {
   }
   let parsed;
   try {
-    // empty/whitespace stdin — an honest empty list (no-op), not a launch error (wave D2)
+    // empty/whitespace stdin — an honest empty list (no-op), not a launch error 
     parsed = raw.trim() === "" ? [] : JSON.parse(raw);
   } catch (err) {
     throw new Error(`events do not parse: ${err.message}`);
@@ -126,7 +126,7 @@ export async function main(argv = [], { fetcher = fetch, sleep = defaultSleep } 
     console.error(`[webhook-deliver] subscriptions: ${err.message}`);
     return 2;
   }
-  // Wave I2 (integrator): the registry resolves subscription symbols — canonical
+  // the registry resolves subscription symbols — canonical
   // events carry only mint, so a ["SPYx"] subscription without the map silently delivered
   // nothing. Paths are relative to CWD, like --subscriptions. A missing/broken registry — warning
   // and matching without the map (previous behavior), not a delivery refusal.
@@ -156,6 +156,6 @@ const invokedAs = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 const isSelf =
   import.meta.url === invokedAs ||
   (process.platform === "win32" && import.meta.url.toLowerCase() === invokedAs.toLowerCase());
-// process.exitCode instead of process.exit (wave D2): exit over live undici sockets
+// process.exitCode instead of process.exit : exit over live undici sockets
 // crashed the process AFTER a successful report (0xC0000409 on win, code 127) — 0/1/2 contract
 if (isSelf) process.exitCode = await main(process.argv.slice(2));

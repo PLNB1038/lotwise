@@ -137,7 +137,7 @@ test("integration: the live fixture → the client → the normalizer → a vali
   assert.equal(events[3].multiplierTo, "1.005714560286254");
 });
 
-// ---- round 2: dates as numbers, not lexicographically ----
+// ----: dates as numbers, not lexicographically ----
 
 test("a date-only query: an event of day D is considered already effective", () => {
   const e = ev({ effectiveDate: "2026-06-18T00:00:00.000Z", multiplierFrom: "1", multiplierTo: "1.005" });
@@ -162,7 +162,7 @@ test("a garbage date in multiplierAt — TimelineError, not a silent lie", () =>
   assert.throws(() => tl.multiplierAt("not-a-date"), TimelineError);
 });
 
-// ---- round 4: strict dates (schema/isodate.mjs) ----
+// ----: strict dates (schema/isodate.mjs) ----
 
 // The same battery of garbage as in test/events.test.mjs (the schema) — here the second barrier:
 // the timeline cannot be built from garbage even past the schema.
@@ -209,7 +209,7 @@ test("canonical date formats work in the scale (an anti-overreach of the strict 
   }
 });
 
-// ---- round 4 (P4): a single event with a broken date — loud, as with 2+ ----
+// ---- (P4): a single event with a broken date — loud, as with 2+ ----
 
 test("a SINGLE event with an effectiveDate null — TimelineError, not a quiet \"baseline\"", () => {
   // before the fix: for 1 element the comparator was not called → a step with at:null got into steps,
@@ -230,7 +230,7 @@ test("a SINGLE event with an effectiveDate roll-over (\"2026-02-30\") is a loud 
   );
 });
 
-// ---- round 4: the invariants confirmed by the fuzzer (seed 20260919) ----
+// ----: the invariants confirmed by the fuzzer (seed 20260919) ----
 
 function permutations(arr) {
   if (arr.length <= 1) return [arr];
@@ -294,7 +294,7 @@ test("the reconstruction invariant: whole·den + remainder = qty·num, 0 ≤ rem
   }
 });
 
-// ---- round 4 (P3): the normalizer — a sort by moment of time, not by string ----
+// ---- (P3): the normalizer — a sort by moment of time, not by string ----
 
 test("a sort by moment: mixed precision within a second no longer flips the chronology", () => {
   // as the API serves it — the newest on top. localeCompare put ".500Z" BEFORE "Z"

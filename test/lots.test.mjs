@@ -132,7 +132,7 @@ test("a MULTIPLIER_CHANGE — a no-op for raw lots (the multiplier lives in the 
   assert.equal(applied, 1);
 });
 
-// Round 21 (finance audit F4): the same dividend reaching the engine from two sources
+// the same dividend reaching the engine from two sources
 // (a press page and an API node — different sourceUrl, identical economics) must accrue
 // ONCE. The producer dedups only exact duplicates (sourceUrl is part of its key), so the
 // engine dedups semantically: same mint + same ex-date + same per-unit amount.

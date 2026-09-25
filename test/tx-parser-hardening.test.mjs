@@ -1,13 +1,13 @@
-// formerly round16-h3.test.mjs
-// Round 16 — wave H3 [P1×3 + P2]: the transaction layer of the scan.
+
+// the transaction layer of the scan.
 //   H3-1 [P1] a single poison-tx with garbage meta crashed the ENTIRE scan (8 TypeError vectors) —
-//          the wallet became permanently unscannable. The ROUND7 #14 contract "a broken tx =
+//          the wallet became permanently unscannable. The contract "a broken tx =
 //          skipped with a reason" must cover parser throws too.
 //   H3-2 [P1] a persistent RpcError on ONE tx (-32015 on versioned) — the same lethal
 //          outcome via the rpc client's immediate throw.
 //   H3-3 [P1] getTokenAccountsByOwner: a non-array value and garbage entries (pubkey 12345,
 //          amount "1e6", broken base58) — raw TypeErrors from scanWallet and broken addresses in
-//          the signature sources (a mirror of ROUND9 #3, closed only for signatures).
+//          the signature sources (the same guard signatures already have).
 //   H3-4 [P2] a tx with meta:null (an indexer lag) silently vanished: fetched+1, neither in txs nor in
 //          skipped — a fail-closed violation. Now — an honest "tx unavailable" skip.
 import test from "node:test";

@@ -111,7 +111,7 @@ export function metadataSources(metadata) {
     .filter((s) => typeof s === "string");
   // externalUrl is the camelCase output of our own fetchTokenMetadata, external_url is the raw
   // metadata JSON: composing the two exports must not lose the project link from the
-  // provenance list (round 7 fix 6); attributes are already accepted in both spellings
+  // provenance list ; attributes are already accepted in both spellings
   return [metadata.external_url ?? metadata.externalUrl, ...terms]
     .filter((s) => typeof s === "string" && s.length >= 4);
 }

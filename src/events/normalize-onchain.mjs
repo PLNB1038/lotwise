@@ -5,7 +5,7 @@
 // (the chain's best truth about the previous value; intermediate steps between observations
 // are unrecoverable from mint state — a documented limitation, not a guess).
 //
-// Chain invariant (round 4): an event is emitted ONLY if it continues the chain from "1".
+// Chain invariant: an event is emitted ONLY if it continues the chain from "1".
 // MultiplierTimeline requires the base "1" and continuity, otherwise createApiServer falls
 // with TimelineError at startup, while an entry with the poison is already persisted in the
 // journal → a restart replays it → crash again: an eternal boot-loop. A token first seen
@@ -86,7 +86,7 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
   if (entry === null) {
     if (!parsed.hasExtension) {
       // a mint without a rebase mechanism: the parser's default "1" is not a fact, no entry
-      // (wave C4-1: empty {lastEffective:"1"} entries are just noise and bait)
+      // 
       return { event: null, entry: null };
     }
     // First observation: backfill only makes sense if it STARTS the chain from "1".
@@ -101,7 +101,7 @@ export function journalTransition(token, parsed, entry, nowMs = Date.now()) {
     return { event, entry: { lastEffective: effective, observedAt: nowIso, events: event ? [event] : [] } };
   }
 
-  // Wave C4-1 [P1]: a response WITHOUT scaledUiAmountConfig is "no fact", not "a reset to 1":
+  // a response WITHOUT scaledUiAmountConfig is "no fact", not "a reset to 1":
   // the parser honestly returns the default "1" (hasExtension:false), but the diff took it
   // for an observed reset → a phantom X→1, and when the truth returned — an eternal duplicate
   // triplet in the history (the 2400-boot marathon: 1221 violations of this class before the fix).

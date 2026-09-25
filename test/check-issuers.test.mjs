@@ -118,7 +118,7 @@ test("a broken JSON from tessera (the file does not parse) — fail", async () =
 test("an unknown issuer in the registry — fail: nothing to reconcile against", async () => {
   const result = await checkToken({ mint: "DELL2aRKQz7DMq5DrKLtkn47ZCnbxXPZXrSGbkmd13wy", symbol: "DELL", issuer: "acme" }, { fetcher: router({}) });
   assert.equal(result.status, "fail");
-  assert.match(result.reason, /unknown issuer/); // round 19: EN
+  assert.match(result.reason, /unknown issuer/); // EN
 });
 
 // ---------- the network: skipped, not fail ----------
@@ -218,14 +218,14 @@ test("CLI: a confirmed divergence (an unknown issuer) — exit 1 and a fail in -
   const report = JSON.parse(res.stdout);
   assert.equal(report.summary.fail, 1);
   assert.equal(report.summary.clean, false);
-  assert.match(report.results[0].reason, /unknown issuer/); // round 19: EN
+  assert.match(report.results[0].reason, /unknown issuer/); // EN
 });
 
 test("CLI: the human-readable mode prints the TOTAL over a skips-only registry", () => {
   const reg = tempRegistry([TOKENS[3]]);
   const res = spawnSync(process.execPath, [SCRIPT, "--registry", reg], { encoding: "utf8" });
   assert.equal(res.status, 0);
-  assert.match(res.stdout, /TOTAL: ok=0, skipped=1, fail=0/); // round 19: EN
+  assert.match(res.stdout, /TOTAL: ok=0, skipped=1, fail=0/); // EN
 });
 
 test("CLI: a nonexistent registry — exit 2, an unknown flag — exit 2", () => {

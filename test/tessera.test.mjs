@@ -187,7 +187,7 @@ test("metadataSources: external_url and the Terms and Conditions attribute — i
   const raw = FIX("tessera-spacex.json"); // the raw JSON (snake_case trait_type)
   assert.deepEqual(metadataSources(raw), ["https://www.tessera.pe", "https://terms.tessera.pe"]);
   // The same document in our client's spelling (camelCase traitType AND externalUrl —
-  // ROUND7 #6: earlier the fake wore a snake_case external_url, which the real client
+  // earlier the fake wore a snake_case external_url, which the real client
   // does not serve, and the test "covered" the client shape, cementing the lost-link bug)
   const client = { name: "T-SpaceX", symbol: "tSpaceX", externalUrl: "https://www.tessera.pe", attributes: [{ traitType: "Terms and Conditions", value: "https://terms.tessera.pe" }] };
   assert.deepEqual(metadataSources(client), ["https://www.tessera.pe", "https://terms.tessera.pe"]);

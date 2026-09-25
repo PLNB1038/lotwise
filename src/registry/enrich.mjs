@@ -1,4 +1,4 @@
-// Enriching registry decimals from a Jupiter Price API batch response (round 6).
+// Enriching registry decimals from a Jupiter Price API batch response.
 // The logic was moved out of scripts/enrich-decimals.mjs for testability of the two contracts
 // of finding LW2_tokens_json_write_non_atomic:
 //   (1) the write is atomic (atomicWriteJson — a truncated tokens.json crashed the whole service);

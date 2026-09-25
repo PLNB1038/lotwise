@@ -41,7 +41,7 @@ const heldBefore = (lot, effectiveTs, e) => {
 
 /**
  * @param {Array<{id:string, mint:string, owner:string, qtyRaw:bigint, acquiredDate:string, basisRaw:bigint}>} lots
- *   qtyRaw/basisRaw — BigInt ONLY (round 7 fix 18: the JSDoc previously promised int — a number
+ *   qtyRaw/basisRaw — BigInt ONLY: the JSDoc previously promised int — a number
  *   dies with a bare "Cannot mix BigInt", not a LotError; this is an exact-arithmetic engine,
  *   we do no type conversion on input)
  * @param {Array<object>} events — canonical schema events
@@ -70,7 +70,7 @@ export function applyEvents(lots, events) {
 
   const lotsOf = (mint) => out.filter((l) => l.mint === mint);
 
-  // Round 21 (F4): semantic dedup of dividend sightings. The producer's key includes
+  // semantic dedup of dividend sightings. The producer's key includes
   // sourceUrl, so the same dividend reaching the store from two sources (a press page and
   // an API node) survives as two events — and without this gate would accrue twice,
   // doubling the declared income. mint + ex-date + per-unit amount is the dividend's identity.
@@ -78,7 +78,7 @@ export function applyEvents(lots, events) {
 
   for (const e of events) {
     if (e.type === "DIVIDEND_ACCRUAL") {
-      // round 24 (F2): the calendar DAY, matching the route's identity — the library and
+      // the calendar DAY, matching the route's identity — the library and
       // the endpoint must not disagree on the very seam the tz-twin fix was closing
       const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
       if (seenDividends.has(key)) continue;

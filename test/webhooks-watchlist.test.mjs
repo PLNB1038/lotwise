@@ -1,5 +1,5 @@
-// formerly round8-watchlist.test.mjs
-// Round 8 regression tests — the ROUND7 "watch list".
+
+// regression tests — the watch list.
 //   R8-1: signature pagination — a short page ≠ end of history (soft indexer caps):
 //         the end is only on an EMPTY page + a "no progress" guard
 //         (scan.mjs:124, signatures.mjs:15).

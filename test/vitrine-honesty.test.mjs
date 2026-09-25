@@ -1,4 +1,4 @@
-// Round 6 regression tests of the Lotwise review — the src/ui/page.mjs zone (the vitrine).
+// regression tests of the Lotwise review — the src/ui/page.mjs zone (the vitrine).
 // Findings:
 //   LW2_calc_typeerror_on_no_timeline_token — calc() unconditionally reads m.sampleScaledQty.exact:
 //       a short /multiplier response for a token without a timeline ({mint,date,multiplier:"1",events:0})
@@ -10,7 +10,7 @@
 //   LW2_excluded_token_adjusted_row_unmarked — renderWallet for excluded/adjustedAvailable:false
 //       paints the row "adjusted (exact) = raw" (the raw balance passed off as adjusted),
 //       and completeness says nothing about the tokens excluded from multipliers.
-// The client script runs in vm with a DOM stub (the ui.test.mjs / round5-api-ui.test.mjs pattern).
+// The client script runs in vm with a DOM stub (the ui.test.mjs pattern).
 import test from "node:test";
 import assert from "node:assert/strict";
 import { renderPage } from "../src/ui/page.mjs";

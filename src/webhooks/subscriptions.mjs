@@ -75,7 +75,7 @@ export function validateSubscription(sub) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new SubscriptionError("url must be http(s)", "url");
   }
-  // SSRF denylist (round 8): delivery is outbound POSTs from production; a URL with a private/
+  // SSRF denylist: delivery is outbound POSTs from production; a URL with a private/
   // loopback/link-local/metadata address means knocking on your own infrastructure
   // (funnel, keyed RPC, cloud metadata). The input is operator-side; DNS rebinding
   // is out of scope (the name resolves at delivery time), but literal private
@@ -143,9 +143,9 @@ function writeStore(filePath, subs) {
   atomicWriteJson(filePath, subs);
 }
 
-// SSRF denylist for validateSubscription (round 8). Literal addresses and
+// SSRF denylist for validateSubscription. Literal addresses and
 // localhost; DNS resolution at delivery time is out of scope (see the comment above).
-// Wave E: added CGNAT 100.64/10 (A TAILNET IS READY TO DELIVER WEBHOOKS — tailscale
+// added CGNAT 100.64/10 (A TAILNET IS READY TO DELIVER WEBHOOKS — tailscale
 // addresses are exactly this zone) and transition v6: 6to4 2002::/16 (first hextet 0x2002),
 // NAT64 64:ff9b::/96 — wholesale, without parsing the embedded part: operator input must
 // not be able to knock on transition infrastructure.
@@ -154,12 +154,11 @@ function isPrivateV4(a, b) {
   if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT — since wave E
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT —
   return false;
 }
 function isPrivateDeliveryHost(hostname) {
-  // trailing dots stripped BEFORE the checks (wave C: "localhost." resolves to loopback
-  // but is not string-equal to "localhost") — the root form of an FQDN is legitimate for public hosts
+  // trailing dots stripped BEFORE the checks  — the root form of an FQDN is legitimate for public hosts
   const host = String(hostname).toLowerCase().replace(/\.+$/, "").replace(/^\[|\]$/g, ""); // bracketed v6
   if (host === "localhost" || host.endsWith(".localhost")) return true;
   // IPv4 literal: 0/8, 10/8, 127/8, 169.254/16 (incl. 169.254.169.254 metadata), 172.16/12, 192.168/16, 100.64/10
@@ -171,7 +170,7 @@ function isPrivateDeliveryHost(hostname) {
   // ::1, fc00::/7 (fc/fd), fe80::/10 (fe80-febf)
   const v6 = host.split("%")[0];
   if (v6 === "::1" || v6 === "::") return true;
-  // IPv4-mapped IPv6 (round 9 fix 8): ::ffff:127.0.0.1 / ::ffff:a9fe:a9fe (metadata!)
+  // IPv4-mapped IPv6 : ::ffff:127.0.0.1 / ::ffff:a9fe:a9fe (metadata!)
   // pass the hextet checks — expand the embedded v4 and run it through the v4 classifier
   const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
   if (mapped) {
@@ -183,8 +182,8 @@ function isPrivateDeliveryHost(hostname) {
       return isPrivateV4(a, b); // a public embedded v4 — a legitimate address
     }
   }
-  if (/^2002:/.test(v6)) return true; // 6to4 — since wave E
-  if (/^64:ff9b:/.test(v6)) return true; // NAT64 — since wave E
+  if (/^2002:/.test(v6)) return true; // 6to4 —
+  if (/^64:ff9b:/.test(v6)) return true; // NAT64 —
   const first = /^([0-9a-f]{1,4}):/.exec(v6);
   if (first) {
     const x = parseInt(first[1], 16);
@@ -199,10 +198,10 @@ function isPrivateDeliveryHost(hostname) {
  * lost writes with two concurrent CLI calls. The lock is an exclusive-create
  * `<store>.lock` holding {pid, createdAt}. Someone else's FRESH lock — short
  * sync retries (Atomics.wait: updateStore is synchronous). An EXPIRED lock is broken
- * ONLY if its owner is dead (round 9 fix 9: a SIGSTOP-stuck live owner with an old
+ * ONLY if its owner is dead: a SIGSTOP-stuck live owner with an old
  * mtime — breaking it would lose its update; kill(pid,0) tells the dead one apart).
  * A kill -9 orphan self-heals via mtime aging: the default attempts cover the whole
- * staleMs. KNOWN TRADE-OFF (wave B): a dead owner's pid may be recycled by a long-lived
+ * staleMs. KNOWN TRADE-OFF : a dead owner's pid may be recycled by a long-lived
  * process — then the expired lock is never broken (until a manual rm); rare manual
  * intervention versus losing others' updates — accepted. Failing to take the lock is an
  * honest error, not silence.
@@ -232,8 +231,8 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryP
         const age = nowMs() - statSync(lockPath).mtimeMs;
         if (age > staleMs) {
           // breaking only a DEAD owner: a live SIGSTOPped process with an old mtime
-          // must not lose its update (the TOCTOU of round 9 fix 9). A legacy lock without
-          // pid (round 8) — by mtime alone, as before.
+          // must not lose its update (the TOCTOU of. A legacy lock without
+          // pid — by mtime alone, as before.
           let ownerAlive = false;
           try {
             const meta = JSON.parse(readFileSync(lockPath, "utf8"));
@@ -252,7 +251,7 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryP
   } catch (err) {
     // The lock content is load-bearing (pid-liveness breaking): an empty/truncated file
     // is read by the next process as legacy, and it would break a LIVE owner by mtime —
-    // resurrecting the TOCTOU of round 9 fix 9. Release the lock and fail honestly (wave B).
+    // resurrecting the TOCTOU of. Release the lock and fail honestly .
     try { closeSync(fd); } catch { /* already closed */ }
     try { unlinkSync(lockPath); } catch { /* already removed */ }
     throw err;
@@ -365,7 +364,7 @@ function eventContext(event) {
   return { symbol: event.symbol ?? event.newSymbol ?? event.oldSymbol, mint: event.mint };
 }
 
-// Deterministic delivery id (round 7 fix 7): sha256(subscription × canonical JSON
+// Deterministic delivery id : sha256(subscription × canonical JSON
 // of the event). A delivery run over the same events file mints THE SAME
 // X-Lotwise-Delivery — the receiver dedupes across runs, not only within
 // the retries of one delivery (previously each run = randomUUID = a "new" event).
@@ -403,7 +402,7 @@ export async function deliverWebhook(
   event,
   { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, deliveryId, nowMs = Date.now() } = {},
 ) {
-  // round 22 (security): validate the event BEFORE the envelope — deliverToAll checks every
+  // validate the event BEFORE the envelope — deliverToAll checks every
   // event, but a direct deliverWebhook call built X-Lotwise-* headers from unvalidated input
   // (the undici barrier saved the wire; the contract should not depend on it)
   validateEvent(event);
@@ -424,7 +423,7 @@ export async function deliverWebhook(
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       // AbortSignal.timeout — one timeout per attempt (not per series): a hung
-      // receiver does not eat the remaining attempts. redirect:"error" (round 7 fix 5):
+      // receiver does not eat the remaining attempts. redirect:"error" :
       // the default "follow" turned a 302 into an empty GET to a foreign host, where a 2xx
       // counted as delivery while the HMAC-signed headers leaked to the redirect target.
       // A 3xx fails the attempt, like a network failure.
@@ -449,7 +448,7 @@ export async function deliverWebhook(
  * Counters: delivered — (event, subscription) pairs with 2xx; failed — retries exhausted;
  * skipped — pairs without an attempt: an inactive subscription under a match, or an event
  * with no addressee at all ("nobody to deliver to" is not a failure, a separate report line).
- * symbolToMint (wave I2): a Map symbol→mint from the registry. Canonical events carry no
+ * symbolToMint : a Map symbol→mint from the registry. Canonical events carry no
  * symbol (the schema is mint-only) — without the map a ticker subscription silently yielded
  * 0 deliveries with exit 0 (a silent failure, an integrator finding). With the map, subscription
  * symbols resolve to mints BEFORE matching; a symbol outside the map is a warning (the typo
@@ -467,13 +466,13 @@ export async function deliverToAll(events, subs, opts = {}) {
   const { fetcher = fetch, sleep = defaultSleep, timeoutMs = DEFAULT_TIMEOUT_MS, nowMs = Date.now(), symbolToMint = null } = opts;
   for (const event of events) validateEvent(event); // fail-fast before any sends
 
-  // Wave I2: resolve subscription symbols to mints via the registry. A canonical event
+  // resolve subscription symbols to mints via the registry. A canonical event
   // carries no symbol — without this step a ["SPYx"] subscription matches only the raw
   // symbol fields of an operator's file and silently delivers nothing.
   const symbolWarnings = new Set();
   let effectiveSubs = subs;
   if (symbolToMint instanceof Map && symbolToMint.size > 0) {
-    // Round 20: the map is keyed by symbols, but a mint identifier is a documented way
+    // the map is keyed by symbols, but a mint identifier is a documented way
     // to subscribe too (README §Webhooks) and matches the canonical event as-is. Only
     // an identifier in NEITHER the keys nor the values is a warning — a false alarm on
     // every run would train the operator to ignore the channel.

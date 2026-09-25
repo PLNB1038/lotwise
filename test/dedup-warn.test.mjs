@@ -1,4 +1,4 @@
-// Round 6 regression tests — the finding LW2_dedup_id_collision_silent_divergence.
+// regression tests — the finding LW2_dedup_id_collision_silent_divergence.
 // The dedup by the id:... key collapses nodes with the same id without comparing content
 // and WITHOUT any warn — the first occurrence wins silently. If the issuer reuses
 // or corrects an id (an amended event on a fresh page), the corrected value

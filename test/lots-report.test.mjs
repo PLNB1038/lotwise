@@ -1,5 +1,5 @@
-// formerly round5-lots-report.test.mjs
-// Round 5: regression tests for the findings
+
+// regression tests for the findings
 //   LW_applyevents_ignores_acquired_date (src/lots/lots.mjs — date semantics of events)
 //   LW_report_negative_raw_balance (src/wallet/report.mjs — honest name of the window net delta)
 import test from "node:test";

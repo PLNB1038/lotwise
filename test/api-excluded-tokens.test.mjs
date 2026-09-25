@@ -1,6 +1,6 @@
-// formerly round7-api-excluded.test.mjs
-// Round 7 regression tests of the Lotwise review — zone src/api/server.mjs.
-// Finding ROUND7 #1/#2: rounds 5–6 marked excluded tokens in /summary, /lots,
+
+// regression tests of the Lotwise review — zone src/api/server.mjs.
+// Earlier: excluded tokens were marked excluded tokens in /summary, /lots,
 // /multiplier, /events, /accruals, /health — but not /onchain and not /crosscheck.
 //   /onchain: for an excluded token `timelines.get(mint)?.multiplierAt(date) ?? "1"`
 //   fabricated api:"1" and a planes-disagree/ok verdict without reconciling the two real planes,
@@ -23,7 +23,7 @@ const historyNodes = JSON.parse(readFileSync(path.join(dir, "xstocks-spyx-histor
 const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { symbol: "SPYx" }), SPYx);
 
 // Server with a "poisoned" mint (TimelineError at startup → token excluded) — the
-// round6-api-excluded.test.mjs pattern. optsFn adds readers with call counting.
+// the excluded-tokens pattern. optsFn adds readers with call counting.
 async function withPoisonedServer(fn, optsFn = null) {
   const registry = await loadRegistry("data/tokens.json");
   const bad = registry.find((t) => t.symbol === "T-SpaceX");
@@ -45,7 +45,7 @@ async function withPoisonedServer(fn, optsFn = null) {
   }
 }
 
-// ---- ROUND7 #1: /onchain ----
+// ---- /onchain ----
 
 test("/onchain: an excluded token — an honest 400 with a reason, WITHOUT calling the RPC reader and without fabricating api", async () => {
   let readerCalls = 0;
@@ -87,7 +87,7 @@ test("/onchain: a live token — the reader is called, the response carries api/
   }));
 });
 
-// ---- ROUND7 #2: /crosscheck ----
+// ---- /crosscheck ----
 
 test("/crosscheck: an excluded token — an honest 400 with a reason, WITHOUT spending the price provider's quota", async () => {
   const calls = { pool: 0, candles: 0 };

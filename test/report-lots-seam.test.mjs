@@ -1,4 +1,4 @@
-// Round 6: regression tests for the findings
+// regression tests for the findings
 //   LW2_excluded_token_adjusted_row_unmarked (src/wallet/report.mjs — adjustedAvailable)
 //   LW2_blocktime_null_lot_vs_applyevents_loterror (the report↔lots seam — the contract documented,
 //     the behavior does NOT change: the test pins the seam so it is no longer silent)

@@ -1,4 +1,4 @@
-// The operator's dividend declarations file (round 21, F3 wiring): the channel that turns
+// The operator's dividend declarations file, F3 wiring): the channel that turns
 // /accruals from an honest [] into live data. xStocks publishes no per-unit amounts
 // (see the header of dividends.mjs), so DIVIDEND_ACCRUAL enters the store through
 // data/declarations.json — one issuer-confirmed declaration per line:

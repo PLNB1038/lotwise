@@ -7,7 +7,7 @@
  * affected accounts — owner filtering is the consumer's job.
  * opts.moneyMints (Set) additionally parses the money legs (USDC) of the same tx:
  * net deltas per owner land in moneyDeltas — the stable counter-leg is what turns a
- * transfer into a priced trade (round 21). Without the option the response shape is
+ * transfer into a priced trade. Without the option the response shape is
  * byte-identical to what every existing consumer expects.
  */
 export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
@@ -20,9 +20,9 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   ]);
   // null — transaction unavailable on the endpoint; undefined — RPC answered with neither
   // result nor error (a lying/throttling gateway): both are an honest skip of one transaction,
-  // not a TypeError that takes down the entire wallet scan (round 7 fix 14)
+  // not a TypeError that takes down the entire wallet scan 
   if (tx == null) return null;
-  // Wave H3-4 [P2]: a skeleton without meta (indexer lag/partial response) is NOT "none of
+  // a skeleton without meta (indexer lag/partial response) is NOT "none of
   // our mints" but unavailable source data: an honest null → the scan will mark "tx unavailable".
   // Such a tx used to vanish silently: fetched+1, in neither txs nor skipped.
   if (typeof tx !== "object" || tx.meta === null || tx.meta === undefined || typeof tx.meta !== "object") {

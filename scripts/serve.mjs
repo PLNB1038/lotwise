@@ -14,12 +14,12 @@ import { parseServeArgs, ServeArgsError, assertHostResolvable, checkPortAvailabl
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// data paths are anchored at the SCRIPT'S OWN location, not CWD (wave B): a wrong unit
+// data paths are anchored at the SCRIPT'S OWN location, not CWD : a wrong unit
 // WorkingDirectory used to yield a "healthy" empty server (tokens:0, corrupted:0) with the
 // journal under someone else's directory; the systemd WorkingDirectory contract must not be the only guard.
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// Flag guards BEFORE any I/O (ROUND7 #10): --port abc used to survive the whole boot
+// Flag guards BEFORE any I/O : --port abc used to survive the whole boot
 // (minutes of RPC quota) and fail only at listen, and a trailing --rpc silently
 // killed the env fallback. The parser is src/cli/flags.mjs, covered by tests.
 let args;
@@ -45,7 +45,7 @@ const rpcDisplay = (() => {
   }
 })();
 
-// ROUND13 #3: DNS-resolve the host before boot I/O — a garbage --host used to survive the whole boot
+// DNS-resolve the host before boot I/O — a garbage --host used to survive the whole boot
 // (registry+journal+RPC quota) and die only at listen with a cryptic ENOTFOUND.
 try {
   await assertHostResolvable(host);
@@ -57,7 +57,7 @@ try {
   throw err;
 }
 
-// Wave E (E3-4): a busy port also fails BEFORE boot: EADDRINUSE was caught only at listen
+// a busy port also fails BEFORE boot: EADDRINUSE was caught only at listen
 // after a full boot, and a double launch burned RPC quota for a one-second refusal.
 try {
   await checkPortAvailable(port, host);
@@ -71,12 +71,12 @@ try {
 
 // Registry: a truncated data/tokens.json (write interrupted mid-enrich window)
 // used to kill the whole process — RegistryError at top level without catch → unhandled
-// rejection, no degraded mode, no "corrupted"-class diagnostics (round 6,
+// rejection, no degraded mode, no "corrupted"-class diagnostics,
 // LW2_tokens_json_write_non_atomic). Journal pattern: corruption is an explicit state,
 // the evidence is kept nearby, boot continues on an empty registry; the flag goes into /health.
 const loadedRegistry = await loadRegistrySafe(path.join(ROOT, "data", "tokens.json"));
 const registry = loadedRegistry.registry;
-// Round 21 (SRE P2-2): a runaway (glued/merged) registry would boot for hours before
+// a runaway (glued/merged) registry would boot for hours before
 // listening — a loud refusal up front, before any RPC quota is spent.
 assertBootableRegistrySize(registry);
 if (!loadedRegistry.ok) {
@@ -91,7 +91,7 @@ const registryStats = { corrupted: loadedRegistry.corrupted ? 1 : 0 };
 
 const events = [];
 
-// Round 21 (F3): operator-supplied dividend declarations — the only channel that feeds
+// operator-supplied dividend declarations — the only channel that feeds
 // DIVIDEND_ACCRUAL into the live store (xStocks publishes no per-unit amounts). Read-only
 // file: a broken one degrades to "no accruals" with a loud reason, never a dead boot.
 const loadedDeclarations = loadDeclarationsFile(path.join(ROOT, "data", "declarations.json"), registry);
@@ -110,18 +110,18 @@ const rpcForJournal = new RpcClient({ endpoint: rpcUrl });
 // then diff against the previous effective value. Live findings 19.09: SPACEX ×5 (10.06),
 // OPENAI ×1.4861347 (17.07). The journal is runtime state, recoverable from the chain.
 const journalPath = path.join(ROOT, "data", "onchain-journal.json");
-// A broken journal file is NOT a "first run" (round 5): truncated JSON after an interrupted
+// A broken journal file is NOT a "first run": truncated JSON after an interrupted
 // write used to silently yield journal={}, and the whole event history was lost beyond recovery,
 // while /health showed the journal healthy. Now the state is distinguishable: the corrupted flag
 // goes into /health, the damaged file is kept as evidence until the first overwrite,
-// the process does NOT crash (same principle as isolating poisoned records in round 4).
-// Round 6 (LW2_journal_evidence_clobber_on_failed_preserve): if the evidence could NOT be
+// the process does NOT crash (same principle as isolating poisoned records in.
+// if the evidence could NOT be
 // preserved (preserveFailed), boot runs read-only — the final journal write
 // is forbidden in this boot, otherwise it would clobber the corrupted original, the only
 // copy of the history. A restart after the locking process (AV/indexer) goes away will
 // preserve the evidence normally and re-enable writes.
 const journalBoot = bootJournalOnchain(journalPath);
-// round 24 (ops S5): kill -9 debris (ancient .tmp files) is swept once at boot —
+// kill -9 debris (ancient .tmp files) is swept once at boot —
 // nothing else ever cleaned them (18.6 MB after ten kill cycles in the round-24 repro)
 {
   const sweptTmp = sweepStaleTmpFiles(journalPath);
@@ -184,7 +184,7 @@ for (const t of registry.filter((x) => x.issuer !== "backed")) {
 }
 // Final journal write — the single write point (persistJournalOnBoot).
 // In read-only mode (evidence could not be preserved) the write is NOT performed: the corrupted
-// original outlives the boot until restart (round 6).
+// original outlives the boot until restart.
 const journalSaved = persistJournalOnBoot(journalPath, journal, { preserveFailed: journalReadOnly });
 if (journalSaved.readonly) {
   console.error("[serve] journal not written (read-only until restart): this session's events live only in memory, /health.journal.preserveFailed=1");
@@ -309,7 +309,7 @@ const priceProvider = {
 // Rate limits for expensive endpoints per client IP (see src/api/ratelimit.mjs):
 // the demo is public through the funnel, RPC quota is finite; XFF is trusted — the only
 // public path to the port is the funnel, direct connections only come from the tailnet
-const envPositiveInt = envPositiveIntShared; // round 21 (SRE P3-1): loud fallback, moved to src/cli/flags.mjs
+const envPositiveInt = envPositiveIntShared; // loud fallback, moved to src/cli/flags.mjs
 const rateLimits = {
   scan: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12) }, // /lots, /accruals
   rpc: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_RPC_PER_MIN", 60) }, // /onchain, /crosscheck
@@ -323,19 +323,19 @@ try {
       replayed: journalReplayed,
       unavailable: journalUnavailable,
       corrupted: journalCorrupted ? 1 : 0,
-      preserveFailed: journalReadOnly ? 1 : 0, // read-only boot: no final journal write happened (round 6)
-      // wave B: a failed write (disk full/EBUSY) — boot events live only in memory,
+      preserveFailed: journalReadOnly ? 1 : 0, // read-only boot: no final journal write happened
+      // a failed write (disk full/EBUSY) — boot events live only in memory,
       // /health must show it, monitoring must not treat the journal as healthy
       saveFailed: !journalSaved.written && !journalSaved.readonly ? 1 : 0,
     },
-    registryStats, // { corrupted: 0|1 } — /health contract: registry.corrupted (see the round 6 report)
+    registryStats, // { corrupted: 0|1 } — /health contract: registry.corrupted (see the report)
     declarationsStats,
   });
 } catch (err) {
   console.error(`[serve] failed to come up on port ${port}: ${err.code ?? err.message}`);
   process.exit(1);
 }
-// Wave E (E3-1): the banner uses the ACTUAL server.address() binding, not the hardcoded
+// the banner uses the ACTUAL server.address() binding, not the hardcoded
 // 127.0.0.1: on win "--host localhost" listens on [::1] only, and the old banner lied about
 // http://127.0.0.1 — you follow the banner and get ECONNREFUSED.
 const bound = server.address();

@@ -52,7 +52,7 @@ test("/events by symbol: the 4 SPYx dividends", async () => {
     assert.equal(list.length, 4);
     assert.ok(list.every((e) => e.type === "MULTIPLIER_CHANGE"));
     const filtered = await fetch(`${base}/events?symbol=SPYx&type=NOPE`);
-    // ROUND13: a garbage type — an honest 400 with a dictionary (a silent [] is indistinguishable from "there were none")
+    // a garbage type — an honest 400 with a dictionary (a silent [] is indistinguishable from "there were none")
     assert.equal(filtered.status, 400);
     assert.match((await filtered.json()).error, /SPLIT/);
   });
@@ -90,7 +90,7 @@ test("an unknown route — a 404 with the endpoint list", async () => {
   });
 });
 
-// ---- round 2: the API input validation ----
+// ----: the API input validation ----
 
 test("/multiplier: raw digits only — hex/negatives/garbage = 400", async () => {
   await withServer(async (base) => {
@@ -138,7 +138,7 @@ test("/health: the journal stats present when passed", async () => {
   }
 });
 
-// ---- round 4: the isolation of a broken mint and strict query dates ----
+// ----: the isolation of a broken mint and strict query dates ----
 
 test("a broken chain of one mint does not kill the server: the token excluded from the vitrine, the rest alive", async () => {
   const registry = await loadRegistry("data/tokens.json");
@@ -158,7 +158,7 @@ test("a broken chain of one mint does not kill the server: the token excluded fr
     const base = `http://127.0.0.1:${port}`;
     assert.equal((await fetch(`${base}/health`)).status, 200); // the server alive
     const excludedRes = await fetch(`${base}/events?symbol=T-SpaceX`);
-    assert.equal(excludedRes.status, 400); // round 6: an honest refusal instead of a silent []
+    assert.equal(excludedRes.status, 400); // an honest refusal instead of a silent []
     assert.match((await excludedRes.json()).error, /excluded/i); // the broken mint's events are not served partially
     const good = await (await fetch(`${base}/events?symbol=SPYx`)).json();
     assert.equal(good.length, 4); // the other tokens with data
@@ -209,7 +209,7 @@ test("a strict date format in the query: '2026-1-1' and a time without a zone = 
   }
 });
 
-// ---- round 7: /accruals — the applyEvents accrual engine connected to the API ----
+// ----: /accruals — the applyEvents accrual engine connected to the API ----
 // Synthetics modeled on dividend-e2e: the mint/owner — a valid base58 (without 0/O/I/l),
 // absent from the live data/tokens.json; the walletScanner is mocked, no network needed.
 

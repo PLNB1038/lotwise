@@ -149,12 +149,12 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
     }
     const amountPerUnitRaw = toPositiveSafeInteger(decl.amountPerUnitRaw, "amountPerUnitRaw", decl);
     const decimals = toDecimals(decl.decimals, decl);
-    // round 24 (F1 root): the declaration is canonicalized to its DATE-ONLY day — a
+    // the declaration is canonicalized to its DATE-ONLY day — a
     // datetime with an offset names the same ex-day with a different instant, and every
     // downstream consumer (the dedup, the ex-date base) keys on the day
     const exDay = decl.exDate.slice(0, 10);
 
-    // round 24 (ops S3): a sourceUrl is a REFERENCE, not a payload — a 100 KB "url" rode
+    // a sourceUrl is a REFERENCE, not a payload — a 100 KB "url" rode
     // into the store, /events bodies and every webhook POST unbounded
     if (decl.sourceUrl.length > 2048) {
       throw new DeclarationError(`sourceUrl must be at most 2048 chars, got ${decl.sourceUrl.length}`, decl);
@@ -171,7 +171,7 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
       amountPerUnitRaw,
       decimals,
     };
-    // The dedup key is the MOMENT of the date, not the string (ROUND7 fix 12): "2026-06-18"
+    // The dedup key is the MOMENT of the date, not the string : "2026-06-18"
     // and "2026-06-18T00:00:00Z" are the same ex-day; a string key produced two
     // DIVIDEND_ACCRUAL and a double accrual by the engine. parseIsoDateMs cannot return null:
     // exDate has already passed isValidIsoDate above.

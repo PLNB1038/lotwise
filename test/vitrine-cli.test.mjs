@@ -1,5 +1,4 @@
-// formerly round12-wave-d.test.mjs
-// Round 12 regression tests — wave D (vitrine states + CLI + data).
+// regression tests (vitrine states + CLI + data).
 //   D1-1 [P2]: .catch of loadPlanes/calc without a stale guard — a foreign error lands
 //              on top of the selected token (the reconcile badge = the flagship honesty element).
 //   D1-2 [P3]: switching the token does not clear events/calc — data A under the header of B.
@@ -174,7 +173,7 @@ test("vitrine: the wallet report shows the server generation time (rep.now)", ()
     now: "2026-09-23T20:31:00.000Z",
     counts: { signatures: 5, fetched: 5, skipped: 0 }, truncated: false, complete: true, tokens: [],
   });
-  assert.ok(els.get("wallet-out").innerHTML.includes("2026-09-23 20:31"), "the report generation time is visible (a cache ≤10min is distinguishable from a fresh scan; round 18: the date without the full ISO clutter)");
+  assert.ok(els.get("wallet-out").innerHTML.includes("2026-09-23 20:31"), "the report generation time is visible (a cache ≤10min is distinguishable from a fresh scan;: the date without the full ISO clutter)");
 });
 
 // ---- D1-5 [P3]: boot guards ----
@@ -191,7 +190,7 @@ test("vitrine: a boot on a 502-json /health — an honest unavailability, not \"
 
 // ---- D2-1/D2-2: CLI ----
 
-test("cli: webhook-deliver exits with the contract code, no undici crash of the process (wave D2)", async () => {
+test("cli: webhook-deliver exits with the contract code, no undici crash of the process ", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "lw-cli-r12-"));
   try {
     // a public URL: the delivery honestly fails (example.com will not accept a webhook),

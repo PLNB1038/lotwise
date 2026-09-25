@@ -1,5 +1,5 @@
-// formerly round15-f2-pins.test.mjs
-// Round 15 — killer tests of the mutation audit F2 (32 mutations across the code of rounds 13–14,
+
+// — killer tests of the mutation audit F2 (32 mutations across the code of rounds 13–14,
 // 6 survived — all clean suite gaps, the prod code unchanged; each is closed here).
 //   F09 acquireSyncLock: the staleness boundary — EXACTLY staleMs is still "fresh" (a break strictly later)
 //   F10 saveJournalMerged: the lock is cleaned up after itself after a successful write

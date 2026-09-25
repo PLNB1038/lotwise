@@ -215,4 +215,4 @@ const invokedAs = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 const isSelf =
   import.meta.url === invokedAs ||
   (process.platform === "win32" && import.meta.url.toLowerCase() === invokedAs.toLowerCase());
-if (isSelf) process.exitCode = await main(process.argv.slice(2)); // exitCode, not exit: see wave D2 (undici crash)
+if (isSelf) process.exitCode = await main(process.argv.slice(2)); // exitCode, not exit: (undici crash)

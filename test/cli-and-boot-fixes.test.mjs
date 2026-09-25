@@ -1,5 +1,5 @@
-// formerly round14-wave-e.test.mjs
-// Round 14 — wave E, code fixes (RED → GREEN):
+
+//, code fixes (RED → GREEN):
 //   E2-1 [P3] parseScaledUiAmount: a ts outside the ECMAScript Date range (|ts*1000| > 8.64e15)
 //            gave a bare RangeError from toISOString() — past the module's typed error;
 //            on /onchain that is a 503 kind:null with a leak of the inner text. A guard + ScaledUiError.
@@ -9,7 +9,7 @@
 //   E2-SSRF  The delivery denylist did not know CGNAT 100.64/10 (a webhook would deliver into the tailnet!),
 //            6to4 2002::/16 and NAT64 64:ff9b::/96.
 //   E3-4     EADDRINUSE was caught AFTER the full boot (RPC quota burned on a double launch):
-//            checkPortAvailable BEFORE the boot I/O, in the ROUND7 #10 spirit.
+//            checkPortAvailable BEFORE the boot I/O, (the same refusal-before-I/O rule).
 //   E3-2     The journal: read-modify-write without a cross-process lock — a foreign write in the
 //            "boot read → persisted" window was silently clobbered. saveJournalMerged:
 //            merge-under-lock (our mints win, foreign ones survive).
@@ -176,7 +176,7 @@ test("cli: enrich-decimals on an unreachable/refusing API — exit 1, not 0xC000
   const dir = mkdtempSync(path.join(tmpdir(), "lw-enr14-"));
   try {
     // a one-token registry: ids is non-empty and the API still refuses with 400
-    // (round 21: an empty registry is now an explicit no-op exit 0 BEFORE any network)
+    //: an empty registry is now an explicit no-op exit 0 BEFORE any network)
     writeFileSync(path.join(dir, "data-tokens.json"), JSON.stringify([
       { mint: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W", symbol: "SPYx", name: "S&P 500", issuer: "backed", decimals: 8 },
     ]));

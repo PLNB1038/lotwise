@@ -1,5 +1,5 @@
-// formerly round14-mutation-pins.test.mjs
-// Round 14 — killer tests of the mutation audit (_bughunt/e1-*): every surviving
+
+// every surviving
 // mutation = a bug class the suite did not catch. These pins must be GREEN against
 // the current code (the code is correct, the suite was leaky); a red pin = the mutation
 // tester found a real bug.

@@ -1,5 +1,5 @@
-// formerly round6-journal-preserve.test.mjs
-// Round 6 regression tests — finding LW2_journal_evidence_clobber_on_failed_preserve.
+
+// regression tests — finding LW2_journal_evidence_clobber_on_failed_preserve.
 // The round-5 guard itself destroyed the evidence in its failure branch: preserveCorruptedJournal
 // swallowed ANY renameSync error (AV/indexer/EBUSY on Windows) and returned null,
 // serve.mjs did not branch on null — and the final saveJournalAtomic renamed the fresh

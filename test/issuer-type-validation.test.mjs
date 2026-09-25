@@ -1,14 +1,14 @@
-// formerly round13-truth.test.mjs
-// Round 13 regression tests — the 24.09 hunt by two agents (README-vs-code + the watch list).
+
+// regression tests — the 24.09 hunt by two agents (README-vs-code + the watch list).
 //   R13-1 [P3] redactUrls was case-sensitive: --rpc HTTP://user:SECRET@… — undici embeds
 //            the URL verbatim (the upper-case scheme), the R11 fix missed it, credentials rode
 //            into the 503 body of the visitor. The C3-1 tail, found by the watch agent.
 //   R13-2 [P3] /tokens?issuer= and /events?type= silently served 200 [] on unknown
 //            values — the README itself names the issuers "xStocks/Backed 16", and the
-//            "400 instead of emptiness" contract worked only for symbol/mint (the ROUND7 #1 class).
+//            "400 instead of emptiness" contract worked only for symbol/mint (that same class).
 //   R13-3 [P4] DNS garbage in --host ("no-such-host.invalid") passed the synchronous
 //            lexical guard and burned through the whole boot I/O (~15 RPC calls + the xStocks history),
-//            dying only at listen. Resolve BEFORE the boot, a refusal in the ROUND9 #1 spirit.
+//            dying only at listen. Resolve BEFORE the boot, a refusal (the same resolve-before-I/O rule).
 //   R13-4 [P4] the README architecture did not mention src/cli/ — fixed in the README (not a test).
 import test from "node:test";
 import assert from "node:assert/strict";

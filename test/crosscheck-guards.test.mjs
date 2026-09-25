@@ -1,6 +1,5 @@
-// formerly round10-waveb.test.mjs
-// Round 10 regression tests — the fixes of night wave B (ROUND10, from the ROUND9 tails
-// and wave B: see BUILD_PLAN "round 10"). Groups: crosscheck finiteness (B1-1/B1-2),
+
+// regression tests — hardening fixes. Groups: crosscheck finiteness (B1-1/B1-2),
 // ratio ceilings (B1-3), partial rateLimits (B2-2), flags host/rpc sanity (B3-1),
 // the lock writeSync (B3-3), esc stats (B4-1), saveFailed in /health (B4-2),
 // the xstocks Array guard (B1-latent), scan abort propagation (B2-1).

@@ -57,7 +57,7 @@ test("declarations → DIVIDEND_ACCRUAL: the fields from the declaration 1:1, so
   ], { symbol: "KOx" });
 
   assert.equal(events.length, 3);
-  // round 24 (F1 root): datetime forms are accepted and land as their calendar DAY
+  // datetime forms are accepted and land as their calendar DAY
   assert.deepEqual(events.map((e) => e.effectiveDate), [
     "2025-12-15",
     "2026-06-14",
@@ -131,7 +131,7 @@ test("decimals: outside 0..18, a float, garbage — rejected; the boundaries 0 a
 
 // ---- the exDate formats ----
 
-// round 24 (F1 root) rewrites the pin: every canonical ISO form is accepted and lands as
+// every canonical ISO form is accepted and lands as
 // its CALENDAR DAY — a datetime with an offset names the same ex-day with a different
 // instant, and that instant must not become a second dividend downstream
 test("exDate: canonical ISO forms are accepted and canonicalize to the date-only ex-day", () => {
@@ -255,7 +255,7 @@ test("bindMintAndValidate wraps a schema error into NormalizeError — the contr
   assert.throws(() => validateEvent({ ...forged[0], mint: MINT }), EventValidationError);
 });
 
-// round 24 (ops S3): a sourceUrl is a REFERENCE, not a payload — a 100 KB "url" rode
+// a sourceUrl is a REFERENCE, not a payload — a 100 KB "url" rode
 // into the store, /events bodies and every webhook POST unbounded
 test("declarations: a sourceUrl beyond 2048 chars is refused (a reference, not a payload)", () => {
   const huge = "https://issuer.example/d?" + "x".repeat(3000);

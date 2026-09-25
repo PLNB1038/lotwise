@@ -1,5 +1,5 @@
-// formerly round17-i2.test.mjs
-// Round 17 — wave I2 (the integrator): subscribing to webhooks by SYMBOL must work.
+
+// subscribing to webhooks by SYMBOL must work.
 // Canonical events carry only mint — a ["SPYx"] subscription silently gave 0 deliveries
 // with exit 0 (a quiet failure). Fix: deliverToAll accepts symbolToMint (the registry),
 // the CLI loads data/tokens.json and resolves the subscription symbols into mints before matching;
@@ -52,11 +52,11 @@ test("webhooks: a symbol outside the registry — a warning, delivery is not blo
   const map = new Map([["SPYx", SPYX_MINT]]);
   const rep = await deliverToAll([event], [sub(["SPYX_TYPO"])], { fetcher: ok200, sleep: sleep0, symbolToMint: map });
   assert.equal(rep.delivered, 0);
-  assert.ok(rep.warnings.some((w) => /SPYX_TYPO/.test(w) && /not found in the registry/.test(w)), // round 19: EN
+  assert.ok(rep.warnings.some((w) => /SPYX_TYPO/.test(w) && /not found in the registry/.test(w)), // EN
     "the typo is visible in the report warnings");
 });
 
-// Round 20: a MINT identifier is a documented way to subscribe (README §Webhooks:
+// a MINT identifier is a documented way to subscribe (README §Webhooks:
 // "symbols and/or mints") — it matches the canonical event directly and must NOT
 // produce a "not found in the registry" warning on every delivery run. The warning
 // channel is load-bearing: a false alarm trains the operator to ignore it.

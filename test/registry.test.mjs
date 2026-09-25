@@ -82,7 +82,7 @@ test("the week-1 plan: the registry >=30 tokens, the decimals enriched for all (
   }
 });
 
-// ---- round 21 (SRE P2-2): the boot walk is linear in the registry — a runaway file must refuse, not hang for hours ----
+// ---- (SRE P2-2): the boot walk is linear in the registry — a runaway file must refuse, not hang for hours ----
 test("assertBootableRegistrySize: at the cap passes, above it refuses with the numbers", () => {
   assert.doesNotThrow(() => assertBootableRegistrySize([]));
   assert.doesNotThrow(() => assertBootableRegistrySize(new Array(MAX_BOOT_REGISTRY_TOKENS).fill({ mint: "x", symbol: "y", name: "n", issuer: "backed", decimals: 8 })));
@@ -93,7 +93,7 @@ test("assertBootableRegistrySize: at the cap passes, above it refuses with the n
   );
 });
 
-// round 21 (SRE P3-5): a UTF-8 BOM is an editor fingerprint, not corruption — a valid
+// a UTF-8 BOM is an editor fingerprint, not corruption — a valid
 // registry behind a BOM loads instead of going to the quarantine
 test("loadRegistrySafe: a BOM-prefixed valid registry loads (no quarantine)", async () => {
   const { loadRegistrySafe } = await import("../src/registry/registry.mjs");

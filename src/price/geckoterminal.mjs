@@ -31,7 +31,7 @@ export class GeckoTerminalClient {
   }
 
   // The interval is enforced inside a queue only (ported from RpcClient,
-  // round 5): concurrent calls (parallel GET /crosscheck for different
+  //: concurrent calls (parallel GET /crosscheck for different
   // symbols) join the tail, otherwise every caller computes its wait from the
   // same _lastCall and they all fire at once → 429 → retries amplify the storm.
   // A failed slot must not poison the tail.
@@ -110,8 +110,7 @@ export class GeckoTerminalClient {
     return list
       .map(([ts, o, h, l, c]) => ({ ts, o, h, l, c }))
       .sort((a, b) => a.ts - b.ts)
-      // A duplicate candle for the same day is a live GT reality (wave C2, Sep 23:
-      // same ts, different o/h/l) — not a contract, but shape drift. Deduped, the
+      // A duplicate candle for the same day is a live GT reality  — not a contract, but shape drift. Deduped, the
       // LAST record of the day wins (GT overwrites the current/re-aggregated candle).
       .filter((cd, i, arr) => i === arr.length - 1 || cd.ts !== arr[i + 1].ts);
   }

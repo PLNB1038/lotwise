@@ -1,6 +1,6 @@
 // Strict validator/parser of canonical ISO-8601 — the single source of the project's date semantics.
 //
-// WHY (round 2–3 findings, docs/review): Date.parse is a poor validator.
+// WHY (earlier findings, docs/review): Date.parse is a poor validator.
 //  - "2026-13-01", "2026-00-10", "2026-06-18T23:59:60Z", "+99:99" pass the SHAPE check,
 //    while Date.parse yields NaN — the error surfaces later, already as a 500 on /summary
 //    (journal replay and xstocks history pass only schema validation);

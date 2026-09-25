@@ -11,9 +11,9 @@ export class ScaledUiError extends Error {
  * @param {object} accountInfoValue — the result.value of a getAccountInfo response (jsonParsed)
  * @returns {{program: string, decimals: number, activeMultiplier: string, pendingMultiplier: string|null, pendingEffectiveDate: string|null, authority: string}}
  */
-// Canonical form is the schema's common ground (round 9 fix 15): "05"→"5", "5.0"→"5",
+// Canonical form is the schema's common ground : "05"→"5", "5.0"→"5",
 // "1.10"→"1.1". The representation depends on the source (RPC/issuer API) while comparisons
-// are string-based: the journal diff and reconcile lied on representation drift (round 7 fix 16,
+// are string-based: the journal diff and reconcile lied on representation drift,
 // Jev R3). Significant digits are untouched; called after the regex guard.
 import { canonicalDecimalString as canonicalDecimal } from "../schema/events.mjs";
 
@@ -57,7 +57,7 @@ export function parseScaledUiAmount(accountInfoValue) {
   // guard by number, symmetric with the issuer client.
   const pendingRaw = st.newMultiplier;
   const pendingReset = pendingRaw === undefined || pendingRaw === null || Number(pendingRaw) === 0;
-  // pending is validated SYMMETRICALLY to active (round 7 fix 15): previously any non-zero
+  // pending is validated SYMMETRICALLY to active : previously any non-zero
   // garbage ("abc") went into the public /onchain payload and into a future phantom
   // planes-disagree; the journal further downstream fails validation anyway, but garbage in
   // a reader's response is diagnostic noise that should not exist.
@@ -82,7 +82,7 @@ export function parseScaledUiAmount(accountInfoValue) {
       `scaledUiAmountConfig: newMultiplierEffectiveTimestamp is not a number: ${JSON.stringify(tsRaw)} (pending ${pending} without a valid activation date)`,
     );
   }
-  // Wave E (fuzzing ×10): finite but beyond ±8.64e15 ms — toISOString() threw a BARE
+  // finite but beyond ±8.64e15 ms — toISOString() threw a BARE
   // RangeError bypassing the module's typed error; on /onchain that meant a 503 kind:null
   // leaking internal text to the outside. The boundary is inclusive: 8_640_000_000_000 is valid.
   if (pending !== null && (!Number.isFinite(ts) || Math.abs(ts * 1000) > 8.64e15)) {

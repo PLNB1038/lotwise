@@ -84,7 +84,7 @@ test("scenario 1 (event): a synthetic DIVIDEND_ACCRUAL arrives into /events, /su
     assert.equal(list[0].type, "DIVIDEND_ACCRUAL");
     assert.equal(list[0].mint, MINT);
     assert.equal(list[0].effectiveDate, "2026-09-10");
-    assert.equal(list[0].amountPerUnitRaw, "2"); // round 23: decimal strings on the wire (was the internal number)
+    assert.equal(list[0].amountPerUnitRaw, "2"); // decimal strings on the wire (was the internal number)
     assert.equal(list[0].decimals, 6);
     assert.equal(list[0].status, "confirmed");
     assert.deepEqual(list[0].sources, ["https://issuer.example/dividends/2026-q3"]);
@@ -121,7 +121,7 @@ test("scenario 1 (money): /lots serves the position, the engine accrues onto it,
     assert.equal(row.reconciles, true); // the window deltas converge with the on-chain balance
     assert.equal(row.multiplier.events, 0); // the dividend did not get into the multiplier timeline
 
-    // the documented seam (report.mjs header + round6-report-lots): a /lots consumer
+    // the documented seam (report.mjs header + the report-lots seam): a /lots consumer
     // assembles the engine context — the report lots carry NO mint/owner/basisRaw.
     const engineLots = row.lots.map((l) => ({
       ...l, mint: row.mint, owner: rep.owner, qtyRaw: BigInt(l.qtyRaw), basisRaw: 0n,

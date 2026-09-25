@@ -1,5 +1,5 @@
 // Shared guarantees for data files: atomic writes and preservation of a corrupted file
-// as evidence (round 6). Extracted from the journal (saveJournalAtomic of round 5) after
+// as evidence. Extracted from the journal (saveJournalAtomic of after
 // the LW2_tokens_json_write_non_atomic finding: the same class of interrupted write as the
 // journal's, on data/tokens.json, brought the service down ENTIRELY — while the registry
 // writers (enrich-decimals) wrote with a plain writeFileSync over the live file.
@@ -12,7 +12,7 @@ import { dirname, join, basename } from "node:path";
 const defaultFs = { statSync, chmodSync, openSync, fsyncSync, closeSync };
 
 /**
- * Carry the mode of an EXISTING target onto the tmp file before rename (round 8): rename
+ * Carry the mode of an EXISTING target onto the tmp file before rename: rename
  * replaces the inode, and an operator chmod 600 (webhooks.json holds plaintext HMAC secrets)
  * silently fell back to the default 0644 on every write. No target — nothing to carry;
  * chmod is best-effort (platforms without a full chmod must not break the write).
@@ -30,7 +30,7 @@ export function copyModeIfExists(targetPath, tmpPath, { fsTools = defaultFs } = 
 }
 
 /**
- * fsync the directory after rename (round 8, Linux prod): without it, a power-loss can
+ * fsync the directory after rename prod): without it, a power-loss can
  * undo the rename itself while the data survives. On platforms/filesystems without directory
  * fsync (Windows) — quietly best-effort. kill -9 is safe even without this: the data is
  * fsynced BEFORE the rename.
@@ -55,7 +55,7 @@ export function fsyncDir(dirPath, { fsTools = defaultFs } = {}) {
  * (rename across devices does not work), is fsynced, and is renamed over the target file.
  * An interruption at any moment leaves a whole previous version in place of the journal/
  * registry; the temp file is cleaned up on ANY failure.
- * Round 7 (adversarial journal tests): serialization happens BEFORE the temp file is created.
+ * serialization happens BEFORE the temp file is created.
  * Previously JSON.stringify ran after openSync(tmp), and a non-serializable payload (BigInt
  * inside) threw a TypeError, leaving an empty .tmp next to the target: the target itself
  * stayed intact (no garbage ever reached it), but the directory got polluted on every such
@@ -69,7 +69,7 @@ export function atomicWriteJson(filePath, value) {
   const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
   // serialize before openSync: a throw (BigInt/circular references) leaves no files behind
   const data = JSON.stringify(value, null, 1) + "\n";
-  // 0600 from creation (round 9 fix 10): data/ files can hold plaintext secrets (webhooks);
+  // 0600 from creation : data/ files can hold plaintext secrets (webhooks);
   // previously the first write got the Linux umask default 0644, and R8-2 only preserved
   // the mode from the second write on. An existing target is normalized to its mode by
   // copyModeIfExists below.
@@ -81,9 +81,9 @@ export function atomicWriteJson(filePath, value) {
     } finally {
       closeSync(fd); // close before a possible unlink: on Windows an open file cannot be deleted
     }
-    copyModeIfExists(filePath, tmp); // the target's mode (e.g. 0600 secrets) survives the rename (round 8)
+    copyModeIfExists(filePath, tmp); // the target's mode (e.g. 0600 secrets) survives the rename
     renameSync(tmp, filePath);
-    fsyncDir(dirname(filePath)); // directory after rename: power-loss does not undo the rename (round 8)
+    fsyncDir(dirname(filePath)); // directory after rename: power-loss does not undo the rename
   } catch (err) {
     // write/fsync/rename failure AFTER the temp file was opened: clean up, the target is
     // untouched — the disk keeps neither a tmp nor changes (best effort: do not mask the original error)

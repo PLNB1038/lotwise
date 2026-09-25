@@ -20,7 +20,7 @@ function toDecimalString(v, field, node) {
     const s = String(v);
     if (!/e/i.test(s)) return s;
     // Exponential notation fails DECIMAL_RE and used to crash the WHOLE token history
-    // with a NormalizeError "not a decimal" (ROUND7 fix 13). The significant digits are
+    // with a NormalizeError "not a decimal" . The significant digits are
     // the same — we shift the point: 1e-7 → "0.0000001", 5e21 → "5000000000000000000000".
     const m = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/i.exec(s);
     if (!m) throw new NormalizeError(`field ${field} is not a decimal: ${JSON.stringify(v)}`, node);
@@ -59,7 +59,7 @@ function nodeKey(n) {
  * @returns {Array<object>} canonical MULTIPLIER_CHANGE, sorted by time (old → new)
  */
 export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Ethereum" }) {
-  // Shape guard (wave B): a non-array is a NormalizeError, not a bare TypeError further
+  // Shape guard : a non-array is a NormalizeError, not a bare TypeError further
   // down the stream; mirrors dividendsFromDeclarations (the client already guards, the
   // input side can be anything).
   if (!Array.isArray(historyNodes)) {
@@ -73,7 +73,7 @@ export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Eth
     const key = nodeKey(n);
     const first = seen.get(key);
     if (first !== undefined) {
-      // Round 6, LW2_dedup_id_collision_silent_divergence: the same id with DIFFERENT
+      //, LW2_dedup_id_collision_silent_divergence: the same id with DIFFERENT
       // content (the issuer fixed a node on a fresh page / reused an id).
       // The "first occurrence wins" semantics stays (id is the node identity, a deliberate
       // trade-off), but the divergence used to be lost SILENTLY — neither the operator
@@ -89,7 +89,7 @@ export function multiplierHistoryToEvents(historyNodes, { symbol, network = "Eth
   // Sort by MOMENT IN TIME (as a number), not localeCompare over the date string:
   // with mixed precision ("…T00:00:00.500Z" vs "…T00:00:00Z") the string sort
   // produced the reverse of chronology. An unparseable date is a NormalizeError:
-  // fail-closed, like the whole date pipeline (a round 3 finding).
+  // fail-closed, like the whole date pipeline (a finding).
   const stamped = deduped.map((n) => {
     const ts = parseIsoDateMs(String(n?.activationDateTime));
     if (ts === null) {

@@ -208,7 +208,7 @@ test("a busy port — createApiServer rejects, does not kill the process", async
   blocker.close();
 });
 
-// ---- round 4 regressions: the client script runs in vm with a DOM stub ----
+// ---- regressions: the client script runs in vm with a DOM stub ----
 
 // route(url) -> {ok, status, body} | Promise<{...}> | undefined (the request hangs forever)
 function runClient(route) {
@@ -398,7 +398,7 @@ test("calc: decimals null — an honest note, the computation does not pretend t
   assert.equal(multiplierCalls, 0, "the /multiplier endpoint is not hit with an invented-raw");
 });
 
-// ---- round 7: the logo — an inline mark in the header, self-sufficiency like the page's ----
+// ----: the logo — an inline mark in the header, self-sufficiency like the page's ----
 
 test("the logo: the Lotwise mark in the header — a self-sufficient inline SVG (viewBox, no external links or scripts)", () => {
   const html = renderPage();
@@ -409,7 +409,7 @@ test("the logo: the Lotwise mark in the header — a self-sufficient inline SVG 
   assert.ok(!/\b(src|href)\s*=/i.test(svg), "no src/href — the mark does not link anywhere");
   assert.ok(!/<script/i.test(svg) && !/javascript:/i.test(svg), "no scripts");
   assert.ok(!/url\(/i.test(svg), "no url() — no external loads");
-  // Round 18: the mark moved to the "L" monogram (the same geometry as the favicon and
+  // the mark moved to the "L" monogram (the same geometry as the favicon and
   // README): the trunk-axis + the accent leg + the event dot; 2 rects instead of a stack of bars
   assert.equal((svg.match(/<rect\b/g) || []).length, 2, "the L monogram: the trunk and the accent leg");
   assert.ok(/<circle/.test(svg), "the event dot on the trunk");
@@ -417,7 +417,7 @@ test("the logo: the Lotwise mark in the header — a self-sufficient inline SVG 
   assert.ok(html.indexOf("brand-mark") < html.indexOf("<h1"), "the mark stands in the header, before the title");
 });
 
-// ---- round 8: the dividend verdicts of the cross-check in the token timeline ----
+// ----: the dividend verdicts of the cross-check in the token timeline ----
 // /crosscheck serves verdicts in blocks (the contract of src/events/crosscheck.mjs): first all
 // MULTIPLIER_CHANGE in event order, then DIVIDEND_ACCRUAL with a type label at the tail.
 // The dividend badge — its own "dividend: …" signature (distinguishable from the rebase "price: …"),
@@ -506,8 +506,8 @@ test("a dividend without a price history — dividend: no data, a tooltip withou
   assert.ok(div.includes("candles do not reach back"), "the reason from note is visible in the tooltip");
 });
 
-// ---- round 19 (wave J): live filter over the Tracked tokens table ----
-// round 19: EN — a filter input (#token-filter) above the table; a live oninput handler
+// ---- : live filter over the Tracked tokens table ----
+// EN — a filter input (#token-filter) above the table; a live oninput handler
 // hides #tokens rows whose symbol+name does not contain the substring (case-insensitive).
 
 test("the page: #token-filter above the token table, the client script attaches a live oninput filter", () => {
@@ -518,7 +518,7 @@ test("the page: #token-filter above the token table, the client script attaches 
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   assert.ok(script.includes("token-filter"), "the client script references the filter");
   assert.match(script, /el\('token-filter'\)\.oninput = /, "the filter — a live oninput handler, without a button");
-  // round 19: the filter must not break the existing page contracts
+  // the filter must not break the existing page contracts
   assert.ok(script.includes("data-symbol"), "the rows still carry data-symbol (onclick/select)");
 });
 
@@ -568,7 +568,7 @@ test("vm: the filter hides #tokens rows without the substring in symbol+name (ca
   assert.equal(ko.style.display, "", "an empty filter — all rows visible");
 });
 
-// ---- round 20: mutation pins — the wave-I1 UX contracts and the esc round-trip ----
+// ----: mutation pins — the wave-I1 UX contracts and the esc round-trip ----
 // The round-20 mutation audit: mE (a frozen scan timer), mF (a re-clickable Scan button)
 // and mG (rate-limit no longer classified) each survived the whole suite, as did mI
 // (deleting the '&' rule of esc). These tests pin the contracts behind those lines.
@@ -693,7 +693,7 @@ test("scan UX: a network failure (a fetch reject) — the unreachable sentence, 
   assert.ok(html.includes("fetch failed"), "the original error kept in the tooltip");
 });
 
-// ---- round 21: the USDC leg prices the wallet report in the UI ----
+// ----: the USDC leg prices the wallet report in the UI ----
 test("wallet UI: priced lots show basis and realized P&L; unpriced ones say so honestly", async () => {
   const rep = {
     owner: ADDR_A,
@@ -740,7 +740,7 @@ test("wallet UI: an old cached report (no realized array) renders exactly as bef
   assert.ok(!html.includes("unpriced"), "no unpriced notes on a legacy report");
 });
 
-// round 22 (F5): proceeds booked without a basis deserve their own sentence — not the
+// proceeds booked without a basis deserve their own sentence — not the
 // "no USDC leg" text that hides the money the sales DID bring in
 test("wallet UI: known proceeds with unknown basis — shown as proceeds, not 'no priced disposals'", async () => {
   const rep = {

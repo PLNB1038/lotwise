@@ -1,10 +1,10 @@
-// formerly round7-persist.test.mjs
-// Round 7 regression tests of the Lotwise review — persistence/delivery.
-// ROUND7 findings:
+
+// regression tests of the Lotwise review — persistence/delivery.
+// regression findings:
 //   #4 (events/journal.mjs): the corruption guard `typeof priorEntry === "object"` let
 //       string/number records through — corruption was treated as "no history": the backfill
 //       re-emitted a duplicate event, corrupted:false, and the final persist clobbered the evidence
-//       without a .corrupt-* name (round 7 only closed events-NOT-array).
+//       without a .corrupt-* name only closed events-NOT-array).
 //   #5 (webhooks/subscriptions.mjs): fetch with the default redirect:"follow" — a 302 from
 //       the receiver turned into an empty GET; a 2xx at the redirect target = ok:true, the event
 //       lost from the system's view, and the headers with the HMAC signature leaked to a foreign host.
@@ -31,7 +31,7 @@ const rotation = (active, pending) => mintState({
   multiplier: active, newMultiplier: pending, newMultiplierEffectiveTimestamp: Date.UTC(2026, 5, 10) / 1000,
 });
 
-// ---- ROUND7 #4: a non-object journal record = corruption, not "no history" ----
+// ---- a non-object journal record = corruption, not "no history" ----
 
 test("journal: a STRING record — corrupted:true, the backfill event duplicate is NOT re-emitted", () => {
   const parsed = parseScaledUiAmount(rotation("1", "5"));
@@ -68,7 +68,7 @@ test("journal: null/undefined remain a legitimate \"no record\" — no regressio
   }
 });
 
-// ---- ROUND7 #16: a canonical multiplier spelling at the parser output ----
+// ---- a canonical multiplier spelling at the parser output ----
 
 test("scaled-ui: the multiplier is canonicalized — \"5.0\"→\"5\", \"05\"→\"5\", \"1.10\"→\"1.1\"", () => {
   assert.equal(parseScaledUiAmount(settled("5.0")).activeMultiplier, "5");
@@ -108,12 +108,12 @@ test("journal: a representation change of the same value (\"5\" on chain → \"5
   assert.equal(boot2.entry.events.length, 1, "the phantom is not persisted into the history");
 });
 
-// ---- ROUND7 #5: a webhook redirect — a failure, not a quiet "successful" delivery ----
+// ---- a webhook redirect — a failure, not a quiet "successful" delivery ----
 
 const EVENT = {
   type: "MULTIPLIER_CHANGE", mint: MINT,
   effectiveDate: "2026-06-10T04:30:00.000Z", status: "confirmed",
-  sources: ["test:round7"], multiplierFrom: "1", multiplierTo: "5",
+  sources: ["test:fixture"], multiplierFrom: "1", multiplierTo: "5",
   reason: "On-chain rebase",
 };
 
@@ -152,7 +152,7 @@ test("webhook: an honest 2xx without a redirect — ok:true, the response shape 
   assert.deepEqual(r.statuses, [200]);
 });
 
-// ---- ROUND7 #7: a deterministic deliveryId across runs ----
+// ---- a deterministic deliveryId across runs ----
 
 test("webhook: the same (subscription, event) on a repeated run — the SAME deliveryId", async () => {
   const sub = { id: "wh_1", url: "https://receiver.example/hook", secret: "s3cret" };

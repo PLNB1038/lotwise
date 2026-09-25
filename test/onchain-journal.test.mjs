@@ -150,7 +150,7 @@ test("a broken date in the pending is rejected by the schema validation, not sil
   assert.throws(() => backfillMultiplierEvent(t, bad, NOW), OnchainNormalizeError);
 });
 
-// ---- round 2 (P0): the journal events survive a process restart ----
+// ---- (P0): the journal events survive a process restart ----
 
 import { planJournalStep, issuerChainComplete } from "../src/events/journal.mjs";
 
@@ -226,7 +226,7 @@ test("P0-integration: /summary after a restart sees SPACEX=5, /health serves the
   }
 });
 
-// ---- round 4 (P1): the eternal boot-loop — events only as a continuation of the chain from "1" ----
+// ---- (P1): the eternal boot-loop — events only as a continuation of the chain from "1" ----
 
 // trigger A: a token is first observed in the middle of the history (an active "5" baked in, a pending in the future)
 const midHistoryMint = {
@@ -323,7 +323,7 @@ test("a normal chain continuation is emitted as before (the positive control of 
   assert.equal(boot2.event.multiplierTo, "7");
 });
 
-// ---- round 4 (P1): a pending "0" from the chain — the issuer's way to "reset" the pending ----
+// ---- (P1): a pending "0" from the chain — the issuer's way to "reset" the pending ----
 
 const zeroPendingMint = {
   hasExtension: true, decimals: 8,
@@ -345,7 +345,7 @@ test("a pending '0': no backfill event is built (a 5->0 will not get into the jo
   assert.equal(backfillMultiplierEvent(t, zeroPendingMint, NOW), null);
 });
 
-// ---- round 4 (P1): a v1 record + an unavailable chain — an honest warn, not a quiet multiplier 1 ----
+// ---- (P1): a v1 record + an unavailable chain — an honest warn, not a quiet multiplier 1 ----
 
 test("a v1 record + an unavailable chain: unavailableV1=true — the vitrine does not stay silent about the multiplier 1", async () => {
   const t = await tokenOf("SPACEX");
@@ -367,7 +367,7 @@ test("a v1 record + an unavailable chain: unavailableV1=true — the vitrine doe
   assert.equal(ok.unavailableV1, false);
 });
 
-// ---- round 4 (P2): the completeness of the issuer history chain (the serve pagination) ----
+// ---- (P2): the completeness of the issuer history chain (the serve pagination) ----
 
 test("issuerChainComplete: a chain from '1' is complete, the node order does not matter", () => {
   const nodes = [
@@ -384,12 +384,12 @@ test("issuerChainComplete: the oldest node not from '1' — the history incomple
   ];
   const r = issuerChainComplete(nodes);
   assert.equal(r.complete, false);
-  assert.match(r.reason, /not from "1"/); // round 19: EN
+  assert.match(r.reason, /not from "1"/); // EN
 });
 
 test("issuerChainComplete: an empty history is complete, date garbage — incomplete (fail-closed)", () => {
   assert.deepEqual(issuerChainComplete([]), { complete: true, reason: null });
   const bad = issuerChainComplete([{ previousMultiplier: "1", multiplier: "2", activationDateTime: "not-a-date" }]);
   assert.equal(bad.complete, false);
-  assert.match(bad.reason, /unparseable activation date/); // round 19: EN
+  assert.match(bad.reason, /unparseable activation date/); // EN
 });

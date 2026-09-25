@@ -57,14 +57,14 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     const mine = tx.deltas.filter((d) => d.owner === owner && byMint.has(d.mint) && d.deltaRaw !== 0n);
     if (mine.length === 0) continue;
 
-    // Round 21 (F2): the money leg prices the trade. Net USDC delta of THIS owner in THIS
+    // the money leg prices the trade. Net USDC delta of THIS owner in THIS
     // tx; the pricing rule is deliberately narrow — exactly one tracked token moved against
     // a counter-directed USDC leg. Several tracked tokens in one tx would require guessing
     // the allocation, a missing leg is a transfer, not a trade — both are honestly unknown.
     const usdc = (tx.moneyDeltas ?? []).reduce((acc, m) => (m.owner === owner ? acc + m.deltaRaw : acc), 0n);
     const buys = mine.filter((d) => d.deltaRaw > 0n);
     const sells = mine.filter((d) => d.deltaRaw < 0n);
-    // Round 22 (finance-v2 F2): the rule is EXACTLY ONE tracked token in the tx (mine.length === 1) —
+    // the rule is EXACTLY ONE tracked token in the tx (mine.length === 1) —
     // a mixed sell-A/buy-B swap prices NEITHER leg: the net USDC of a two-legged swap is
     // nobody's basis (README: several tracked tokens — honestly unknown).
     const buyBasis = mine.length === 1 && buys.length === 1 && usdc < 0n ? -usdc : null;
@@ -180,7 +180,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
         id: l.id,
         qtyRaw: String(l.qtyRaw),
         acquiredDate: l.acquiredDate,
-        // basis: known only when the lot was bought against a USDC leg (round 21);
+        // basis: known only when the lot was bought against a USDC leg;
         // a transfer-in or a multi-token tx stays honestly null — never an invented 0
         basisRaw: l.basisKnown ? String(l.basis) : null,
         basisKnown: l.basisKnown,

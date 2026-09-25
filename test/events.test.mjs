@@ -78,7 +78,7 @@ test("a validation error names the field", () => {
   }
 });
 
-// ---- round 4: strict dates (src/schema/isodate.mjs) ----
+// ----: strict dates (src/schema/isodate.mjs) ----
 // Findings: Date.parse accepts garbage after the schema's form check and silently
 // "rolls over" non-existent dates. The schema is the only barrier for
 // the journal replay and the xstocks history, hence the validation here, not lower.
@@ -141,7 +141,7 @@ test("canonical date formats are not rejected (an anti-overreach of the strict v
   }
 });
 
-// ---- round 4: the multiplier "0" and the precision cap ----
+// ----: the multiplier "0" and the precision cap ----
 
 test("a zero multiplier does not exist: \"0\", \"0.0\", \"0.000\" are rejected, \"0.5\" is valid", () => {
   const mc = (over) => valid({ type: "MULTIPLIER_CHANGE", multiplierFrom: "1", multiplierTo: "1.005", ...over });
@@ -160,7 +160,7 @@ test("the cap of the multiplier's fractional precision at 30 digits — a pair w
   assert.equal(isValidEvent(mc({ multiplierTo: m31 })), false);
 });
 
-// ---- round 4: the fuzzer invariants (schema) ----
+// ----: the fuzzer invariants (schema) ----
 
 test("canonically valid events of all 6 types are not rejected by the strict validator", () => {
   const newMint = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu";

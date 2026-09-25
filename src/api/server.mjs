@@ -61,10 +61,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // is finite. The key = the LAST element of X-Forwarded-For under trustProxy — the
   // one appended by our trusted proxy (the funnel). The FIRST element of an appending
   // chain is client-controlled: keying on it let a client rotate the header and mint
-  // itself unlimited buckets (round 7 fix 8). A direct connection with a spoofed XFF
+  // itself unlimited buckets . A direct connection with a spoofed XFF
   // does not happen here (the only public path is the funnel); otherwise — the socket
   // address. A partial config ({} or a single key) is a clear configuration refusal,
-  // not a TypeError from destructuring the limiter (wave B): rateLimits is either
+  // not a TypeError from destructuring the limiter : rateLimits is either
   // complete, or null/false.
   if (rateLimits && (!rateLimits.scan || !rateLimits.rpc)) {
     throw new RangeError("rateLimits requires both buckets: { scan: {windowMs,max}, rpc: {windowMs,max} } (or null to disable)");
@@ -76,8 +76,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     if (trustProxy && typeof xff === "string" && xff.trim() !== "") {
       const parts = xff.split(",");
       // An empty last element (trailing comma/space) is not a key: the shared ""
-      // bucket collapsed distinct clients (round 9 fix 6); the honest fallback is the socket.
-      // Round 22 (security): a hop that is not an IP-shaped string is not a key EITHER —
+      // bucket collapsed distinct clients ; the honest fallback is the socket.
+      // a hop that is not an IP-shaped string is not a key EITHER —
       // rotating garbage XFF hops used to mint a fresh bucket per request (300/300 at a
       // limit of 2/min) and bloat the bucket map. IP-shaped: hex digits, dots and colons
       // only, at most an IPv6 textual length.
@@ -88,8 +88,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   };
   // returns true when the request may proceed with the expensive I/O; otherwise it
   // answers 429 itself. The token is burned BEFORE the source call: a 503 from a
-  // failed RPC burns it too — a deliberate anti-retry-storm measure (wave B verified
-  // it; otherwise a dead source gets ground down by endless retries), documented here.
+  // failed RPC burns it too — a deliberate anti-retry-storm measure , documented here.
   const allow = (limiter, req, res) => {
     if (!limiter) return true;
     const { allowed, retryAfterMs } = limiter.check(clientKey(req));
@@ -137,7 +136,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // chaos finding).
       const isHead = req.method === "HEAD";
       if (req.method !== "GET" && !isHead) {
-        // round 22 (security): consume the request body — a slow-body client kept the socket
+        // consume the request body — a slow-body client kept the socket
         // alive up to requestTimeout (300s) after the 405, draining connection capacity
         req.resume();
         return json(res, 405, { error: "method not allowed" }, { Allow: "GET, HEAD" });
@@ -221,7 +220,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
       if (!allow(scanLimiter, req, res)) return;
-      // A client that walked away must not keep burning the RPC quota (wave B): abort
+      // A client that walked away must not keep burning the RPC quota : abort
       // is passed into the scanner, the scan stops between pages/transactions; the
       // result of a cancelled scan is NOT cached (the cache helper only caches success).
       const abort = new AbortController();
@@ -233,7 +232,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
       // the report is assembled in the server: this is where the multiplier timelines live
-      // round 23: a scanner that answered nonsense used to fall into the anonymous 500 —
+      // a scanner that answered nonsense used to fall into the anonymous 500 —
       // the real reason (a ReportError names the shape) is the contract
       let report;
       try {
@@ -286,7 +285,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
-      // round 23: a scanner that answered nonsense used to fall into the anonymous 500 —
+      // a scanner that answered nonsense used to fall into the anonymous 500 —
       // the real reason (a ReportError names the shape) is the contract
       let report;
       try {
@@ -298,7 +297,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const dividends = (eventsByMint.get(mint) ?? []).filter((e) => e.type === "DIVIDEND_ACCRUAL");
       // no position in the token or no dividend events — no accruals: an honest []
       if (!token || dividends.length === 0) return json(res, 200, []);
-      // Round 21 (finance audit F1): the accrual base is the position held ON THE EX-DATE,
+      // the accrual base is the position held ON THE EX-DATE,
       // replayed from the scan window's deltas — Σ of this owner's deltas in transactions
       // strictly earlier than the ex-date (unix ms). The previous shape fed the engine
       // today's open FIFO lots, so a sale AFTER the ex-date silently shrank the dividend
@@ -306,13 +305,13 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // A tx without blockTime cannot be ordered against the ex-date and a scan gap means
       // history the window never saw: both flag the base as incomplete instead of lying.
       const symbol = byMint.get(mint)?.symbol ?? null;
-      // Round 22 (finance-v2 F1): the engine's semantic dedup (round 21, lots.mjs) is
+      // the engine's semantic dedup is
       // NOT on this route's path — the ex-date rewrite maps store events directly, so the
       // same dividend from two sources (a press page and an API node) doubled the income.
       // The identical gate, at the layer that actually consumes the events.
       const seenDividends = new Set();
       const uniqueDividends = dividends.filter((e) => {
-        // round 23 (finance v3): the calendar DAY, not the exact instant — "2026-02-01" and
+        // the calendar DAY, not the exact instant — "2026-02-01" and
         // "2026-02-01T00:00:00+02:00" are the same ex-day with different moments (tz twins)
         // the calendar day = the DATE PART of the canonical string itself: "2026-02-01" and
         // "2026-02-01T00:00:00+02:00" share it, while their UTC moments differ (tz twins)
@@ -323,7 +322,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       });
       try {
         const rows = uniqueDividends.map((e) => {
-          // round 24 (contract v4, F1): the base is the UTC MIDNIGHT of the calendar ex-day.
+          // the base is the UTC MIDNIGHT of the calendar ex-day.
           // A tz twin's instant differs but its day does not — the store order used to pick
           // which twin's instant became the base, and the same file answered 200 vs a
           // confident "0". The day part parses to one midnight for every twin; garbage
@@ -333,7 +332,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           if (!Number.isFinite(exMs)) throw new Error("dividend event with an unparseable effectiveDate in the store");
           let base = 0n;
           let considered = 0;
-          // F3 (round 22): a truncated scan window silently understates the ex-date base too
+          // F3: a truncated scan window silently understates the ex-date base too
           let incomplete = token.gaps.length > 0 || Boolean(scan.truncated);
           for (const tx of scan.txs) {
             const d = tx.deltas.find((x) => x.owner === report.owner && x.mint === mint);
@@ -342,7 +341,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
             if (tx.blockTime * 1000 < exMs) { base += d.deltaRaw; considered++; }
           }
           const amount = BigInt(e.amountPerUnitRaw);
-          // Round 22 (F4): a negative base means the window saw only disposals before the
+          // a negative base means the window saw only disposals before the
           // ex-date — the true position predates it. A number here (say -100) is something
           // an integrator would subtract; the honest answer is null + the incomplete flag.
           const negative = base < 0n;
@@ -387,7 +386,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
-      // round 23 (API consumer): a broken store event threw out of the route into the
+      // a broken store event threw out of the route into the
       // anonymous 500 — a typed refusal with the real reason, the /accruals convention
       let verdicts, coverage;
       try {
@@ -420,7 +419,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     if (url.pathname === "/tokens") {
       const issuer = q.get("issuer");
       if (issuer !== null) {
-        // round 13: a silent [] on ?issuer=Backed (the README itself says "xStocks/Backed 16")
+        // a silent [] on ?issuer=Backed (the README itself says "xStocks/Backed 16")
         // is indistinguishable from "there are no tokens" — the symbol/mint convention: refuse with a dictionary.
         const known = new Set(registry.map((t) => t.issuer));
         if (!known.has(issuer)) {
@@ -450,11 +449,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const list = eventsByMint.get(mint) ?? [];
       const type = q.get("type");
       if (type !== null && !EVENT_TYPES.includes(type)) {
-        // round 13: the same contract as issuer — a garbage type with a silent [] is
+        // the same contract as issuer — a garbage type with a silent [] is
         // indistinguishable from "there were no events of this type"
         return json(res, 400, { error: `unknown type ${JSON.stringify(type)}; valid: ${EVENT_TYPES.join(", ")}` });
       }
-      // round 23 (API consumer): amountPerUnitRaw leaves as a STRING — the README's own
+      // amountPerUnitRaw leaves as a STRING — the README's own
       // "exact decimal multipliers as strings" contract; /events used to leak the internal
       // number while /accruals sent a string (per-endpoint typing discrimination for nothing).
       // The list is served chronologically: the store is append-ordered by source, not by time.
@@ -481,7 +480,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         // additive, as in /summary: for an excluded mint (TimelineError at startup) the "1"
         // is a default without a timeline, not a computation; without the mark it is
         // indistinguishable from an honest "no events" — the same "bare 1" class that
-        // round 5 hunted down in /summary
+        // hunted down in /summary
         const excludedReason = excludedByMint.get(mint);
         return json(res, 200, {
           mint, date,

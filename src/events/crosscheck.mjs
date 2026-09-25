@@ -39,7 +39,7 @@ const tsOf = (isoDate) => {
   return Math.floor(t / 1000);
 };
 
-// Shared candle frame (round 4 semantics, one frame for both event types):
+// Shared candle frame semantics, one frame for both event types):
 // before — the last candle that closed BEFORE the event (ts+day <= the moment);
 // after — the first candle that closed AFTER the event (its close already carries the post-event state).
 function selectAroundEvent(candles, evTs) {
@@ -73,7 +73,7 @@ export function crossCheckMultiplierChange(event, candles) {
   const evTs = tsOf(event.effectiveDate);
   const { before, after } = selectAroundEvent(candles, evTs);
 
-  // Input guards — a mirror of crossCheckDividendAccrual (ROUND7 fix 11): a non-numeric/
+  // Input guards — a mirror of crossCheckDividendAccrual : a non-numeric/
   // non-positive multiplier is an explicit error, not a "mismatch" with a NaN ratio
   // (JSON silently serializes NaN/Infinity as null — the verdict would have looked substantiated).
   const from = Number(event.multiplierFrom);
@@ -106,9 +106,9 @@ export function crossCheckMultiplierChange(event, candles) {
 
   if (!Number.isFinite(before.c) || !Number.isFinite(after.c) || before.c <= 0 || after.c <= 0) {
     // degenerate pool: close 0/negative/NOT-A-NUMBER (NaN/Infinity/undefined —
-    // wave B: NaN <= 0 is false and passed the guard, yielding a "mismatch" with null fields).
+    // NaN <= 0 is false and passed the guard, yielding a "mismatch" with null fields).
     // observedRatio = ∞/−/NaN — a strong verdict on garbage; an honest "not visible",
-    // mirroring the dividend sibling (ROUND7 fix 11, ROUND9 fix 5, wave B)
+    // mirroring the dividend sibling 
     return {
       ...base, observedRatio: null, observed: null,
       verdict: "inconclusive",
@@ -204,9 +204,8 @@ export function crossCheckDividendAccrual(event, candles) {
   const observed = observedWindow(before, after);
 
   if (!Number.isFinite(rawPrev) || !Number.isFinite(rawEx) || rawPrev <= 0 || rawEx <= 0) {
-    // degenerate pool: close 0/negative/NOT-A-NUMBER on either side (wave B:
-    // NaN passed rawPrev<=0, expectedFraction became NaN → a "mismatch") —
-    // the fraction cannot be built, an honest "not visible" (ROUND9 fix 5 extended to both sides+finite)
+    // degenerate pool: close 0/negative/NOT-A-NUMBER on either side  —
+    // the fraction cannot be built, an honest "not visible" 
     return {
       ...base, observedDropFraction: null, observed,
       verdict: "inconclusive",
@@ -260,7 +259,7 @@ export function crossCheckDividendAccrual(event, candles) {
  * @returns {{verdicts: Array, coverage: {candlesFrom: string|null, candlesTo: string|null, candles: number}}}
  */
 export function crossCheckEvents(events, candles) {
-  // Candle shape guard (wave B): garbage ts (NaN/undefined from a lying gateway)
+  // Candle shape guard : garbage ts (NaN/undefined from a lying gateway)
   // used to reach new Date(NaN*1000) in coverage → RangeError → /crosscheck
   // fell with a generic 500, although the module's discipline is a typed CrossCheckError.
   for (const cd of candles) {

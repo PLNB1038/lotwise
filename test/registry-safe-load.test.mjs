@@ -1,4 +1,4 @@
-// Round 6 regression tests — the finding LW2_tokens_json_write_non_atomic
+// regression tests — the finding LW2_tokens_json_write_non_atomic
 // (the gravest finding of the day): a truncated data/tokens.json killed the service WHOLE —
 // loadRegistry at the top level of serve.mjs without a catch threw RegistryError → unhandled
 // rejection, with no degraded mode and no "corrupted"-class diagnostics

@@ -30,7 +30,7 @@ export function decimalToRatio(dec) {
  * The multiplier timeline of a single mint. Built from MULTIPLIER_CHANGE events
  * (any order; EXCEPTION — equal activationDateTime: such events must arrive in chain
  * order, a reversed pair order breaks continuity —
- * round 7 fix 17; issuers have not been seen using instant duplicates), validates
+ *; issuers have not been seen using instant duplicates), validates
  * the CONTINUITY of the chain (from[i+1] === to[i])
  * and its starting point at 1 — fail-closed: a gap is an error, not a guess.
  */

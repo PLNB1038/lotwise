@@ -1,4 +1,4 @@
-// Money legs of a swap (round 21): the stable counter-leg that turns a token transfer
+// Money legs of a swap: the stable counter-leg that turns a token transfer
 // into a priced trade. v1 is deliberately USDC-only — a fixed, verifiable set; adding
 // more mints here changes what /lots can price and must be a documented decision,
 // not an accident of registry drift.

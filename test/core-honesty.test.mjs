@@ -1,6 +1,6 @@
-// formerly round7-core-honesty.test.mjs
-// Round 7 regression tests of the Lotwise review — the "core honesty".
-// ROUND7 findings:
+
+// regression tests of the Lotwise review — the "core honesty".
+// regression findings:
 //   #3 (schema/events.mjs): ZERO_MULTIPLIER_RE /^0(\.0+)?$/ caught only the canonical
 //       spelling of zero — "00"/"000"/"00.0" passed the schema (while "0.0" and "0.00"
 //       were refused): a valid step 1→"00" silently zeroed the position (scaledQty → 0 exact).
@@ -23,11 +23,11 @@ const MINT = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
 const multEvent = (from, to) => ({
   type: "MULTIPLIER_CHANGE", mint: MINT,
   effectiveDate: "2026-06-18T00:00:00.000Z", status: "confirmed",
-  sources: ["test:round7"], multiplierFrom: from, multiplierTo: to,
+  sources: ["test:fixture"], multiplierFrom: from, multiplierTo: to,
   reason: "On-chain rebase",
 });
 
-// ---- ROUND7 #3: a zero multiplier in any spelling ----
+// ---- a zero multiplier in any spelling ----
 
 test("schema: a zero multiplier in ANY spelling (\"00\", \"000\", \"00.0\", \"0.00\") is rejected", () => {
   for (const zero of ["0", "00", "000", "00.0", "0.00", "0.0000"]) {
@@ -49,7 +49,7 @@ test("schema: after the zero tightening — \"0.5\" and \"5\" remain valid (zero
   assert.doesNotThrow(() => validateEvent(multEvent("0.5", "5")));
 });
 
-// ---- ROUND7 #11: degenerate guards of crossCheckMultiplierChange ----
+// ---- degenerate guards of crossCheckMultiplierChange ----
 
 // honest candles around 2026-06-18: the after-candle is the one that CLOSES after the event
 // (the candle of the 18th); its close carries the post-event price — split 1→2 = 100 → 50
@@ -66,7 +66,7 @@ test("crosscheck: a degenerate pool price (close <= 0) — inconclusive, not a m
   const v = crossCheckMultiplierChange(multEvent("1", "2"), degenerate);
   assert.equal(v.verdict, "inconclusive");
   assert.equal(v.observedRatio, null); // not Infinity, which JSON silently turns into null
-  assert.match(v.note, /unusable|non-positive/i); // round 10: the wording is extended to non-numeric closes
+  assert.match(v.note, /unusable|non-positive/i); // the wording is extended to non-numeric closes
 
   const negative = candles.map((c, i) => (i === 1 ? { ...c, c: -3 } : c));
   const v2 = crossCheckMultiplierChange(multEvent("1", "2"), negative);
@@ -90,7 +90,7 @@ test("crosscheck: live inputs compute as before — a consistent split 1→2 sta
   assert.ok(Number.isFinite(v.observedRatio));
 });
 
-// ---- ROUND7 #12: dividend dedup by instant, not by string ----
+// ---- dividend dedup by instant, not by string ----
 
 test("dividends: equivalent canonical dates (\"2026-06-18\" vs \"…T00:00:00Z\") — ONE event", () => {
   const decl = (exDate) => ({

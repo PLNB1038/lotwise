@@ -6,7 +6,7 @@ export const ISSUERS = ["backed", "backpack", "prestocks", "tessera"];
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-// Round 21 (SRE P2-2): the serve boot walk is LINEAR in the registry (an RPC read plus
+// the serve boot walk is LINEAR in the registry (an RPC read plus
 // backoff per non-xStocks token) — a runaway registry (a bad merge, a glued file) turned
 // a restart into a multi-hour pre-listen downtime with a "green" process. The boot
 // refuses loudly instead; the measured worst case was ~0.36s/token on an unreachable RPC.
@@ -37,7 +37,7 @@ export async function loadRegistry(path = "data/tokens.json") {
   }
   let list;
   try {
-    // Round 21 (SRE P3-5): strip a UTF-8 BOM — a valid registry must not be quarantined for an editor fingerprint
+    // strip a UTF-8 BOM — a valid registry must not be quarantined for an editor fingerprint
     list = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch (err) {
     throw new RegistryError(`registry is not valid JSON: ${err.message}`);
@@ -48,15 +48,15 @@ export async function loadRegistry(path = "data/tokens.json") {
   return validateRegistry(list);
 }
 
-// Boot with degradation instead of process death (round 6, LW2_tokens_json_write_non_atomic).
+// Boot with degradation instead of process death, LW2_tokens_json_write_non_atomic).
 // A truncated data/tokens.json (an interrupted write in the enrich-decimals window, disk)
 // crashed with RegistryError at top-level serve.mjs → unhandled rejection: the process
 // did not come up at all, no degraded mode existed, and the "corrupted" class was not
-// distinguished (unlike the journal, where the same class was fixed in round 5).
+// distinguished (unlike the journal, where the same class was fixed in.
 
 /**
  * Registry load distinguishing "file absent", "corrupted" and "healthy".
- * Corruption is an explicit state following the journal pattern (round 5): the evidence is
+ * Corruption is an explicit state following the journal pattern: the evidence is
  * preserved nearby (rename, falling back to copy on failure; see preserveCorruptedFile), boot
  * continues on an empty registry, the corrupted flag goes to /health (registry.corrupted).
  * @param {string} path
@@ -79,7 +79,7 @@ export async function loadRegistrySafe(path = "data/tokens.json", preserveOpts =
   }
   let list;
   try {
-    // round 21 (SRE P3-5): strip a UTF-8 BOM before parsing — a valid registry must not be quarantined for an editor fingerprint
+    // strip a UTF-8 BOM before parsing — a valid registry must not be quarantined for an editor fingerprint
     list = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch (err) {
     return quarantineRegistryFile(path, `registry is not valid JSON: ${err.message}`, preserveOpts);

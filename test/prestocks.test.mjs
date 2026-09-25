@@ -141,7 +141,7 @@ test("garbage instead of metadata — NormalizeError", () => {
 test("metadataSources: external_url and terms — the legitimate source links", () => {
   const m = FIX("prestocks-openai.json");
   assert.deepEqual(metadataSources(m), ["https://prestocks.com/openai", "https://url.prestocks.com/terms-of-service"]);
-  // the client shape (a camelCase externalUrl — as our client serves) also arrives (ROUND7 #6)
+  // the client shape (a camelCase externalUrl — as our client serves) also arrives 
   assert.deepEqual(
     metadataSources({ externalUrl: "https://prestocks.com/openai", terms: "https://url.prestocks.com/terms-of-service" }),
     ["https://prestocks.com/openai", "https://url.prestocks.com/terms-of-service"],

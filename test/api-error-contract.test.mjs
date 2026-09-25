@@ -1,4 +1,4 @@
-// Round 23 (API consumer + finance v3): the error contract and typing contract on the
+// the error contract and typing contract on the
 // paths the first integrator never walked. A broken store event must be a typed 503
 // kind:"parse", never a fabricated totalRaw:"0"; /crosscheck must not leak a bare 500;
 // amountPerUnitRaw is a STRING everywhere (the README's own "decimal strings" rule);
@@ -9,8 +9,8 @@ import assert from "node:assert/strict";
 import { createApiServer } from "../src/api/server.mjs";
 import { bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
 
-const MINT = "Round23Mi" + "1".repeat(34);
-const MINT2 = "Round23Mx" + "2".repeat(34);
+const MINT = "ContractMi" + "1".repeat(34);
+const MINT2 = "ContractMx" + "2".repeat(34);
 const ADDR = "R23Wa11et" + "a".repeat(34);
 const REG = [
   { mint: MINT, symbol: "R23x", name: "Contract", issuer: "test", decimals: 6 },
@@ -94,7 +94,7 @@ test("events: amountPerUnitRaw is serialized as a STRING (the README's decimal-s
   }, { events: [div()] });
 });
 
-test("accruals dedup: tz twins of one calendar ex-day are ONE dividend (round 23 finance F1)", async () => {
+test("accruals dedup: tz twins of one calendar ex-day are ONE dividend finance F1)", async () => {
   await withSrv(async (base) => {
     const rows = await (await fetch(`${base}/accruals?symbol=R23x&address=${ADDR}`)).json();
     assert.equal(rows.length, 1, "2026-02-01 and 2026-02-01T00:00:00+02:00 are the same ex-day");

@@ -108,7 +108,7 @@ test("pagination: two full pages + an empty third → stop", async () => {
   assert.equal(bodies, 3);
 });
 
-test("a short last page is NOT the end — the stream probes until an empty/no-progress page (round 8)", async () => {
+test("a short last page is NOT the end — the stream probes until an empty/no-progress page", async () => {
   const page1 = Array.from({ length: 3 }, (_, i) => ({ signature: `a${i}`, slot: i, blockTime: 1, err: null }));
   // makeClient repeats the last response: after the "tail" (< limit) the stream must ask
   // again; a repeated tail page — no progress (and no new uniques) → stop
@@ -116,7 +116,7 @@ test("a short last page is NOT the end — the stream probes until an empty/no-p
   const seen = [];
   for await (const s of streamSignatures(c, MINT, { limit: 3 })) seen.push(s);
   assert.equal(seen.length, 4); // 3 + 1 unique; the tail duplicate is not yielded (the uniqueness contract)
-  assert.equal(c.requestCount, 4); // the short one required a confirmation, the repeat with no new ones — stop (round 9: the K-zero progress)
+  assert.equal(c.requestCount, 4); // the short one required a confirmation, the repeat with no new ones — stop: the K-zero progress)
 });
 
 test("err transactions arrive with the err flag", async () => {
@@ -169,7 +169,7 @@ test("a foreign mint in the balances is ignored", async () => {
   assert.ok(r.deltas.every((d) => d.mint === MINT));
 });
 
-// ---- round 2: several accounts of one mint for one owner ----
+// ----: several accounts of one mint for one owner ----
 
 const OWNER2 = "Owner11111111111111111111111111111111111111111";
 
@@ -218,7 +218,7 @@ test("two accounts with real buys: the owner's delta = the sum of the accounts",
   assert.equal(r.deltas[0].postRaw, 140n);
 });
 
-// ---- round 4: an ownership change of a token account inside a tx (SetAuthority) ----
+// ----: an ownership change of a token account inside a tx (SetAuthority) ----
 
 const W1 = "Wallet1111111111111111111111111111111111111111";
 const W2 = "Wallet2222222222222222222222222222222222222222";

@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
-const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // valid base58, as in the round6 tests
+const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // valid base58, as elsewhere in the suite
 
 const historyNodes = JSON.parse(readFileSync(path.join(dir, "xstocks-spyx-history-eth.json"), "utf8")).nodes;
 const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { symbol: "SPYx" }), SPYx);
@@ -397,7 +397,7 @@ test("50 concurrent requests over mixed routes — all answer as expected, the s
         ["/summary", 200],
         ["/tokens?issuer=tessera", 200],
         [`/events?symbol=SPYx`, 200],
-        [`/events?symbol=SPYx&type=NOPE`, 400], // ROUND13: a garbage type — an honest refusal, not a silent []
+        [`/events?symbol=SPYx&type=NOPE`, 400], // a garbage type — an honest refusal, not a silent []
         [`/events`, 400],
         [`/multiplier?symbol=SPYx&raw=100000000&date=2026-07-01`, 200],
         [`/multiplier?symbol=SPYx&raw=abc`, 400],

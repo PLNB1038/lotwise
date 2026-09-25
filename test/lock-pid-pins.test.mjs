@@ -1,5 +1,5 @@
-// formerly round16-h4-pins.test.mjs
-// Round 16 — the killer pins of the H4 mutations (12 mutations across round 15, 4 survived) + regressions
+
+// — the killer pins of the H4 mutations (12 mutations across, 4 survived) + regressions
 // of the attack findings:
 //   M6/H4-P3 "age < -staleMs" without a pin: the age<0 mutation broke a fresh legacy lock with
 //          an mtime a fraction of a ms "in the future" — the NTFS guard must tolerate it (−staleMs, 0).

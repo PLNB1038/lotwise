@@ -1,4 +1,4 @@
-// Round 21 (finance audit F2): the USDC leg of a swap becomes cost basis on buys and
+// the USDC leg of a swap becomes cost basis on buys and
 // proceeds on sells. Contract: a tx where exactly ONE tracked token moved against a
 // USDC counter-leg gets basisKnown/proceedsKnown; anything else (token→token swap,
 // transfer-in, several tracked tokens in one tx) is honestly flagged unknown — the
@@ -258,7 +258,7 @@ test("proceeds: a PARTIAL consumption of a lot splits its basis proportionally (
   assert.equal(BigInt(p1.basisRaw) + BigInt(p2.basisRaw), 10n * 10n ** 6n);
 });
 
-// Round 22 (finance-v2 F2): a MIXED tx — sold token A, bought token B against the net
+// a MIXED tx — sold token A, bought token B against the net
 // USDC — must not price either leg. The rule requires EXACTLY ONE tracked token in the tx
 // (mine.length === 1), not "exactly one buy"; the net USDC of a two-legged swap is nobody's
 // basis (README: "several tracked tokens inside one tx — basisKnown: false, never an

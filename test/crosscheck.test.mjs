@@ -121,7 +121,7 @@ test("crossCheckEvents: only MULTIPLIER_CHANGE + the history coverage", () => {
   assert.equal(coverage.candlesTo, "2026-06-18");
 });
 
-// --- round 4: strict dates + the fuzzer invariants (seed 20260919) ---
+// ---: strict dates + the fuzzer invariants (seed 20260919) ---
 
 const VERDICTS = ["consistent", "mismatch", "suspicious", "inconclusive", "no-price-data"];
 

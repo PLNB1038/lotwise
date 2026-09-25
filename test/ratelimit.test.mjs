@@ -123,7 +123,7 @@ test("rateLimits: null — the limits off (local experiments)", async () => {
   }
 });
 
-// Round 22 (security): XFF rotation used to mint a fresh bucket per request — the last
+// XFF rotation used to mint a fresh bucket per request — the last
 // hop was trusted as a bare string (300/300 at a limit of 2/min). A hop that is not an
 // IP address is now refused as a key: the request falls back to the shared socket bucket.
 test("trustProxy: rotating GARBAGE XFF hops does not mint new buckets — the socket bucket applies", async () => {

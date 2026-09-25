@@ -1,6 +1,6 @@
-// Round 6 regression tests of the Lotwise review — zone src/api/server.mjs.
+// regression tests of the Lotwise review — zone src/api/server.mjs.
 // Findings:
-//   LW2_excluded_unmarked_multiplier_and_events — the fix of ROUND5 #5 ("an excluded token
+//   LW2_excluded_unmarked_multiplier_and_events — the excluded-token fix ("an excluded token
 //       showed multiplier 1") covered /summary, /lots and /health, but not /multiplier
 //       and /events. For an excluded token (TimelineError at startup, events hidden
 //       from eventsByMint) /multiplier answers a fabricated "1" with events:0 WITHOUT the
@@ -20,13 +20,13 @@ import { fileURLToPath } from "node:url";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const SPYx = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
-const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // same as in round5-api-ui.test.mjs
+const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // the shared fixture owner
 
 const historyNodes = JSON.parse(readFileSync(path.join(dir, "xstocks-spyx-history-eth.json"), "utf8")).nodes;
 const events = bindMintAndValidate(multiplierHistoryToEvents(historyNodes, { symbol: "SPYx" }), SPYx);
 
 // Server with a "poisoned" mint: a broken chain → TimelineError at startup → the token
-// is excluded from the vitrine (the round5-api-ui.test.mjs / api.test.mjs pattern).
+// is excluded from the vitrine (the api.test.mjs pattern).
 async function withPoisonedServer(fn, optsFn = null) {
   const registry = await loadRegistry("data/tokens.json");
   const bad = registry.find((t) => t.symbol === "T-SpaceX");

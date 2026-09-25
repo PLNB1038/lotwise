@@ -1,5 +1,5 @@
-// formerly round11-apocalypse.test.mjs
-// Round 11 regression tests — the fixes of the apocalypse wave C (P0/P1 aim).
+
+// regression tests — chaos regression fixes.
 //   C4-1 [P1]: a gateway without scaledUiAmountConfig = "no fact", not a "reset to 1" —
 //              the journal diff fabricated a phantom X→1 and an eternal duplicate triplet.
 //   C3-1 [P1]: an RPC URL with credentials leaked into 503 bodies and the boot log via err.message.

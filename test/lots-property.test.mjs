@@ -363,8 +363,8 @@ test(`determinism: a repeated run of the first 25 scenarios — an identical JSO
 // There are no such cases now: all 200 scenarios × 6 invariant groups are green.
 // ===========================================================================
 
-// Round 23: a seeded property run over the USDC-leg math (the 10k full fuzzer lives in
-// _bughunt/round23-property.mjs; this pins 400 deterministic histories in the suite).
+// a seeded property run over the USDC-leg math (the 10k full fuzzer lives in
+// the full fuzzer; this pins 400 deterministic histories in the suite).
 // Invariants: Σ(known lot basis) + Σ(known realized basis) == Σ(known buy legs);
 // Σ(realized proceeds) + Σ(gap proceeds) == Σ(known sale legs); pnl == proceeds − basis
 // only when both are known; no negative lots/bases; netDelta == Σ deltas per mint.

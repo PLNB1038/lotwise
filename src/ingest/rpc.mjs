@@ -13,16 +13,16 @@ export class RpcError extends Error {
 
 // Transient JSON-RPC errors (rounds 8-9): public/overloaded nodes return them
 // with HTTP 200 in the body — such a response used to be FATAL for the entire wallet scan.
-// The rules are separate (round 9 fix 11): a CODE from the set (-32005) is always transient;
+// The rules are separate : a CODE from the set (-32005) is always transient;
 // a MESSAGE ("node is behind" etc.) is transient ONLY when no code is present:
 // deterministic codes (-32602 "rate limit exceeded…") are permanent, retrying just burned
 // the quota for nothing. Exhausting message-matched retries → kind "rate-limit" (consumers
 // switch on kind); exhausting code-based -32005 retries stays kind "rpc".
-// URL redaction in error messages (wave C3-1 [P1]): undici embeds the full
+// URL redaction in error messages : undici embeds the full
 // URL (with userinfo credentials) into the TypeError, and a provider may echo a key in the
 // JSON-RPC error text — all of that used to reach the 503 bodies of ANY visitor and the
 // boot log, even though the banner masks the origin. Single choke point: the error constructor.
-// Round 13: the i flag — undici echoes URLs verbatim, and an uppercase scheme
+// the i flag — undici echoes URLs verbatim, and an uppercase scheme
 // ("HTTP://user:secret@…" — a typo/case-insensitive input) slipped past the redaction
 // and went into a visitor's 503 body.
 const URL_IN_MESSAGE = /https?:\/\/\S+/gi;
@@ -97,7 +97,7 @@ export class RpcClient {
         lastErr = new RpcError("network", `bad JSON: ${err.message}`);
         continue;
       }
-      // Garbage body with HTTP 200 (null/array/number — round 9 fix 11): null used to produce
+      // Garbage body with HTTP 200 (null/array/number —: null used to produce
       // a bare TypeError bypassing classification, and [] "successfully" returned undefined.
       if (body === null || typeof body !== "object" || Array.isArray(body)) {
         lastErr = new RpcError("network", `non-object JSON-RPC body: ${typeof body}`);

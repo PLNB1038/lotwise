@@ -77,7 +77,7 @@ export function renderPage() {
   footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
   footer code { font-family: var(--mono); color: var(--accent); }
   .err { color: var(--warn); font-size: 13px; }
-  /* Wave I1 (mobile): the address stays on screen, the multiplier column is not cut
+  /* the address stays on screen, the multiplier column is not cut
      off at the edge — on narrow screens it collapses (the value is in the token card),
      long numbers wrap instead of tearing the grid */
   @media (max-width: 640px) {
@@ -275,14 +275,14 @@ function select(symbol, scroll) {
   el('detail').style.display = 'block';
   el('detail-title').textContent = t.symbol + ' — ' + t.name;
   el('date-in').value = todayISO();
-  // a token change clears the panels BEFORE loading (wave D1): the previous token's
+  // a token change clears the panels BEFORE loading : the previous token's
   // events/calc do not sit under the new title while its answers are in flight
   el('events').innerHTML = '<li class="note">loading events…</li>';
   el('calc-out').innerHTML = '';
   loadEvents(t);
   loadPlanes(t);
   calc();
-  // Wave I1 (UX): auto-jumping on page load kicked the user off the first screen
+  // auto-jumping on page load kicked the user off the first screen
   // (header + address field) down to the token table. Scrolling happens only on click.
   if (scroll !== false) document.getElementById('detail').scrollIntoView({ behavior: 'smooth' });
 }
@@ -432,7 +432,7 @@ function loadPlanes(t) {
       else setVerdict('disagree', 'planes disagree');
     })
     .catch(function (e) {
-      if (state.selected !== t) return; // someone else's error does not land on the new token (wave D1)
+      if (state.selected !== t) return; // someone else's error does not land on the new token 
       setVerdict('unavailable', 'unavailable');
       el('planes').innerHTML = '<dt>on-chain source</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
@@ -441,7 +441,7 @@ function loadPlanes(t) {
 var calcSeq = 0;
 function calc() {
   var t = state.selected;
-  var mySeq = ++calcSeq; // epoch: a stale recompute does not repaint (wave D1)
+  var mySeq = ++calcSeq; // epoch: a stale recompute does not repaint 
   if (!t) return;
   var rawIn = (el('raw-in').value || '0').trim();
   if (!/^\\d*(\\.\\d*)?$/.test(rawIn) || rawIn === '' || rawIn === '.') {
@@ -470,7 +470,7 @@ function calc() {
   fetch(qs)
     .then(function (r) { return r.json(); })
     .then(function (m) {
-      if (mySeq !== calcSeq || state.selected !== t) return; // stale response (epoch — wave D1)
+      if (mySeq !== calcSeq || state.selected !== t) return; // stale response (epoch)
       // an {error} body from a 400/500: json made it, the data did not — show the reason honestly
       if (m && m.error) {
         el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(m.error) + '</dd>';
@@ -489,14 +489,14 @@ function calc() {
       el('calc-out').innerHTML =
         '<dt>raw (base units)</dt><dd>' + raw.toString() + '</dd>' +
         '<dt>multiplier at ' + esc(m.date.slice(0, 10)) + '</dt><dd>' + esc(m.multiplier) + '</dd>' +
-        // contractually-numeric fields get escaped too (round 7 fix 9): a string in them
+        // contractually-numeric fields get escaped too : a string in them
         // is off-contract, but silent stored XSS costs more than one esc() call
         '<dt>adjusted (base units)</dt><dd>' + esc(s.whole) + (s.exact ? '' : ' + ' + esc(s.remainder) + '/' + esc(s.den)) + '</dd>' +
         '<dt>remainder policy</dt><dd>' + dust + '</dd>' +
         (truncated ? '<dt>input precision</dt><dd class="err">amount exceeds ' + t.decimals + ' token decimals — truncated to base units</dd>' : '');
     })
     .catch(function (e) {
-      if (mySeq !== calcSeq || state.selected !== t) return; // a stale attempt stays silent (wave D1)
+      if (mySeq !== calcSeq || state.selected !== t) return; // a stale attempt stays silent 
       el('calc-out').innerHTML = '<dt>api</dt><dd class="err">' + esc(e.message) + '</dd>';
     });
 }
@@ -530,7 +530,7 @@ function fmtUi(rawStr, decimals) {
   return sign + s.slice(0, -decimals) + '.' + s.slice(-decimals);
 }
 
-// Wave I1 (UX): a bare "fetch failed" with no explanation scares people. A human phrase
+// a bare "fetch failed" with no explanation scares people. A human phrase
 // for the network class, the original in the tooltip (honesty kept, accessibility given).
 function humanScanError(body, rawMsg) {
   var m = String(rawMsg || (body && body.error) || '');
@@ -551,7 +551,7 @@ function scanWalletUi() {
     return;
   }
   var myAddr = addr; // capture the address: another scan's response must not be rendered
-  // Wave I1: the button dims for the duration of the scan + an honest elapsed timer —
+  // the button dims for the duration of the scan + an honest elapsed timer —
   // "Scanning…" used to sit there for minutes with no progress, and the button could
   // be clicked again.
   var btn = document.getElementById('scan-btn');
@@ -598,7 +598,7 @@ function renderWallet(rep) {
   // excluded tokens in the report: their multiplier is a default, adjusted was not computed
   var excludedCount = 0;
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
-  // Wave I1: a full ISO timestamp reads hard — date + minutes UTC
+  // a full ISO timestamp reads hard — date + minutes UTC
   var when = String(rep.now || '—').replace('T', ' ').slice(0, 16) + (rep.now ? ' UTC' : '');
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
@@ -616,7 +616,7 @@ function renderWallet(rep) {
         // fallback balance must not be shown as "adjusted (exact)" — the same quiet lie
         // of "adjusted = raw".
         var noAdjusted = t.excluded || t.adjustedAvailable === false;
-        // Wave I1: a wall of gaps collapses to one line, the full list in the tooltip
+        // a wall of gaps collapses to one line, the full list in the tooltip
         var gapsFull = t.gaps.map(function (g) {
           return g.missingQtyRaw + ' base units predate the scan window' + (g.date ? ' (by ' + String(g.date).replace('T', ' ').slice(0, 16) + ' UTC)' : '');
         }).join('; ');
@@ -624,7 +624,7 @@ function renderWallet(rep) {
           ? '<dt class="err">scan gap</dt><dd class="err" title="' + esc(gapsFull) + '">' + esc(t.gaps[0].missingQtyRaw) +
               ' base units predate the scan window' + (t.gaps.length > 1 ? ' +' + (t.gaps.length - 1) + ' more (hover)' : '') + '</dd>'
           : '';
-        // Round 21: the USDC leg of each trade prices the report (basis on buys, proceeds on
+        // the USDC leg of each trade prices the report (basis on buys, proceeds on
         // sells). basisKnown === undefined means an older cached report — such lots are neither
         // priced nor "unpriced", they render exactly as before.
         var lotsPriced = t.lots.filter(function (l) { return l.basisKnown === true; });
@@ -648,7 +648,7 @@ function renderWallet(rep) {
                 ' <span class="note">proceeds ' + esc(fmtUi(String(proceeds), 6)) +
                 (unpriced > 0 ? ', ' + unpriced + ' disposal' + (unpriced > 1 ? 's' : '') + ' unpriced' : '') + '</span>'
               : proceedsOnly.length
-                // round 22 (F5): the sale HAD a USDC leg — its proceeds are money the wallet
+                // the sale HAD a USDC leg — its proceeds are money the wallet
                 // really received; only the cost side is unknown. That is not "no leg".
                 ? '<span class="note">proceeds ' + esc(fmtUi(String(proceedsOnlySum), 6)) + ' USDC booked on ' +
                   proceedsOnly.length + ' disposal' + (proceedsOnly.length > 1 ? 's' : '') +
@@ -657,7 +657,7 @@ function renderWallet(rep) {
           : '';
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
           '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd>' +
-            // Wave I1: a negative window delta is NOT an error but an artifact of the scan
+            // a negative window delta is NOT an error but an artifact of the scan
             // window: in red it read as "you have a problem"; the explanation lives in the label
             esc(fmtUi(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance, t.decimals)) + ' ' + esc(t.symbol) +
             ' <span class="note">(' + esc(t.netDeltaRaw != null ? t.netDeltaRaw : t.rawBalance) + ' base units)</span></dd>' +
@@ -682,7 +682,7 @@ document.getElementById('scan-btn').onclick = scanWalletUi;
 el('addr-in').onkeydown = function (e) { if (e.key === 'Enter') scanWalletUi(); };
 
 fetch('/health').then(function (r) {
-  if (!r.ok) throw new Error('/health HTTP ' + r.status); // a proxy's 502 JSON — not "undefined tokens" (wave D1)
+  if (!r.ok) throw new Error('/health HTTP ' + r.status); // a proxy's 502 JSON — not "undefined tokens" 
   return r.json();
 }).then(function (h) {
   if (!h || typeof h !== 'object') throw new Error('/health: unexpected body');
@@ -694,7 +694,7 @@ fetch('/health').then(function (r) {
     state.tokens = list;
     renderStats(h, list);
     renderTokens(list);
-    if (list.length) select(list[0].symbol, false); // the most eventful token, no hardcoding and NO auto-jump (wave I1)
+    if (list.length) select(list[0].symbol, false); // the most eventful token, no hardcoding and NO auto-jump 
   });
 }).catch(function (e) {
   el('stats').innerHTML = '<div class="stat"><b class="err">API unavailable</b><i>' + esc(e.message) + ' — retry in a moment</i></div>';

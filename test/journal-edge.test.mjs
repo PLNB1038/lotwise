@@ -1,8 +1,8 @@
-// Adversarial boundaries of the on-chain journal (round 7): writes/dedup/conflicts,
+// Adversarial boundaries of the on-chain journal: writes/dedup/conflicts,
 // reads/corruptions, recovery/degraded boot. The boundaries of rounds 5–6 are extended
 // (an empty file, a BOM, an array payload, BigInt, garbage record fields). The ACTUAL
 // behavior is pinned; the "GAP:" mark — a recorded contract in a place
-// where the current behavior turned out to be a hole. Round 7 found two holes, and both
+// where the current behavior turned out to be a hole. found two holes, and both
 // were FIXED in src — the corresponding GAP pins are rewritten for the correct
 // behavior (the pin recorded a bug, that is deliberate):
 //   (1) events-not-an-array is treated as a record corruption (src/events/journal.mjs):
@@ -92,10 +92,10 @@ test("a rotation without a pendingEffectiveDate — the event is dated by the ob
   assert.equal(event.multiplierTo, "5");
 });
 
-test("parsed garbage {} on a first observation: there is NO record — the next rotation is not absorbed (the GAP closed by wave C4-1)", () => {
+test("parsed garbage {} on a first observation: there is NO record — the next rotation is not absorbed (the gap this pins)", () => {
   // It was (a documented GAP): a broken payload {} gave an entry with
   // lastEffective:undefined, "healthy" in shape on disk, and the next rotation
-  // was absorbed silently. Wave C4-1: a response without facts (a falsy hasExtension) — no
+  // was absorbed silently. a response without facts (a falsy hasExtension) — no
   // record at all; the first live boot builds the history from scratch, the 1→5 rotation IS EMITTED.
   const s1 = planJournalStep(token, null, {}, NOW);
   assert.equal(s1.event, null);
@@ -117,7 +117,7 @@ test("parsed garbage {} on a first observation: there is NO record — the next 
 });
 
 test("planJournalStep: events not an array (a broken record field) — the backfill duplicate is NOT re-emitted, the operator warn fired, the subsequent write is correct (the GAP rewritten: earlier the history was silently reset and the duplicate re-emitted)", (t) => {
-  // Round 7, fixed in src/events/journal.mjs: a record with events-not-an-array is
+  // in src/events/journal.mjs: a record with events-not-an-array is
   // corrupted, not a "first observation". The replay is empty (an untrusted history),
   // the 1→5 duplicate is suppressed, a loud console.error with the evidence goes to the operator, the record
   // is rebuilt from scratch: lastEffective from the chain's fact, events honestly empty.
@@ -126,7 +126,7 @@ test("planJournalStep: events not an array (a broken record field) — the backf
   const step = planJournalStep(token, prior, BASE, NOW);
   assert.equal(errLog.mock.callCount(), 1, "the corruption is not silent: a loud console.error");
   const shouted = String(errLog.mock.calls[0].arguments[0]);
-  assert.match(shouted, /CORRUPTED/); // round 19: EN
+  assert.match(shouted, /CORRUPTED/); // EN
   assert.match(shouted, /garbage instead of an array/, "the evidence — the broken record as a whole — goes to the operator's log");
   assert.equal(step.corrupted, true, "the mint is marked corrupted");
   assert.deepEqual(step.replay, [], "the untrusted history is not mixed into the replay");
@@ -217,11 +217,11 @@ test("loadJournalOnchain: an empty file (0 bytes) — corrupted, not a \"first r
   assert.equal(existsSync(p), false);
 });
 
-// Round 21 (SRE P3-5) REWRITES this pin: a BOM used to be treated as corruption (an
+// a BOM used to be treated as corruption (an
 // earlier round chose "not silently trimmed"). The SRE pass priced the operator cost:
 // a perfectly valid journal went to quarantine and needed a manual strip-and-restore.
 // A UTF-8 BOM is an editor fingerprint, not damage; the loader strips it in-memory.
-test("loadJournalOnchain: a BOM before the JSON is stripped and the journal loads (round 21 rewrite of the quarantine pin)", () => {
+test("loadJournalOnchain: a BOM before the JSON is stripped and the journal loads rewrite of the quarantine pin)", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   writeFileSync(p, "\uFEFF{\"M\":{}}");
@@ -272,7 +272,7 @@ test("saveJournalAtomic: an array payload is written without a check, but the re
 });
 
 test("atomicWriteJson: a non-serializable payload (BigInt) — the exception is propagated, zero tmp files in the directory, the target byte-for-byte the same (the GAP rewritten: earlier an empty .tmp was left)", () => {
-  // Round 7, fixed in src/fs/atomic.mjs: the serialization is now BEFORE creating the temp,
+  // in src/fs/atomic.mjs: the serialization is now BEFORE creating the temp,
   // so a JSON.stringify throw creates no file at all; on a write/fsync/rename
   // failure after opening the temp, the latter is cleaned up in catch.
   const dir = freshDir();
@@ -357,7 +357,7 @@ test("degrade→restore on disk: an unavailable chain does not roll back events,
   assert.equal(tl.multiplierAt("2026-09-16"), "7", "the recovered journal — a valid chain for the timeline");
 });
 
-// Round 21 (SRE P2-3): a journal record whose events ARRAY carries an invalid ELEMENT
+// a journal record whose events ARRAY carries an invalid ELEMENT
 // (an unknown event type — a future/downgraded writer) is corruption, not a forever-skip.
 // It used to survive every boot: replay validation threw, the token was silently dead
 // each session, and the broken record was rewritten to disk as-is, forever.

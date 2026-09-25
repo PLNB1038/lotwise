@@ -1,5 +1,5 @@
-// formerly round5-api-ui.test.mjs
-// Regression tests of Lotwise review round 5 — zone src/api/server.mjs + src/ui/page.mjs.
+
+// Regression tests of Lotwise review — zone src/api/server.mjs + src/ui/page.mjs.
 // Findings:
 //   LW_onchain_rolled_date_500            — /onchain?date=2026-02-30 → 500 instead of 400
 //                                           (Date.parse rolls the date over, the strict parser

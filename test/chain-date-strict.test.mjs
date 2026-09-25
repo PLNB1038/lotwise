@@ -1,5 +1,5 @@
-// formerly round6-chain-date-strict.test.mjs
-// Round 6 regression tests — the finding LW2_issuer_chain_complete_dateparse_divergence.
+
+// regression tests — the finding LW2_issuer_chain_complete_dateparse_divergence.
 // issuerChainComplete was the last place of the pipeline on Date.parse: rolled-over dates
 // ("2026-02-30T00:00:00Z" → March 2) and naive dates (the host's local time) passed
 // the chain completeness gate, then fell in multiplierHistoryToEvents with NormalizeError —
@@ -19,8 +19,8 @@ test("the rolled-over date 2026-02-30 does not pass the gate (Date.parse rolled 
   ]);
   assert.equal(r.complete, false);
   // NOTE (i18n sync): matches the RUSSIAN reason text produced by src/events/journal.mjs
-  // src now says "unparseable activation date" (round 19: EN).
-  assert.match(r.reason, /unparseable activation date/); // round 19: EN
+  // src now says "unparseable activation date": EN).
+  assert.match(r.reason, /unparseable activation date/); // EN
   assert.match(r.reason, /2026-02-30/); // the reason names the specific node
 });
 
@@ -30,7 +30,7 @@ test("a naive date without a timezone does not pass the gate (Date.parse treated
   ]);
   assert.equal(r.complete, false);
   // NOTE (i18n sync): matches the RUSSIAN reason text of src/events/journal.mjs (see above).
-  assert.match(r.reason, /unparseable activation date/); // round 19: EN
+  assert.match(r.reason, /unparseable activation date/); // EN
 });
 
 test("a garbage date does not participate in choosing the oldest: the verdict is incomplete regardless of the other nodes", () => {

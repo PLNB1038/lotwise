@@ -1,4 +1,4 @@
-// Round 21 (F3 wiring): the operator's declarations file is the channel that feeds
+// the operator's declarations file is the channel that feeds
 // DIVIDEND_ACCRUAL into the live store. All-or-nothing by design: one malformed line
 // fails the whole load with a named reason (half a feed silently dropped is worse);
 // a missing file is the norm (ok, loaded 0) — /accruals stays honest [] until the

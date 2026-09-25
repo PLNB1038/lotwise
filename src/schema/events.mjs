@@ -22,7 +22,7 @@ export const EVENT_TYPES = [
 const DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 // Canonical form of a multiplier decimal string: "05"→"5", "5.0"→"5", "1.10"→"1.1".
-// A single spot for the journal, the scaled-ui parser and reconcile (ROUND7 fix 16, ROUND9 fix 15):
+// A single spot for the journal, the scaled-ui parser and reconcile :
 // the representation depends on the source, while every comparison below is a string one. Call
 // AFTER the regex guard: the shape is already guaranteed. Significant digits are not touched.
 export function canonicalDecimalString(s) {
@@ -41,7 +41,7 @@ const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 // A zero multiplier does not exist: MULTIPLIER_CHANGE "1"→"0" would silently zero out
 // the adjusted position, and crosscheck would get expectedRatio=Infinity.
 // "0.5" is valid — we check numeric equality to zero in ANY representation ("0", "00",
-// "0.00", "00.0": leading zeros are allowed by DECIMAL_RE itself — ROUND7 fix 3).
+// "0.00", "00.0": leading zeros are allowed by DECIMAL_RE itself —).
 const ZERO_MULTIPLIER_RE = /^0+(\.0+)?$/;
 
 // Cap on multiplier fraction precision — a PAIR with timeline.mjs (decimalToRatio rejects >30).
@@ -74,7 +74,7 @@ export function validateEvent(e) {
   }
   if (!MINT_RE.test(e.mint)) throw new EventValidationError("mint must be a base58 Solana pubkey", "mint");
   // A date is not only shape but semantics: a real calendar and a mandatory
-  // timezone on datetimes (src/schema/isodate.mjs, round 2–3 findings).
+  // timezone on datetimes (src/schema/isodate.mjs, earlier findings).
   // Journal replay and xstocks history pass ONLY this check — a garbage issuer
   // date would otherwise reach Date.parse as NaN and fall with a 500 on /summary.
   if (!isValidIsoDate(e.effectiveDate)) {
@@ -102,7 +102,7 @@ export function validateEvent(e) {
           !Number.isInteger(e.ratioDenominator) || e.ratioDenominator <= 0) {
         throw new EventValidationError("split ratio must be two positive integers (e.g. 3/1)", "ratioNumerator");
       }
-      // The safe-integer ceiling — the same argument as for amountPerUnitRaw (wave B):
+      // The safe-integer ceiling — the same argument as for amountPerUnitRaw :
       // above 2^53 the JSON boundary rounds silently, while the engine counts exactly
       if (e.ratioNumerator > Number.MAX_SAFE_INTEGER || e.ratioDenominator > Number.MAX_SAFE_INTEGER) {
         throw new EventValidationError("split ratio exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "ratioNumerator");
@@ -113,7 +113,7 @@ export function validateEvent(e) {
       if (!Number.isInteger(e.amountPerUnitRaw) || e.amountPerUnitRaw <= 0) {
         throw new EventValidationError("amountPerUnitRaw must be a positive integer in raw units", "amountPerUnitRaw");
       }
-      // The safe-integer ceiling (ROUND9 fix 14): above 2^53 the JSON boundary rounds silently —
+      // The safe-integer ceiling : above 2^53 the JSON boundary rounds silently —
       // dividends.mjs refers to this ceiling as "the ceiling of the schema itself"
       if (e.amountPerUnitRaw > Number.MAX_SAFE_INTEGER) {
         throw new EventValidationError("amountPerUnitRaw exceeds Number.MAX_SAFE_INTEGER — exact JSON transport impossible", "amountPerUnitRaw");

@@ -1,5 +1,5 @@
-// formerly round9-hardening.test.mjs
-// Round 9 regression tests — the night wave A (ROUND9_FINDINGS).
+
+// regression tests.
 // Groups: flags (#1), signature pagination (#2,3,12,13), an array journal record (#4),
 // the dividend crosscheck (#5), clientKey (#6), esc (#7), SSRF-mapped (#8),
 // the lock (#9), atomic-0600 (#10), rpc (#11), the schema ceiling (#14),
@@ -280,7 +280,7 @@ test("lock: a lock STALE by mtime with a LIVE pid is NOT broken (a SIGSTOP owner
   try {
     const store = path.join(dir, "webhooks.json");
     // mtime older than staleMs, but the pid is alive (ours): breaking on mtime alone = losing
-    // the update of a stuck owner (the TOCTOU of ROUND9 #9)
+    // the update of a stuck owner (the lock TOCTOU)
     writeFileSync(store + ".lock", JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
     utimesSync(store + ".lock", new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
     let mutated = false;
