@@ -78,7 +78,9 @@ export function applyEvents(lots, events) {
 
   for (const e of events) {
     if (e.type === "DIVIDEND_ACCRUAL") {
-      const key = `${e.mint}|${parseIsoDateMs(e.effectiveDate)}|${e.amountPerUnitRaw}`;
+      // round 24 (F2): the calendar DAY, matching the route's identity — the library and
+      // the endpoint must not disagree on the very seam the tz-twin fix was closing
+      const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
       if (seenDividends.has(key)) continue;
       seenDividends.add(key);
     }

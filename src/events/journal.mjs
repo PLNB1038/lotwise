@@ -3,7 +3,8 @@
 // a process restart. parsed === null means the chain is unreachable: past events are
 // replayed from cache, the journal entry is left untouched (observedAt stays honestly stale).
 import { journalTransition } from "./normalize-onchain.mjs";
-import { readFileSync, openSync, closeSync, unlinkSync, statSync, writeSync } from "node:fs";
+import { readFileSync, openSync, closeSync, unlinkSync, statSync, writeSync, readdirSync } from "node:fs";
+import { dirname, basename, join } from "node:path";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
 import { canonicalDecimalString, EVENT_TYPES } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
@@ -238,7 +239,7 @@ export function loadJournalOnchain(journalPath) {
     const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
     return { ok: false, corrupted: true, journal: {}, reason: `journal must be an object {mint: entry}, got ${got}` };
   }
-  return { ok: true, corrupted: false, journal: parsed, reason: null };
+  return { ok: true, corrupted: false, journal: parsed, reason: null, raw };
 }
 
 /**
@@ -416,6 +417,13 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
   try {
     let merged = { ...journal };
     const existing = loadJournalOnchain(journalPath);
+    // round 24 (ops S2): the boot path rewrote the WHOLE journal on every boot even with
+    // zero changes (a 50 MB file = a 50 MB rewrite per boot). The loaded file's raw text
+    // is already in hand: an identical serialization skips the write entirely.
+    const serialized = JSON.stringify(merged, null, 1) + "\n";
+    if (existing.ok && existing.raw === serialized) {
+      return { written: false };
+    }
     if (existing.ok) {
       for (const [mint, entry] of Object.entries(existing.journal)) {
         // Round 22 (security): a "__proto__"/"constructor" key from a foreign file is neither a mint nor data —
@@ -429,6 +437,7 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
       }
     }
     atomicWriteJson(journalPath, merged);
+    return { written: true };
   } finally {
     if (fd !== null) {
       try {
@@ -443,4 +452,35 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
       }
     }
   }
+}
+
+/**
+ * Round 24 (ops S5): a killed writer leaves .tmp debris forever (18.6 MB after ten
+ * kill -9 cycles in the round-24 repro; nothing in the repo ever swept them). A tmp file
+ * is garbage by definition — the atomic write either renamed it into place or the process
+ * died mid-write. Only ANCIENT files are swept: a live concurrent writer's fresh tmp is
+ * untouchable (the pid in the name is not enough — pids are reused).
+ * @returns {number} how many stale tmp files were removed
+ */
+export function sweepStaleTmpFiles(journalPath, { maxAgeMs = 3_600_000, nowMs = Date.now() } = {}) {
+  const dir = dirname(journalPath);
+  const prefix = `.${basename(journalPath)}.`;
+  let swept = 0;
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+      const p = join(dir, name);
+      try {
+        if (nowMs - statSync(p).mtimeMs >= maxAgeMs) {
+          unlinkSync(p);
+          swept += 1;
+        }
+      } catch {
+        /* raced away between readdir and unlink — fine */
+      }
+    }
+  } catch {
+    /* the directory is unreadable — the boot continues, the sweep is best-effort */
+  }
+  return swept;
 }

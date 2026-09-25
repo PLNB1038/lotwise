@@ -51,16 +51,17 @@ const err = (fn, tag) => assert.throws(fn, DeclarationError, tag);
 
 test("declarations → DIVIDEND_ACCRUAL: the fields from the declaration 1:1, sorted old→new", () => {
   const events = dividendsFromDeclarations([
-    decl({ exDate: "2026-09-15T00:30:00.000Z" }),           // the "newest" fed first
+    decl({ exDate: "2026-09-15T00:30:00.000Z" }),                       // the "newest" fed first
     decl({ exDate: "2025-12-15", amountPerUnitRaw: 405000, sourceUrl: "https://issuer.example/ko-dividend-q4-2025" }),
     decl({ exDate: "2026-06-14T23:55:00Z", sourceUrl: "https://issuer.example/ko-dividend-q2-2026" }),
   ], { symbol: "KOx" });
 
   assert.equal(events.length, 3);
+  // round 24 (F1 root): datetime forms are accepted and land as their calendar DAY
   assert.deepEqual(events.map((e) => e.effectiveDate), [
     "2025-12-15",
-    "2026-06-14T23:55:00Z",
-    "2026-09-15T00:30:00.000Z",
+    "2026-06-14",
+    "2026-09-15",
   ]);
   for (const e of events) {
     assert.equal(e.type, "DIVIDEND_ACCRUAL");
@@ -130,10 +131,13 @@ test("decimals: outside 0..18, a float, garbage — rejected; the boundaries 0 a
 
 // ---- the exDate formats ----
 
-test("exDate: canonical ISO forms are accepted and land in effectiveDate as is", () => {
+// round 24 (F1 root) rewrites the pin: every canonical ISO form is accepted and lands as
+// its CALENDAR DAY — a datetime with an offset names the same ex-day with a different
+// instant, and that instant must not become a second dividend downstream
+test("exDate: canonical ISO forms are accepted and canonicalize to the date-only ex-day", () => {
   for (const good of ["2026-09-15", "2026-09-15T00:00:00Z", "2026-09-15T14:30:00+02:00", "2026-09-15T00:30:00.000Z"]) {
     const [e] = dividendsFromDeclarations([decl({ exDate: good })], { symbol: "KOx" });
-    assert.equal(e.effectiveDate, good, good);
+    assert.equal(e.effectiveDate, "2026-09-15", good);
   }
 });
 
@@ -249,4 +253,14 @@ test("bindMintAndValidate wraps a schema error into NormalizeError — the contr
   assert.throws(() => bindMintAndValidate(forged, MINT), NormalizeError);
   // and directly by the schema — an EventValidationError
   assert.throws(() => validateEvent({ ...forged[0], mint: MINT }), EventValidationError);
+});
+
+// round 24 (ops S3): a sourceUrl is a REFERENCE, not a payload — a 100 KB "url" rode
+// into the store, /events bodies and every webhook POST unbounded
+test("declarations: a sourceUrl beyond 2048 chars is refused (a reference, not a payload)", () => {
+  const huge = "https://issuer.example/d?" + "x".repeat(3000);
+  assert.throws(
+    () => dividendsFromDeclarations([decl({ sourceUrl: huge })], { symbol: "KOx" }),
+    (err) => err instanceof DeclarationError && /2048/.test(err.message) && /3025/.test(err.message),
+  );
 });

@@ -9,7 +9,7 @@ import { RpcClient } from "../src/ingest/rpc.mjs";
 import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
-import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot } from "../src/events/journal.mjs";
+import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot, sweepStaleTmpFiles } from "../src/events/journal.mjs";
 import { parseServeArgs, ServeArgsError, assertHostResolvable, checkPortAvailable, envPositiveInt as envPositiveIntShared } from "../src/cli/flags.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,6 +121,12 @@ const journalPath = path.join(ROOT, "data", "onchain-journal.json");
 // copy of the history. A restart after the locking process (AV/indexer) goes away will
 // preserve the evidence normally and re-enable writes.
 const journalBoot = bootJournalOnchain(journalPath);
+// round 24 (ops S5): kill -9 debris (ancient .tmp files) is swept once at boot —
+// nothing else ever cleaned them (18.6 MB after ten kill cycles in the round-24 repro)
+{
+  const sweptTmp = sweepStaleTmpFiles(journalPath);
+  if (sweptTmp > 0) console.log(`[serve] journal boot: swept ${sweptTmp} stale .tmp file(s) left by killed writers`);
+}
 let journal = journalBoot.journal;
 const journalCorrupted = journalBoot.corrupted;
 const journalReadOnly = journalCorrupted && journalBoot.preserveFailed;

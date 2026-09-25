@@ -239,6 +239,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       try {
         report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
       } catch (err) {
+        console.error(`[api] /lots report build failed: ${err.message}`);
         return json(res, 500, { error: err.message, kind: null });
       }
       // tokens with a broken timeline: the multiplier in the report is the default "1" — mark honestly
@@ -322,10 +323,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       });
       try {
         const rows = uniqueDividends.map((e) => {
-          const exMs = parseIsoDateMs(e.effectiveDate);
-          // round 23 (API consumer): parseIsoDateMs answers null (no throw) on garbage — the
-          // comparison below then never fired and a valid amount was multiplied by a ZERO base.
-          if (exMs === null) throw new Error("dividend event with an unparseable effectiveDate in the store");
+          // round 24 (contract v4, F1): the base is the UTC MIDNIGHT of the calendar ex-day.
+          // A tz twin's instant differs but its day does not — the store order used to pick
+          // which twin's instant became the base, and the same file answered 200 vs a
+          // confident "0". The day part parses to one midnight for every twin; garbage
+          // answers NaN and is refused (the round-23 guard, kept).
+          const exDay = String(e.effectiveDate).slice(0, 10);
+          const exMs = Date.parse(`${exDay}T00:00:00.000Z`);
+          if (!Number.isFinite(exMs)) throw new Error("dividend event with an unparseable effectiveDate in the store");
           let base = 0n;
           let considered = 0;
           // F3 (round 22): a truncated scan window silently understates the ex-date base too
@@ -353,6 +358,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 200, rows);
       } catch (err) {
         // a broken event from the store does not take the server down: a clear reason instead of a generic 500
+        console.error(`[api] /accruals refused a store event: ${err.message}`);
         return json(res, 503, { error: `accrual engine failed: ${err.message}`, kind: "parse" });
       }
     }
@@ -453,7 +459,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // number while /accruals sent a string (per-endpoint typing discrimination for nothing).
       // The list is served chronologically: the store is append-ordered by source, not by time.
       const ordered = [...(type ? list.filter((e) => e.type === type) : list)]
-        .sort((a, b) => parseIsoDateMs(a.effectiveDate) - parseIsoDateMs(b.effectiveDate))
+        // ?? Infinity: a poisoned date (null) would make the comparator NaN — an unspecified
+        // order; garbage rows now deterministically sit after every valid row
+        .sort((a, b) => (parseIsoDateMs(a.effectiveDate) ?? Infinity) - (parseIsoDateMs(b.effectiveDate) ?? Infinity))
         .map((e) => (e.type === "DIVIDEND_ACCRUAL" && typeof e.amountPerUnitRaw === "number"
           ? { ...e, amountPerUnitRaw: String(e.amountPerUnitRaw) }
           : e));

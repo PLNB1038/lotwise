@@ -3,10 +3,10 @@
 // (b) a broken journal file at load — an explicit "corrupted" state, not a quiet "empty journal".
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, utimesSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { loadJournalOnchain, saveJournalAtomic, saveJournalMerged, preserveCorruptedJournal } from "../src/events/journal.mjs";
+import { loadJournalOnchain, saveJournalAtomic, saveJournalMerged, preserveCorruptedJournal, sweepStaleTmpFiles } from "../src/events/journal.mjs";
 
 const JOURNAL = {
   Mint11111111111111111111111111111111: {
@@ -210,4 +210,44 @@ test("saveJournalMerged: a dangerous key is skipped loudly, real mints survive",
     errLog.mock.restore();
   }
   assert.equal(errLog.mock.callCount(), 1, "the skip is loud — silently dropping is the bug this pins");
+});
+
+// round 24 (ops S2): the boot merge path skips the write when nothing changed — a 50 MB
+// journal used to be fully rewritten on every boot with zero changes
+test("saveJournalMerged: an unchanged merge does not rewrite the file (the boot path's skip)", () => {
+  const dir = freshDir();
+  const p = path.join(dir, "onchain-journal.json");
+  const entry = { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] };
+  const journal = { Mint11111111111111111111111111111111: entry };
+  const first = saveJournalMerged(p, journal);
+  assert.equal(first.written, true);
+  const before = readFileSync(p, "utf8");
+  const beforeMtime = statSync(p).mtimeMs;
+  const second = saveJournalMerged(p, { Mint11111111111111111111111111111111: { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] } });
+  assert.equal(second.written, false, "a deep-equal fresh object is still an unchanged merge");
+  assert.equal(readFileSync(p, "utf8"), before);
+  assert.equal(statSync(p).mtimeMs, beforeMtime, "the file was not touched at all");
+  const third = saveJournalMerged(p, { Mint11111111111111111111111111111111: { lastEffective: "7", observedAt: "2026-09-01T00:00:00.000Z", events: [] } });
+  assert.equal(third.written, true, "a real change writes");
+});
+
+// round 24 (ops S5): ancient .tmp debris is swept at boot; a fresh concurrent writer's
+// tmp and a foreign file's tmp are untouchable
+test("sweepStaleTmpFiles: removes only ancient journal .tmp debris", () => {
+  const dir = freshDir();
+  const p = path.join(dir, "onchain-journal.json");
+  const old1 = path.join(dir, ".onchain-journal.json.111.tmp");
+  const old2 = path.join(dir, ".onchain-journal.json.222.tmp");
+  const fresh = path.join(dir, ".onchain-journal.json.333.tmp");
+  const foreign = path.join(dir, ".unrelated.json.999.tmp");
+  for (const f of [old1, old2, fresh, foreign]) writeFileSync(f, "x");
+  const now = Date.now();
+  utimesSync(old1, new Date(now - 7200_000), new Date(now - 7200_000));
+  utimesSync(old2, new Date(now - 7200_000), new Date(now - 7200_000));
+  const swept = sweepStaleTmpFiles(p, { nowMs: now });
+  assert.equal(swept, 2, "the two ancient journal tmps");
+  assert.equal(existsSync(old1), false);
+  assert.equal(existsSync(old2), false);
+  assert.equal(existsSync(fresh), true, "a live writer's fresh tmp is untouchable");
+  assert.equal(existsSync(foreign), true, "another file's tmp is not ours to sweep");
 });

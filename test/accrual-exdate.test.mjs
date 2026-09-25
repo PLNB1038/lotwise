@@ -183,3 +183,60 @@ test("accruals: a truncated window flags the base incomplete (history beyond the
     }
   })();
 });
+
+// Round 24 (contract v4, F1): the store order must not decide money. A tz twin's
+// effectiveDate ("2026-02-01T00:00:00+02:00") has a different INSTANT than "2026-02-01" —
+// the dedup kept the first and ITS instant became the base, so the same declarations in
+// two row orders answered 200 vs a confident "0". The base is now the UTC midnight of the
+// calendar ex-day, identically for both twins, and the producer canonicalizes to date-only.
+test("accruals: tz twins in EITHER store order give the same money (the ex-day's UTC midnight is the base)", async () => {
+  const twinA = () => divEvent("2026-02-01", 2); // date-only: 2026-02-01T00:00:00Z
+  const twinB = () => divEvent("2026-02-01T00:00:00+02:00", 2); // 2026-01-31T22:00:00Z — same DAY
+  const buyAtEdge = aTx("b1", 100n, "2026-01-31T23:30:00.000Z"); // between the two instants
+  for (const [name, events] of [["date-only first", [twinA(), twinB()]], ["tz first", [twinB(), twinA()]]]) {
+    await withServer(async (base) => {
+      const rows = await (await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
+      assert.equal(rows.length, 1, `${name}: one dividend`);
+      assert.equal(rows[0].totalRaw, "200", `${name}: the calendar day's base — 100 held on Feb 1 UTC — same money in both orders`);
+    }, { events, txs: [buyAtEdge] });
+  }
+});
+
+// Round 24 (F2): the engine's dedup identity is the same calendar day — the route and the
+// library must not diverge on the seam f704599 was fixing.
+test("engine: applyEvents dedups tz twins of one calendar ex-day (parity with the route)", async () => {
+  const { applyEvents } = await import("../src/lots/lots.mjs");
+  const ev = (date, sources) => bindMintAndValidate([{
+    type: "DIVIDEND_ACCRUAL", effectiveDate: date, status: "confirmed",
+    sources, amountPerUnitRaw: 2, decimals: 6,
+  }], A_MINT)[0];
+  const lot = { id: "L1", mint: A_MINT, owner: A_ADDR, qtyRaw: 100n, acquiredDate: "2026-01-01", basisRaw: 0n };
+  const { accruals } = applyEvents([lot], [
+    ev("2026-02-01", ["https://x.example/1"]),
+    ev("2026-02-01T00:00:00+02:00", ["https://x.example/2"]),
+  ]);
+  assert.equal(accruals.length, 1, "the engine sees one dividend, like the route");
+});
+
+// Round 24 (F3): a poisoned-date event must not make /events ordering undefined — garbage
+// sorts to the end deterministically instead of a NaN comparator.
+test("events: a poisoned-date event sorts to the END, deterministically, valid rows stay chronological", async () => {
+  await withServer(async (base) => {
+    const r = await fetch(`${base}/events?symbol=${A_SYMBOL}`);
+    assert.equal(r.status, 200, "the endpoint still serves the mint");
+    const rows = await r.json();
+    assert.ok(Array.isArray(rows));
+    const valid = rows.filter((e) => /^\d{4}-\d{2}-\d{2}/.test(String(e.effectiveDate)));
+    const ts = valid.map((e) => Date.parse(e.effectiveDate));
+    for (let i = 1; i < ts.length; i++) assert.ok(ts[i - 1] <= ts[i], "valid rows chronological");
+    const last = rows[rows.length - 1];
+    assert.ok(!/^\d{4}-\d{2}-\d{2}/.test(String(last.effectiveDate)) || valid.length === rows.length,
+      "poisoned rows sit after every valid row");
+  }, {
+    events: [
+      divEvent("2026-06-01", 1),
+      divEvent("2026-02-01", 1),
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "garbage", status: "confirmed", sources: ["https://x.example/p"], amountPerUnitRaw: 1, decimals: 6, mint: A_MINT },
+    ],
+  });
+});

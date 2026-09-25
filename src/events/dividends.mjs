@@ -149,13 +149,23 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
     }
     const amountPerUnitRaw = toPositiveSafeInteger(decl.amountPerUnitRaw, "amountPerUnitRaw", decl);
     const decimals = toDecimals(decl.decimals, decl);
+    // round 24 (F1 root): the declaration is canonicalized to its DATE-ONLY day — a
+    // datetime with an offset names the same ex-day with a different instant, and every
+    // downstream consumer (the dedup, the ex-date base) keys on the day
+    const exDay = decl.exDate.slice(0, 10);
+
+    // round 24 (ops S3): a sourceUrl is a REFERENCE, not a payload — a 100 KB "url" rode
+    // into the store, /events bodies and every webhook POST unbounded
+    if (decl.sourceUrl.length > 2048) {
+      throw new DeclarationError(`sourceUrl must be at most 2048 chars, got ${decl.sourceUrl.length}`, decl);
+    }
 
     // A declaration is the issuer's statement with an accompanying link: status "confirmed",
     // like the issuer's official API in normalize-xstocks. Non-issuer sources
     // must not be fed into this contract.
     const e = {
       type: "DIVIDEND_ACCRUAL",
-      effectiveDate: decl.exDate,
+      effectiveDate: exDay,
       status: "confirmed",
       sources: [decl.sourceUrl],
       amountPerUnitRaw,
