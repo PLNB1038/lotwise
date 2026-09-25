@@ -86,6 +86,14 @@ export function validateEvent(e) {
   if (!EVENT_STATUSES.includes(e.status)) {
     throw new EventValidationError(`status must be one of ${EVENT_STATUSES.join("|")}`, "status");
   }
+  // a source is a REFERENCE, not a payload: cap it here so every entry path agrees
+  if (Array.isArray(e.sources)) {
+    for (const src of e.sources) {
+      if (typeof src === "string" && src.length > 2048) {
+        throw new EventValidationError(`source must be at most 2048 chars, got ${src.length}`, "sources");
+      }
+    }
+  }
   if (!Array.isArray(e.sources) || e.sources.length === 0) {
     throw new EventValidationError("at least one source URL/reference is required", "sources");
   }

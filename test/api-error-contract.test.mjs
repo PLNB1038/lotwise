@@ -149,3 +149,56 @@ test("events: chronological order across mixed event types", async () => {
     }
   }, { events: [multEvent(3, "2026-06-01T00:00:00Z"), multEvent(1, "2026-02-01T00:00:00Z"), multEvent(2, "2026-04-01T00:00:00Z")] });
 });
+
+// Rolled-over dates (Feb 30, Jun 31) are NOT valid days: V8's Date.parse silently moves
+// them to next month — the day-midnight base must use the STRICT parser, answering 503,
+// never a confident totalRaw computed over the wrong day.
+test("accruals: a rolled-over effectiveDate in the store — 503 kind:parse, not money for the wrong day", async () => {
+  for (const bad of ["2026-02-30", "2026-06-31", "2027-02-29", "2026-02"]) {
+    await withSrv(async (base) => {
+      const r = await fetch(`${base}/accruals?symbol=R23x&address=${ADDR}`);
+      assert.equal(r.status, 503, `${bad}: refused`);
+      const body = await r.json();
+      assert.equal(body.kind, "parse");
+    }, {
+      events: [{ type: "DIVIDEND_ACCRUAL", effectiveDate: bad, status: "confirmed", sources: ["https://issuer.example/d"], amountPerUnitRaw: 2, decimals: 6, mint: MINT }],
+    });
+  }
+});
+
+// Cross-midnight twins: one INSTANT written in two timezone skins names two calendar
+// days — one economic fact. The dedup collapses on EITHER the day or the instant.
+test("accruals: cross-midnight twins (same instant, two tz skins) — ONE dividend", async () => {
+  await withSrv(async (base) => {
+    const rows = await (await fetch(`${base}/accruals?symbol=R23x&address=${ADDR}`)).json();
+    assert.equal(rows.length, 1, "one instant — one dividend");
+    assert.equal(rows[0].totalRaw, "400", "200 × 2 once");
+  }, {
+    events: [
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-02-01T23:00:00-02:00", status: "confirmed", sources: ["https://a.example/1"], amountPerUnitRaw: 2, decimals: 6, mint: MINT },
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-02-02T01:00:00Z", status: "confirmed", sources: ["https://b.example/2"], amountPerUnitRaw: 2, decimals: 6, mint: MINT },
+    ],
+  });
+});
+
+// Two poisoned dates must not produce a NaN comparator order — map-based sort keys.
+test("events: two poisoned dates — deterministic order, valid rows still first", async () => {
+  await withSrv(async (base) => {
+    const rows = await (await fetch(`${base}/events?symbol=R23x`)).json();
+    assert.ok(Array.isArray(rows));
+    const valid = rows.filter((e) => /^\d{4}-\d{2}-\d{2}/.test(String(e.effectiveDate)));
+    const ts = valid.map((e) => Date.parse(e.effectiveDate));
+    for (let i = 1; i < ts.length; i++) assert.ok(ts[i - 1] <= ts[i]);
+    assert.equal(rows.length, 4, "both poisoned rows are served, after the valid ones");
+    for (const row of rows.slice(0, rows.length - 2)) {
+      assert.ok(/^\d{4}-\d{2}-\d{2}/.test(String(row.effectiveDate)), "valid rows come first");
+    }
+  }, {
+    events: [
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-06-01", status: "confirmed", sources: ["https://x.example/1"], amountPerUnitRaw: 1, decimals: 6, mint: MINT },
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "poison-a", status: "confirmed", sources: ["https://x.example/2"], amountPerUnitRaw: 1, decimals: 6, mint: MINT },
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-02-01", status: "confirmed", sources: ["https://x.example/3"], amountPerUnitRaw: 1, decimals: 6, mint: MINT },
+      { type: "DIVIDEND_ACCRUAL", effectiveDate: "poison-b", status: "confirmed", sources: ["https://x.example/4"], amountPerUnitRaw: 1, decimals: 6, mint: MINT },
+    ],
+  });
+});

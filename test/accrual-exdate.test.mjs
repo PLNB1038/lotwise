@@ -240,3 +240,18 @@ test("events: a poisoned-date event sorts to the END, deterministically, valid r
     ],
   });
 });
+
+// The engine's dividend gate must use the same DAY-MIDNIGHT base as the route — a
+// datetime twin (not through the producer) used to split them: route 100, engine 0.
+test("engine parity: applyEvents prices a datetime twin at the same ex-day midnight as the route", async () => {
+  const { applyEvents } = await import("../src/lots/lots.mjs");
+  const ev = (date) => bindMintAndValidate([{
+    type: "DIVIDEND_ACCRUAL", effectiveDate: date, status: "confirmed",
+    sources: ["https://x.example/d"], amountPerUnitRaw: 2, decimals: 6,
+  }], A_MINT)[0];
+  // a lot bought between the twin's instant (Feb 1 22:00Z) and the day midnight (Feb 2 00:00Z)
+  const lot = { id: "L1", mint: A_MINT, owner: A_ADDR, qtyRaw: 100n, acquiredDate: "2026-02-01T23:00:00.000Z", basisRaw: 0n };
+  const { accruals } = applyEvents([lot], [ev("2026-02-02T01:00:00+02:00")]); // instant = Feb 1 23:00Z
+  assert.equal(accruals.length, 1);
+  assert.equal(accruals[0].totalRaw, 200n, "held at the ex-day's UTC midnight — same as the route");
+});

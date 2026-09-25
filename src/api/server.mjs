@@ -309,15 +309,19 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // NOT on this route's path — the ex-date rewrite maps store events directly, so the
       // same dividend from two sources (a press page and an API node) doubled the income.
       // The identical gate, at the layer that actually consumes the events.
-      const seenDividends = new Set();
+      // One economic fact: the same DAY (a tz twin's date part) OR the same INSTANT
+      // (one moment written in two timezone skins naming two calendar days).
+      const seenDays = new Set();
+      const seenMoments = new Set();
       const uniqueDividends = dividends.filter((e) => {
-        // the calendar DAY, not the exact instant — "2026-02-01" and
-        // "2026-02-01T00:00:00+02:00" are the same ex-day with different moments (tz twins)
-        // the calendar day = the DATE PART of the canonical string itself: "2026-02-01" and
-        // "2026-02-01T00:00:00+02:00" share it, while their UTC moments differ (tz twins)
-        const key = `${mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
-        if (seenDividends.has(key)) return false;
-        seenDividends.add(key);
+        const day = String(e.effectiveDate).slice(0, 10);
+        const moment = parseIsoDateMs(e.effectiveDate);
+        const dayKey = `${mint}|${day}|${e.amountPerUnitRaw}`;
+        const momentKey = moment === null ? null : `${mint}|${moment}|${e.amountPerUnitRaw}`;
+        if (seenDays.has(dayKey)) return false;
+        if (momentKey !== null && seenMoments.has(momentKey)) return false;
+        seenDays.add(dayKey);
+        if (momentKey !== null) seenMoments.add(momentKey);
         return true;
       });
       try {
@@ -328,8 +332,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           // confident "0". The day part parses to one midnight for every twin; garbage
           // answers NaN and is refused (the round-23 guard, kept).
           const exDay = String(e.effectiveDate).slice(0, 10);
-          const exMs = Date.parse(`${exDay}T00:00:00.000Z`);
-          if (!Number.isFinite(exMs)) throw new Error("dividend event with an unparseable effectiveDate in the store");
+          // the STRICT parser: Date.parse silently rolls "2026-02-30" into March and the
+          // row answered money for the wrong day; parseIsoDateMs refuses the whole class
+          const exMs = parseIsoDateMs(exDay);
+          if (exMs === null) throw new Error("dividend event with an unparseable effectiveDate in the store");
           let base = 0n;
           let considered = 0;
           // F3: a truncated scan window silently understates the ex-date base too

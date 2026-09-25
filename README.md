@@ -49,7 +49,7 @@ GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `4
 | `/multiplier?symbol=&date=&raw=` | Multiplier at a date plus a raw-to-adjusted sample with exact dust |
 | `/onchain?symbol=&date=` | Issuer-reported vs on-chain multiplier reconcile verdict |
 | `/lots?address=` | Wallet report: FIFO lots with cost basis, raw vs adjusted balances, realized P&L from USDC legs |
-| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet. The base is the position held **on the ex-date**, replayed from the scan window — a sale after the ex-date does not shrink the dividend; rows flag `baseIncomplete` when a transaction cannot be ordered against the ex-date, the scan has gaps, or the window was truncated, and answer `totalRaw: null` (never a negative number) when the window saw only disposals. A dividend's identity is its calendar ex-day and per-unit amount — the same dividend from two sources accrues once. Accruals come from operator-supplied dividend declarations — `data/declarations.json`, loaded at boot, one line per declaration: `{symbol, exDate, amountPerUnitRaw, decimals, sourceUrl}` (`amountPerUnitRaw` is per RAW unit — a per-share declaration must be divided by the ex-date multiplier before submission); xStocks publishes no per-unit amounts, so in the live feed today dividend rebases appear as multiplier events |
+| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet. The base is the position held **at the start of the ex-date** (its UTC midnight — a buy during the ex-date itself does not qualify), replayed from the scan window — a sale after the ex-date does not shrink the dividend; rows flag `baseIncomplete` when a transaction cannot be ordered against the ex-date, the scan has gaps, or the window was truncated, and answer `totalRaw: null` (never a negative number) when the window saw only disposals. A dividend's identity is its calendar ex-day and per-unit amount — the same dividend from two sources accrues once. Accruals come from operator-supplied dividend declarations — `data/declarations.json`, loaded at boot, one line per declaration: `{symbol, exDate, amountPerUnitRaw, decimals, sourceUrl}` (`amountPerUnitRaw` is per RAW unit — a per-share declaration must be divided by the ex-date multiplier before submission); xStocks publishes no per-unit amounts, so in the live feed today dividend rebases appear as multiplier events |
 | `/crosscheck?symbol=` | Price cross-check verdicts per event |
 | `/health` | Event/token counts, journal and registry integrity flags, excluded tokens |
 
@@ -124,7 +124,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-750 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+754 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

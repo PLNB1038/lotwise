@@ -74,15 +74,19 @@ export function applyEvents(lots, events) {
   // sourceUrl, so the same dividend reaching the store from two sources (a press page and
   // an API node) survives as two events — and without this gate would accrue twice,
   // doubling the declared income. mint + ex-date + per-unit amount is the dividend's identity.
-  const seenDividends = new Set();
-
+  const seenDivDays = new Set();
+  const seenDivMoments = new Set();
   for (const e of events) {
     if (e.type === "DIVIDEND_ACCRUAL") {
-      // the calendar DAY, matching the route's identity — the library and
-      // the endpoint must not disagree on the very seam the tz-twin fix was closing
-      const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
-      if (seenDividends.has(key)) continue;
-      seenDividends.add(key);
+      // the route's identity: same DAY (tz twins) OR same INSTANT (cross-midnight twins)
+      const day = String(e.effectiveDate).slice(0, 10);
+      const moment = parseIsoDateMs(e.effectiveDate);
+      const dayKey = `${e.mint}|${day}|${e.amountPerUnitRaw}`;
+      const momentKey = moment === null ? null : `${e.mint}|${moment}|${e.amountPerUnitRaw}`;
+      if (seenDivDays.has(dayKey)) continue;
+      if (momentKey !== null && seenDivMoments.has(momentKey)) continue;
+      seenDivDays.add(dayKey);
+      if (momentKey !== null) seenDivMoments.add(momentKey);
     }
     switch (e.type) {
       case "SPLIT": {
@@ -101,7 +105,9 @@ export function applyEvents(lots, events) {
         break;
       }
       case "DIVIDEND_ACCRUAL": {
-        const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
+        // the ex-day's UTC MIDNIGHT, the same base the /accruals route uses — a datetime
+        // event (not through the producer) used to split route and engine here
+        const effTs = Date.parse(`${String(e.effectiveDate).slice(0, 10)}T00:00:00.000Z`); // day valid post phase-1
         const holders = new Map();
         for (const lot of lotsOf(e.mint)) {
           if (!heldBefore(lot, effTs, e)) continue; // a dividend — holders on the ex-date only
