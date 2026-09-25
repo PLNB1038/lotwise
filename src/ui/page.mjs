@@ -606,7 +606,10 @@ function renderWallet(rep) {
     '<dt>signatures scanned</dt><dd>' + esc(c.signatures) + ' (' + esc(c.fetched) + ' fetched, ' + esc(c.skipped) + ' skipped)</dd>' +
     '<dt>scan window</dt><dd>' + (rep.truncated ? 'truncated at cap — older history not scanned' : 'full history') + '</dd>' +
     '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' +
-      (rep.complete ? 'complete' : 'has gaps — lots may miss an opening balance') +
+      (rep.complete ? 'complete'
+        : rep.ambiguousSlotPairs
+          ? rep.ambiguousSlotPairs + ' same-slot pair' + (rep.ambiguousSlotPairs > 1 ? 's' : '') + ' from different sources — ledger order guessed, history not certified'
+          : 'has gaps — lots may miss an opening balance') +
       (excludedCount > 0 ? ' — ' + excludedCount + ' tokens excluded' : '') + '</dd></dl>';
   var body = rep.tokens.length === 0
     ? '<p class="note">No tracked tokens found in this wallet.</p>'

@@ -51,23 +51,30 @@ export function loadDeclarationsFile(path, registry) {
   // a corrected re-declaration (the issuer amends the ex-day, a new sourceUrl) is
   // indistinguishable from two nearby dividends of the same amount: the channel is
   // append-only and a dividend's identity is mint + ex-day + amount, so BOTH would accrue.
-  // The operator sees the suspicious pair at load time instead of discovering doubled
+  // The operator sees the suspicious cluster at load time instead of discovering doubled
   // income in a report; the load itself is unaffected (the file is the operator's).
-  const divs = events.filter((e) => e.type === "DIVIDEND_ACCRUAL");
-  for (let i = 0; i < divs.length; i++) {
-    for (let j = i + 1; j < divs.length; j++) {
-      const a = divs[i];
-      const b = divs[j];
-      if (a.mint !== b.mint || a.amountPerUnitRaw !== b.amountPerUnitRaw) continue;
-      const ta = parseIsoDateMs(String(a.effectiveDate).slice(0, 10));
-      const tb = parseIsoDateMs(String(b.effectiveDate).slice(0, 10));
-      if (ta === null || tb === null) continue;
-      if (Math.abs(ta - tb) <= 3 * 86_400_000) {
-        console.warn(
-          `[declarations] two same-amount dividend declarations within 3 days (${a.effectiveDate}, ${b.effectiveDate}, amountPerUnitRaw ${a.amountPerUnitRaw}) — a corrected re-declaration would double the income; resolve the file`,
-        );
-      }
+  // Sort + a sliding window: one aggregated warning per cluster, linear after the sort —
+  // a pair-scan over a big file held the boot (10k lines ≈ minutes, and a 100-line
+  // duplicate cluster printed 4950 pair-warnings on every restart).
+  const divs = events
+    .filter((e) => e.type === "DIVIDEND_ACCRUAL")
+    .map((e) => ({ mint: e.mint, amount: e.amountPerUnitRaw, day: String(e.effectiveDate).slice(0, 10), ms: parseIsoDateMs(String(e.effectiveDate).slice(0, 10)) }))
+    .filter((d) => d.ms !== null)
+    .sort((a, b) => (a.mint < b.mint ? -1 : a.mint > b.mint ? 1 : a.amount - b.amount || a.ms - b.ms));
+  for (let i = 0; i < divs.length;) {
+    let j = i + 1;
+    while (
+      j < divs.length
+      && divs[j].mint === divs[i].mint
+      && divs[j].amount === divs[i].amount
+      && divs[j].ms - divs[i].ms <= 3 * 86_400_000
+    ) j++;
+    if (j - i > 1) {
+      console.warn(
+        `[declarations] ${j - i} same-amount dividend declarations within 3 days (${divs.slice(i, j).map((d) => d.day).join(", ")}, amountPerUnitRaw ${divs[i].amount}) — a corrected re-declaration would double the income; resolve the file`,
+      );
     }
+    i = j;
   }
   return { ok: true, events, loaded: events.length, reason: null };
 }

@@ -229,8 +229,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     (a.slot ?? 0) - (b.slot ?? 0) || (a.src === b.src ? b.idx - a.idx : a.src - b.src));
   const txs = [];
   let fetched = 0;
-  let prevKept = null; // {slot, src} of the last tx that made it into txs
-  let ambiguousSlotPairs = 0;
+  const slotSrcs = new Map(); // slot -> Map(src -> kept count): every cross-source same-slot pair is unknowable
   for (const s of ordered) {
     aborted();
     let tx;
@@ -265,10 +264,9 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       continue;
     }
     if (tx.deltas.length > 0) {
-      if (prevKept !== null && s.slot === prevKept.slot && s.src !== prevKept.src) {
-        ambiguousSlotPairs++; // the true ledger order of this same-slot pair is unknowable
-      }
-      prevKept = { slot: s.slot, src: s.src };
+      let bySrc = slotSrcs.get(s.slot);
+      if (!bySrc) { bySrc = new Map(); slotSrcs.set(s.slot, bySrc); }
+      bySrc.set(s.src, (bySrc.get(s.src) ?? 0) + 1);
       txs.push({
         signature: s.signature,
         slot: tx.slot,
@@ -277,6 +275,21 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
         ...(tx.moneyDeltas !== undefined ? { moneyDeltas: tx.moneyDeltas } : {}), // the USDC leg
       });
     }
+  }
+
+  // every UNORDERED pair of kept same-slot txs from two different sources is unknowable:
+  // C(k,2) − Σ C(k_src,2) per slot — adjacency after the sort would undercount (a sorted
+  // run interleaves sources, and a skipped tx in between breaks neighbours)
+  let ambiguousSlotPairs = 0;
+  for (const bySrc of slotSrcs.values()) {
+    if (bySrc.size < 2) continue;
+    let k = 0;
+    let within = 0;
+    for (const n of bySrc.values()) {
+      k += n;
+      within += (n * (n - 1)) / 2;
+    }
+    ambiguousSlotPairs += (k * (k - 1)) / 2 - within;
   }
 
   return { owner, signatures: sigs.size, fetched, txs, skipped, truncated, accounts, ambiguousSlotPairs };

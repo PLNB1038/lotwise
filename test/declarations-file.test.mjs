@@ -101,3 +101,25 @@ test("declarations: a month-apart pair does not warn (two real dividends are the
     console.warn = orig;
   }
 });
+
+test("declarations: a cluster of duplicates warns ONCE per cluster, not once per pair", () => {
+  const p = declPath(dir());
+  const sameDay = Array.from({ length: 100 }, (_, i) => ({
+    symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8,
+    sourceUrl: `https://issuer.example/dup-${i}`,
+  }));
+  const farApart = { symbol: "SPYx", exDate: "2026-07-16", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q3" };
+  writeFileSync(p, JSON.stringify([...sameDay, farApart]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 1, "one aggregated warning for the 100-declaration cluster (not 4950 pairs)");
+  assert.match(warns[0], /100/, "the cluster size is named");
+  assert.doesNotMatch(warns[0], /2026-07-16/, "the month-apart declaration is not swept into the cluster");
+});

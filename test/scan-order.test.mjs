@@ -126,3 +126,38 @@ test("scan: a same-slot pair from TWO sources is deterministic but flagged — c
   assert.equal(rep.complete, false, "a guessed ledger order is not a complete history");
   assert.equal(rep.ambiguousSlotPairs, 1, "the flag travels with the report");
 });
+
+test("scan: ambiguousSlotPairs counts EVERY cross-source pair of the slot, not adjacent ones", async () => {
+  // four owner-seen txs and two account-seen txs in ONE slot: the unknowable pairwise
+  // orders are every (owner, account) combination = 4×2 = 8, not "the adjacent ones" (1)
+  const ATA = USDC;
+  const anyDeltaTx = (sig) => ({
+    slot: 1000, blockTime: 1750000000, signature: sig,
+    meta: { err: null,
+      preTokenBalances: [{ accountIndex: 0, owner: OWNER, mint: SPYx, uiTokenAmount: { amount: "10000000000" } }],
+      postTokenBalances: [{ accountIndex: 0, owner: OWNER, mint: SPYx, uiTokenAmount: { amount: "9900000000" } }] },
+  });
+  const TX = new Map(["o1", "o2", "o3", "o4", "a1", "a2"].map((s) => [s, anyDeltaTx(s)]));
+  let acctCalls = 0;
+  const client = {
+    async call(method, params) {
+      if (method === "getTokenAccountsByOwner") {
+        acctCalls++;
+        return { value: acctCalls === 1 ? [{ pubkey: ATA, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "0" } } } } } }] : [] };
+      }
+      if (method === "getSignaturesForAddress") {
+        if (params[0] === OWNER) return ["o1", "o2", "o3", "o4"].map((n) => sigEntry(n, 1000));
+        if (params[0] === ATA) return ["a1", "a2"].map((n) => sigEntry(n, 1000));
+        return [];
+      }
+      if (method === "getTransaction") return TX.get(params[0]) ?? null;
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const scan = await scanWallet(client, OWNER, REG);
+  assert.equal(scan.txs.length, 6, "all six kept");
+  assert.equal(scan.ambiguousSlotPairs, 8, "4×2 cross-source pairs — every combination, not adjacency");
+  const rep = buildWalletReport(scan, { registry: REG });
+  assert.equal(rep.complete, false);
+  assert.equal(rep.ambiguousSlotPairs, 8);
+});
