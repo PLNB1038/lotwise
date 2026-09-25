@@ -279,3 +279,85 @@ test("money-only: the showcase shows the section only when it exists", async () 
   const clean = els.get("wallet-out").innerHTML;
   assert.ok(!clean.includes("hop"), "without moneyOnly the section is not drawn — a legacy report renders unchanged");
 });
+
+// --- mixed legs: a round-trip of ONE token combined with a priced trade of ANOTHER ---
+// The pricing rule "exactly one tracked token moved" filtered by NON-ZERO deltas, so a
+// round-trip (net 0) of token A in the SAME tx as a sale of token B was invisible to it:
+// the whole net USDC — B's honest proceeds PLUS A's spread — was booked as B's proceeds,
+// fabricating money under reconciles:true / complete:true. The scan now records a trace
+// (zeroNetMints) and the pricing withdraws; the money lands in moneyOnly as a fact row.
+
+// AAPLx — a second tracked token (the real registry mint; mixed trades need two)
+const AAPLx = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
+const REG2 = [
+  { mint: SPYx, symbol: "SPYx", name: "S&P 500 xStock", decimals: 8 },
+  { mint: AAPLx, symbol: "AAPLx", name: "Apple xStock", decimals: 8 },
+];
+
+test("mixed legs: a round-trip mixed into a priced sale withdraws the pricing — the spread no longer rides the sale's proceeds", async () => {
+  const buyB = {
+    slot: 50, blockTime: BT,
+    meta: meta(
+      [row(0, OWNER, AAPLx, 0), row(1, OWNER, USDC_MINT, 10_000_000)],
+      [row(0, OWNER, AAPLx, 10), row(1, OWNER, USDC_MINT, 1_000_000)],
+    ),
+  };
+  // one tx: a SPYx round-trip (10 → 10, spread +500_000) + the AAPLx sale (10 → 0,
+  // honest proceeds 10_000_000): the net leg is +10_500_000 and the split between the
+  // two causes is not recoverable from the balances — pricing the sale at 10_500_000
+  // fabricated 500_000 into B's realized P&L
+  const mixed = {
+    slot: 51, blockTime: BT + 60,
+    meta: meta(
+      [row(0, OWNER, SPYx, 10), row(1, OWNER, AAPLx, 10), row(2, OWNER, USDC_MINT, 1_000_000)],
+      [row(0, OWNER, SPYx, 10), row(1, OWNER, AAPLx, 0), row(2, OWNER, USDC_MINT, 11_500_000)],
+    ),
+  };
+  const scan = await scanWallet(client({
+    sigPages: { [OWNER]: [
+      { signature: "mixed", slot: 51, blockTime: BT + 60, err: null },
+      { signature: "buyB", slot: 50, blockTime: BT, err: null },
+    ] },
+    txsById: { buyB, mixed },
+  }), OWNER, REG2);
+  assert.deepEqual(scan.txs[1].zeroNetMints, [{ owner: OWNER, mint: SPYx }],
+    "a tracked mint touched-but-netted-to-zero leaves a trace for the pricing rule");
+
+  const rep = buildWalletReport(scan, { registry: REG2 });
+  const aapl = rep.tokens.find((t) => t.mint === AAPLx);
+  assert.deepEqual(
+    { qty: aapl.realized[0].qtyRaw, basis: aapl.realized[0].basisRaw, proceeds: aapl.realized[0].proceedsRaw, pnl: aapl.realized[0].pnlRaw },
+    { qty: "10", basis: "9000000", proceeds: null, pnl: null },
+    "the sale is realized in quantity and basis but NOT priced — 10_500_000 would have fabricated 500_000",
+  );
+  assert.deepEqual(rep.moneyOnly, [
+    { signature: "mixed", date: new Date((BT + 60) * 1000).toISOString(), mint: USDC_MINT, amountRaw: "10500000" },
+  ], "the unattributable money is a FACT row — visible, not lost, not guessed into a token");
+  assert.equal(rep.tokens.some((t) => t.mint === SPYx), false, "the round-trip token is no position: no phantom row");
+});
+
+test("mixed legs: the fee of a two-token swap (both legs tracked) is visible — it vanished before", async () => {
+  // SPYx → AAPLx through USDC with a 30_000 fee: neither leg is priced (the net USDC of a
+  // two-legged swap is nobody's basis — unchanged), but the fee itself used to disappear
+  // from the report entirely; now it is a moneyOnly fact row
+  const swap = {
+    slot: 60, blockTime: BT,
+    meta: meta(
+      [row(0, OWNER, SPYx, 10), row(1, OWNER, AAPLx, 0), row(2, OWNER, USDC_MINT, 10_000_000)],
+      [row(0, OWNER, SPYx, 0), row(1, OWNER, AAPLx, 2), row(2, OWNER, USDC_MINT, 9_970_000)],
+    ),
+  };
+  const scan = await scanWallet(client({
+    sigPages: { [OWNER]: [{ signature: "swap", slot: 60, blockTime: BT, err: null }] },
+    txsById: { swap },
+  }), OWNER, REG2);
+  const rep = buildWalletReport(scan, { registry: REG2 });
+  const spy = rep.tokens.find((t) => t.mint === SPYx);
+  const aapl = rep.tokens.find((t) => t.mint === AAPLx);
+  assert.equal(spy.gaps.length, 1, "the sell without an opening lot is a gap — unchanged");
+  assert.equal(spy.gaps[0].proceedsRaw, undefined, "the gap carries no proceeds — nothing was priced");
+  assert.equal(aapl.lots[0].basisKnown, false, "the buy side stays unpriced too");
+  assert.deepEqual(rep.moneyOnly, [
+    { signature: "swap", date: new Date(BT * 1000).toISOString(), mint: USDC_MINT, amountRaw: "-30000" },
+  ], "the swap's USDC fee used to be invisible anywhere; now it is a fact row");
+});

@@ -311,14 +311,19 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
 
   // 1) signatures per source: wallet address + ALL token accounts of registry mints
   //    + the DERIVED ATAs of registry mints (S3, independent of the listing).
-  const liveAddresses = [...accounts.values()].flatMap((a) => a.addresses).filter(Boolean);
+  // Sorted: the provider does not guarantee the listing order, and the src indexes below
+  // inherit it — two scans of the SAME window could then order a cross-source same-slot
+  // pair differently and flip the FIFO (a "deterministic guess" that was only deterministic
+  // within one set of responses). A sorted listing makes the source order reproducible
+  // scan-to-scan.
+  const liveAddresses = [...accounts.values()].flatMap((a) => a.addresses).filter(Boolean).sort();
   // S3: a CLOSED token account is absent from the listing but remains a signature source —
   // its ATA address is a deterministic PDA (computable after closing) and the node still
   // serves its history (with a delegate-signed disposal this was a TOTAL loss).
   // Derive the ATA of every registry mint under BOTH token programs; addresses already
   // known from the live listing are skipped (one address = one walk, no wasted RPC).
-  // Derived sources go LAST so the source order of the listed ones — and the same-slot
-  // tiebreak semantics built on it — stays byte-for-byte unchanged.
+  // Derived sources go LAST, after the sorted listing — the same-slot tiebreak semantics
+  // built on the source order stay stable scan-to-scan.
   const seenSources = new Set([owner, ...liveAddresses]);
   const derivedSources = [];
   for (const { mint } of registry) {
@@ -470,6 +475,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
         blockTime: tx.blockTime,
         deltas: tx.deltas,
         ...(tx.moneyDeltas !== undefined ? { moneyDeltas: tx.moneyDeltas } : {}), // the USDC leg
+        ...(tx.zeroNetMints !== undefined ? { zeroNetMints: tx.zeroNetMints } : {}), // touched-but-netted tracked mints (a round-trip trace)
       });
     }
   }

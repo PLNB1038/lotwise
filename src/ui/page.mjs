@@ -600,10 +600,10 @@ function renderWallet(rep) {
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
   // a full ISO timestamp reads hard — date + minutes UTC
   var when = String(rep.now || '—').replace('T', ' ').slice(0, 16) + (rep.now ? ' UTC' : '');
-  // money-only legs — USDC moved without a tracked-token trade (a same-tx round-trip
-  // spread, a USDC fee or transfer; the report does not guess which). The net is shown
-  // per mint (mints are never merged); the full row list lives in the tooltip.
-  // Shown only when the field is present: an older report without it renders as before.
+  // money legs the pricing did not consume — a round-trip spread (also one mixed with a
+  // trade whose pricing was withdrawn), a USDC fee or transfer; the report does not guess
+  // which. The net is shown per mint (mints are never merged); the full row list lives in
+  // the tooltip. Shown only when the field is present: an older report renders as before.
   var moneyOnly = rep.moneyOnly || [];
   var moFull = moneyOnly.map(function (r) {
     return (r.date ? String(r.date).replace('T', ' ').slice(0, 16) + ' UTC — ' : '') +
@@ -617,20 +617,31 @@ function renderWallet(rep) {
     return esc(fmtUi(String(moNets[mint]), 6)) + ' USDC';
   }).join(' + ');
   var moneyRow = moneyOnly.length
-    ? '<dt>USDC without a token trade</dt><dd title="' + esc(moFull) + '">' + moneyOnly.length +
+    ? '<dt>USDC not priced into a trade</dt><dd title="' + esc(moFull) + '">' + moneyOnly.length +
         ' tx, net ' + esc(moNetStr) +
-        ' <span class="note">(no token moved — spread, USDC fee or transfer; not in realized P&L)</span></dd>'
+        ' <span class="note">(a spread, a fee, a transfer — or an unattributable mixed trade; not in realized P&L)</span></dd>'
     : '';
+  // completeness is withdrawn for four independent reasons — the card names EVERY active
+  // one instead of the old hard-coded "has gaps", which lied about zero-gap reports
+  var gapsTotal = 0, notReconciled = 0;
+  rep.tokens.forEach(function (t) {
+    if (t.gaps && t.gaps.length) gapsTotal += t.gaps.length;
+    if (t.reconciles === false) notReconciled += 1;
+  });
+  var reasons = [];
+  if (gapsTotal > 0) reasons.push('has gaps — lots may miss an opening balance');
+  if (notReconciled > 0) reasons.push(notReconciled + ' token' + (notReconciled > 1 ? 's' : '') + ' did not reconcile with the chain — history outside the scan window');
+  if (rep.ambiguousSlotPairs) reasons.push(rep.ambiguousSlotPairs + ' same-slot pair' + (rep.ambiguousSlotPairs > 1 ? 's' : '') + ' from different sources — ledger order guessed, history not certified');
+  var completeness = rep.complete ? 'complete'
+    : 'incomplete — ' + (reasons.length
+        ? reasons.join('; ')
+        : (rep.truncated ? 'truncated at cap (see scan window above)' : 'has gaps — lots may miss an opening balance'));
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
     '<dt>report generated at</dt><dd>' + esc(when) + '</dd>' +
     '<dt>signatures scanned</dt><dd>' + esc(c.signatures) + ' (' + esc(c.fetched) + ' fetched, ' + esc(c.skipped) + ' skipped)</dd>' +
     '<dt>scan window</dt><dd>' + (rep.truncated ? 'truncated at cap — older history not scanned' : 'full history') + '</dd>' +
-    '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' +
-      (rep.complete ? 'complete'
-        : rep.ambiguousSlotPairs
-          ? rep.ambiguousSlotPairs + ' same-slot pair' + (rep.ambiguousSlotPairs > 1 ? 's' : '') + ' from different sources — ledger order guessed, history not certified'
-          : 'has gaps — lots may miss an opening balance') +
+    '<dt>completeness</dt><dd' + (rep.complete ? '' : ' class="err"') + '>' + completeness +
       (excludedCount > 0 ? ' — ' + excludedCount + ' tokens excluded' : '') + '</dd>' +
     moneyRow + '</dl>';
   var body = rep.tokens.length === 0

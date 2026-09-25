@@ -240,7 +240,9 @@ test("PIN: the asset card contains no dividend/NAV fields (a recursive scan of t
 });
 
 test("PIN: the module has no \"multiplier → dividend\" synthesizer — the exports are exhausted by the declarations contract", () => {
-  assert.deepEqual(Object.keys(dividendsModule).sort(), ["DeclarationError", "dividendsFromDeclarations"]);
+  // buildDeclarationEvents = dividendsFromDeclarations + the applied-corrections count
+  // (the loader's /health superseded stat); still declaration-shaped, no synthesizer
+  assert.deepEqual(Object.keys(dividendsModule).sort(), ["DeclarationError", "buildDeclarationEvents", "dividendsFromDeclarations"]);
 });
 
 // ---- the seam with the existing pipeline ----

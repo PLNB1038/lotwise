@@ -22,7 +22,7 @@ const dir = () => mkdtempSync(path.join(tmpdir(), "lw-decl-"));
 
 test("declarations: a missing file is the norm — ok, loaded 0, no reason", () => {
   const r = loadDeclarationsFile(declPath(dir()), REG);
-  assert.deepEqual(r, { ok: true, events: [], loaded: 0, reason: null });
+  assert.deepEqual(r, { ok: true, events: [], loaded: 0, superseded: 0, reason: null });
 });
 
 test("declarations: a shared feed binds per registry symbol, events sorted old → new", () => {
@@ -122,4 +122,29 @@ test("declarations: a cluster of duplicates warns ONCE per cluster, not once per
   assert.equal(warns.length, 1, "one aggregated warning for the 100-declaration cluster (not 4950 pairs)");
   assert.match(warns[0], /100/, "the cluster size is named");
   assert.doesNotMatch(warns[0], /2026-07-16/, "the month-apart declaration is not swept into the cluster");
+});
+
+test("declarations: a chain of neighbors (01/03/05, each pair ≤ 3 days) warns about the WHOLE chain", () => {
+  // the window used to measure from the cluster ANCHOR: day 05 is 4 days from day 01, so
+  // a chain whose every NEIGHBOR pair is within 3 days lost its tail — the operator saw
+  // 2 of the 3 suspicious declarations. The window is per-neighbor now.
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-01-01", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/a" },
+    { symbol: "SPYx", exDate: "2026-01-03", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/b" },
+    { symbol: "SPYx", exDate: "2026-01-05", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/c" },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 1, "one aggregated warning for the chain");
+  assert.match(warns[0], /2026-01-01/);
+  assert.match(warns[0], /2026-01-03/);
+  assert.match(warns[0], /2026-01-05/, "the chain's tail is named — the anchor window dropped it");
 });

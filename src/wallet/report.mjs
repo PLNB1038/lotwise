@@ -51,49 +51,53 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     return s;
   };
 
-  // money-only legs: USDC rows of txs where no tracked token moved for this owner — see
-  // the booking site in the loop below for the full contract
+  // money legs the pricing did not consume: whatever did not land in a basis or in
+  // proceeds is a FACT row — see the booking site in the loop below for the full contract
   const moneyOnly = [];
 
   for (const tx of scan.txs) {
     const date = iso(tx.blockTime);
     // other owners' deltas are untouched: scan by address — report by address
     const mine = tx.deltas.filter((d) => d.owner === owner && byMint.has(d.mint) && d.deltaRaw !== 0n);
-    if (mine.length === 0) {
-      // a money-only tx: no tracked token moved for THIS owner, yet a money leg did — a
-      // same-tx round-trip (the spread used to be invisible anywhere, silently overstating
-      // realized P&L), a USDC fee, or a plain USDC transfer. The report cannot tell these
-      // causes apart and does not guess: a row is the FACT — signature, date, money mint,
-      // signed net per mint (distinct mints are never merged). Deliberately NOT lots and
-      // NOT gaps: FIFO math is untouched (a zero token delta is no lot), and completeness
-      // is a certificate about lot history, not about the money ledger. Fail-closed both
-      // ways: a legacy scan without moneyDeltas yields no rows, and a zero NET leg (money
-      // that only moved between the owner's own accounts) yields no row either.
-      if (Array.isArray(tx.moneyDeltas)) {
-        const net = new Map();
-        for (const m of tx.moneyDeltas) {
-          if (m.owner !== owner) continue;
-          net.set(m.mint, (net.get(m.mint) ?? 0n) + m.deltaRaw);
-        }
-        for (const [mint, amount] of net) {
-          if (amount !== 0n) moneyOnly.push({ signature: tx.signature, date, mint, amountRaw: String(amount) });
-        }
-      }
-      continue;
-    }
+    // a tracked mint touched with a zero net delta (a same-tx round-trip, a self-transfer
+    // between own accounts): its spread shares the money leg with any trade of the same
+    // tx, and the split is not recoverable from the balances — such a tx is not priced
+    const zeroNetTouched = Array.isArray(tx.zeroNetMints) && tx.zeroNetMints.some((z) => z.owner === owner);
 
-    // the money leg prices the trade. Net USDC delta of THIS owner in THIS
-    // tx; the pricing rule is deliberately narrow — exactly one tracked token moved against
-    // a counter-directed USDC leg. Several tracked tokens in one tx would require guessing
-    // the allocation, a missing leg is a transfer, not a trade — both are honestly unknown.
+    // the money leg prices the trade. Net USDC delta of THIS owner in THIS tx;
+    // the pricing rule is deliberately narrow — exactly one tracked token moved against
+    // a counter-directed USDC leg, and nothing else tracked was touched. Several tracked
+    // tokens in one tx would require guessing the allocation, a missing leg is a transfer,
+    // not a trade — both are honestly unknown.
     const usdc = (tx.moneyDeltas ?? []).reduce((acc, m) => (m.owner === owner ? acc + m.deltaRaw : acc), 0n);
     const buys = mine.filter((d) => d.deltaRaw > 0n);
     const sells = mine.filter((d) => d.deltaRaw < 0n);
-    // the rule is EXACTLY ONE tracked token in the tx (mine.length === 1) —
-    // a mixed sell-A/buy-B swap prices NEITHER leg: the net USDC of a two-legged swap is
-    // nobody's basis (README: several tracked tokens — honestly unknown).
-    const buyBasis = mine.length === 1 && buys.length === 1 && usdc < 0n ? -usdc : null;
-    const sellProceeds = mine.length === 1 && sells.length === 1 && usdc > 0n ? usdc : null;
+    // the rule is EXACTLY ONE tracked token in the tx (mine.length === 1) with a clean
+    // money leg — a mixed sell-A/buy-B swap prices NEITHER leg: the net USDC of a
+    // two-legged swap is nobody's basis (README: several tracked tokens — honestly unknown).
+    const buyBasis = mine.length === 1 && !zeroNetTouched && buys.length === 1 && usdc < 0n ? -usdc : null;
+    const sellProceeds = mine.length === 1 && !zeroNetTouched && sells.length === 1 && usdc > 0n ? usdc : null;
+
+    // money legs the pricing did not consume — a same-tx round-trip's spread (alone, or
+    // mixed with a trade whose pricing was withdrawn rather than guessed), the USDC fee
+    // of a multi-token swap, or a plain USDC transfer. The report cannot tell these
+    // causes apart and does not guess: a row is the FACT — signature, date, money mint,
+    // signed net per mint (distinct mints are never merged). Deliberately NOT lots and
+    // NOT gaps: FIFO math is untouched (a zero token delta is no lot), and completeness
+    // is a certificate about lot history, not about the money ledger. Fail-closed both
+    // ways: a legacy scan without moneyDeltas yields no rows, and a zero NET leg (money
+    // that only moved between the owner's own accounts) yields no row either.
+    if (buyBasis === null && sellProceeds === null && Array.isArray(tx.moneyDeltas)) {
+      const net = new Map();
+      for (const m of tx.moneyDeltas) {
+        if (m.owner !== owner) continue;
+        net.set(m.mint, (net.get(m.mint) ?? 0n) + m.deltaRaw);
+      }
+      for (const [mint, amount] of net) {
+        if (amount !== 0n) moneyOnly.push({ signature: tx.signature, date, mint, amountRaw: String(amount) });
+      }
+    }
+    if (mine.length === 0) continue;
 
     for (const d of mine) {
       const s = stateOf(d.mint);
@@ -256,10 +260,10 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     ...(scan.ambiguousSlotPairs
       ? { ambiguousSlotPairs: scan.ambiguousSlotPairs } // same-slot pairs whose ledger order the RPC cannot tell apart (two sources) — the order in txs is a deterministic guess
       : {}),
-    // money-only legs: USDC moved without a tracked-token trade — a same-tx round-trip
-    // spread, a USDC fee, a USDC transfer; the report does not guess which. Absent field =
-    // none seen in this window (a legacy scan without money legs cannot see them — re-scan
-    // for the money view).
+    // money legs the pricing did not consume: a round-trip spread (also one mixed with a
+    // trade), a USDC fee of a multi-token swap, a USDC transfer; the report does not guess
+    // which. Absent field = none seen in this window (a legacy scan without money legs
+    // cannot see them — re-scan for the money view).
     ...(moneyOnly.length > 0 ? { moneyOnly } : {}),
     complete: !scan.truncated && !hasGaps && allReconcile && !scan.ambiguousSlotPairs, // a guessed order is not a certified history
     tokens,

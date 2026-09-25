@@ -95,11 +95,13 @@ const events = [];
 // DIVIDEND_ACCRUAL into the live store (xStocks publishes no per-unit amounts). Read-only
 // file: a broken one degrades to "no accruals" with a loud reason, never a dead boot.
 const loadedDeclarations = loadDeclarationsFile(path.join(ROOT, "data", "declarations.json"), registry);
-const declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0 };
+// superseded — corrections applied at load (the `supersedes` field): visible in /health,
+// so a feed silently re-declaring dividends cannot hide behind a bare "loaded" count
+const declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0, superseded: loadedDeclarations.superseded };
 if (!loadedDeclarations.ok) {
   console.error(`[serve] DECLARATIONS NOT LOADED (${loadedDeclarations.reason}). Booting without dividend accruals — fix data/declarations.json and restart.`);
 } else if (loadedDeclarations.loaded > 0) {
-  console.log(`[serve] declarations: ${loadedDeclarations.loaded} DIVIDEND_ACCRUAL event(s) from data/declarations.json`);
+  console.log(`[serve] declarations: ${loadedDeclarations.loaded} DIVIDEND_ACCRUAL event(s) from data/declarations.json` + (loadedDeclarations.superseded > 0 ? ` (${loadedDeclarations.superseded} superseded correction(s) applied)` : ""));
 }
 events.push(...loadedDeclarations.events);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -97,14 +97,41 @@ function toDecimals(v, decl) {
   throw new DeclarationError(`decimals must be an integer 0..18 or a digit string, got ${JSON.stringify(v)}`, decl);
 }
 
+// The `supersedes` reference: the same parsing discipline as the declaration itself —
+// a canonical ISO ex-day (canonicalized to its day) and a positive safe-integer amount.
+function toSupersedesTarget(v, decl) {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new DeclarationError(`supersedes must be an object {exDate, amountPerUnitRaw}, got ${JSON.stringify(v)}`, decl);
+  }
+  if (typeof v.exDate !== "string" || !isValidIsoDate(v.exDate)) {
+    throw new DeclarationError(
+      `supersedes.exDate must be canonical ISO-8601: YYYY-MM-DD or YYYY-MM-DDTHH:mm[:ss[.fff]](Z|±HH:MM), got ${JSON.stringify(v.exDate)}`,
+      decl,
+    );
+  }
+  const amount = toPositiveSafeInteger(v.amountPerUnitRaw, "supersedes.amountPerUnitRaw", decl);
+  return { day: v.exDate.slice(0, 10), amount };
+}
+
 /**
  * Issuer declarations → canonical DIVIDEND_ACCRUAL (no mint).
  *
  * @param {Array<{symbol: string, exDate: string, amountPerUnitRaw: number|string,
- *                decimals: number|string, sourceUrl: string}>} declarations
+ *                decimals: number|string, sourceUrl: string,
+ *                supersedes?: {exDate: string, amountPerUnitRaw: number|string}}>} declarations
  *   Issuer declarations. Foreign symbols (not matching ctx.symbol case-insensitively)
  *   are SKIPPED — one submission may carry a feed for many tokens;
  *   a declaration with a missing/non-string symbol is a defective submission → DeclarationError.
+ *   `supersedes` — the CORRECTION channel (the file is append-only, the issuer amends
+ *   itself): names the declaration this line REPLACES by the dividend's identity —
+ *   {exDate, amountPerUnitRaw} resolved within the SAME symbol against the canonical
+ *   ex-day and the parsed amount (the identity the engine already keys dividends on).
+ *   Replacement, not addition: the target's event is removed and the correction accrues
+ *   alone. Validated all-or-nothing (DeclarationError refuses the whole feed):
+ *   the target must exist, must be a plain line (a chain/self-reference is forbidden —
+ *   the scheme is one level deep) and must not be superseded twice. A VERBATIM repeat of
+ *   a correction line collapses in the exact-duplicate dedup first — re-submitting the
+ *   feed is not a double supersede.
  * @param {{symbol: string}} ctx
  *   The symbol of the token we build events for (e.g. "KOx"); required.
  * @returns {Array<object>} DIVIDEND_ACCRUAL without mint, old → new.
@@ -113,8 +140,20 @@ function toDecimals(v, decl) {
  *   SIMILAR but unequal declarations (a different sourceUrl) do NOT collapse: without an id
  *   in the declaration, "a repeat" and "two distinct announcements on one day" cannot be
  *   told apart — a deliberate trade-off, mirroring the "full:" dedup of normalize-xstocks.
+ *   An explicit `supersedes` line is the exception: it does not stack on its target,
+ *   it REPLACES it (see buildDeclarationEvents).
  */
-export function dividendsFromDeclarations(declarations, { symbol } = {}) {
+export function dividendsFromDeclarations(declarations, ctx) {
+  return buildDeclarationEvents(declarations, ctx).events;
+}
+
+/**
+ * Same as dividendsFromDeclarations, and also reports how many replacements were
+ * applied: {@link dividendsFromDeclarations} keeps its array contract (the producer's
+ * callers and tests pin it), the loader needs the count for /health.declarations.superseded.
+ * @returns {{events: Array<object>, superseded: number}}
+ */
+export function buildDeclarationEvents(declarations, { symbol } = {}) {
   if (typeof symbol !== "string" || symbol === "") {
     throw new DeclarationError("ctx.symbol is required (token symbol, e.g. \"KOx\")");
   }
@@ -125,6 +164,30 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
   const wanted = symbol.toUpperCase();
   const events = [];
   const seen = new Map(); // exact-duplicate key → event (the first occurrence wins)
+
+  // `supersedes` needs the WHOLE-file view per symbol (a correction may precede its
+  // target in the file — the feed is append-only and line order must not matter):
+  // collect the identity (canonical ex-day | parsed amount) of every same-symbol line
+  // up front, split into plain declarations and corrections. A correction may never
+  // serve as a target (the scheme is one level deep). A line that would fail this parse
+  // poisons nothing here — the main pass below refuses the whole file on it anyway.
+  const plainIdentities = new Set();
+  const correctionIdentities = new Set();
+  for (const decl of declarations) {
+    if (decl === null || typeof decl !== "object") continue;
+    if (typeof decl.symbol !== "string" || decl.symbol.toUpperCase() !== wanted) continue;
+    if (typeof decl.exDate !== "string") continue;
+    let amount;
+    try {
+      amount = toPositiveSafeInteger(decl.amountPerUnitRaw, "amountPerUnitRaw", decl);
+    } catch {
+      continue; // the main pass refuses the file on this line — the sets are irrelevant then
+    }
+    (decl.supersedes !== undefined ? correctionIdentities : plainIdentities).add(`${decl.exDate.slice(0, 10)}|${amount}`);
+  }
+  // targetIdentity → how many DISTINCT (dedup-surviving) corrections name it; more than
+  // one is an ambiguous file, resolved below
+  const supersedeTargets = new Map();
 
   for (const decl of declarations) {
     if (decl === null || typeof decl !== "object") {
@@ -163,6 +226,22 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
     // A declaration is the issuer's statement with an accompanying link: status "confirmed",
     // like the issuer's official API in normalize-xstocks. Non-issuer sources
     // must not be fed into this contract.
+    // The CORRECTION channel: `supersedes` names the declaration this line REPLACES —
+    // resolved within THIS symbol against the canonical ex-day and the parsed amount,
+    // the identity the /accruals dedup already keys dividends on (no new id scheme,
+    // legacy lines stay addressable). Shape and self/chain violations refuse the feed
+    // right here; a dangling target or a double supersede is refused after the pass,
+    // when the whole file has been seen.
+    const supersedesTarget = decl.supersedes !== undefined ? toSupersedesTarget(decl.supersedes, decl) : null;
+    if (supersedesTarget !== null) {
+      const targetId = `${supersedesTarget.day}|${supersedesTarget.amount}`;
+      if (targetId === `${exDay}|${amountPerUnitRaw}`) {
+        throw new DeclarationError(`supersedes: a declaration cannot supersede itself (ex-day ${supersedesTarget.day}, amountPerUnitRaw ${supersedesTarget.amount})`, decl);
+      }
+      if (correctionIdentities.has(targetId)) {
+        throw new DeclarationError(`supersedes: the target (ex-day ${supersedesTarget.day}, amountPerUnitRaw ${supersedesTarget.amount}) is itself a correction (carries supersedes) — chains are forbidden, supersede the original declaration`, decl);
+      }
+    }
     const e = {
       type: "DIVIDEND_ACCRUAL",
       effectiveDate: exDay,
@@ -174,18 +253,50 @@ export function dividendsFromDeclarations(declarations, { symbol } = {}) {
     // The dedup key is the MOMENT of the date, not the string : "2026-06-18"
     // and "2026-06-18T00:00:00Z" are the same ex-day; a string key produced two
     // DIVIDEND_ACCRUAL and a double accrual by the engine. parseIsoDateMs cannot return null:
-    // exDate has already passed isValidIsoDate above.
-    const key = JSON.stringify([decl.symbol.toUpperCase(), parseIsoDateMs(decl.exDate), amountPerUnitRaw, decimals, decl.sourceUrl]);
+    // exDate has already passed isValidIsoDate above. The supersedes reference is part of
+    // the line's identity: two lines differing ONLY in the correction they declare are
+    // not the same declaration (an ambiguity → refused below, not collapsed away).
+    const key = JSON.stringify([decl.symbol.toUpperCase(), parseIsoDateMs(decl.exDate), amountPerUnitRaw, decimals, decl.sourceUrl, supersedesTarget]);
     if (seen.has(key)) continue;
     seen.set(key, e);
     events.push(e);
+    // a correction registers ONLY when its line survives the exact-duplicate dedup:
+    // a verbatim re-submitted correction is one correction, not a double supersede
+    if (supersedesTarget !== null) {
+      const targetId = `${supersedesTarget.day}|${supersedesTarget.amount}`;
+      supersedeTargets.set(targetId, (supersedeTargets.get(targetId) ?? 0) + 1);
+    }
+  }
+
+  // Every surviving correction must name exactly one existing plain target. A dangling
+  // reference or a doubly-superseded target refuses the WHOLE feed (all-or-nothing, like
+  // a malformed line): a half-applied correction leaves the stale amount accruing while
+  // the operator believes it replaced — the exact silent doubling the field exists to
+  // prevent. Serve-side this lands in /health declarations.ok = 0 with the reason logged.
+  for (const [targetId, corrections] of supersedeTargets) {
+    const [day, amount] = targetId.split("|");
+    if (corrections > 1) {
+      throw new DeclarationError(`supersedes: the target (ex-day ${day}, amountPerUnitRaw ${amount}) is already superseded by another declaration — one correction per target, resolve the file`);
+    }
+    if (!plainIdentities.has(targetId)) {
+      throw new DeclarationError(`supersedes: no declaration to replace (ex-day ${day}, amountPerUnitRaw ${amount} is not declared) — a correction must name an existing declaration of the same symbol`);
+    }
+  }
+  // REPLACEMENT, not addition: the superseded events are dropped — the correction
+  // accrues ALONE (the /accruals day-key dedup is untouched: it sees a resolved feed).
+  if (supersedeTargets.size > 0) {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const id = `${String(events[i].effectiveDate).slice(0, 10)}|${events[i].amountPerUnitRaw}`;
+      if (supersedeTargets.has(id)) events.splice(i, 1);
+    }
   }
 
   // Sort by moment in time (as a number, not a string) — a deterministic order
   // old → new, as in multiplierHistoryToEvents; the dates are already canonical,
   // parseIsoDateMs cannot return null here.
-  return events
+  const sorted = events
     .map((e) => ({ e, ts: parseIsoDateMs(e.effectiveDate) }))
     .sort((a, b) => a.ts - b.ts)
     .map(({ e }) => e);
+  return { events: sorted, superseded: supersedeTargets.size };
 }

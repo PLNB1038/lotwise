@@ -127,6 +127,53 @@ test("scan: a same-slot pair from TWO sources is deterministic but flagged — c
   assert.equal(rep.ambiguousSlotPairs, 1, "the flag travels with the report");
 });
 
+test("scan: the same window with a different listing order produces the same report", async () => {
+  // the provider does not guarantee the order of getTokenAccountsByOwner, and the src
+  // indexes inherited it: two scans of the SAME window could order a cross-source
+  // same-slot pair differently and flip the FIFO (realizedQty 10/gaps 0 vs 0/1) — the
+  // "deterministic guess" was only deterministic within one set of responses. The
+  // listing is now sorted, so the source order — and the guess built on it — is
+  // reproducible scan-to-scan.
+  const ACCT_A = USDC; // any valid 32-byte base58 pubkey
+  const ACCT_B = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp"; // the AAPLx mint as an address constant
+  const run = async (order) => {
+    let acctCalls = 0;
+    const client = {
+      async call(method, params) {
+        if (method === "getTokenAccountsByOwner") {
+          acctCalls++;
+          return {
+            value: acctCalls === 1
+              ? order.map((pub) => ({ pubkey: pub, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "0" } } } } } }))
+              : [],
+          };
+        }
+        if (method === "getSignaturesForAddress") {
+          if (params[0] === ACCT_A) return [sigEntry("sigBuy", 1000)];
+          if (params[0] === ACCT_B) return [sigEntry("sigSell", 1000)];
+          return [];
+        }
+        if (method === "getTransaction") return TX_BY_SIG.get(params[0]) ?? null;
+        throw new Error(`unexpected ${method}`);
+      },
+    };
+    const scan = await scanWallet(client, OWNER, REG);
+    const rep = buildWalletReport(scan, { registry: REG });
+    const t = rep.tokens.find((x) => x.symbol === "SPYx");
+    return {
+      order: scan.txs.map((x) => x.signature),
+      gaps: t.gaps.length,
+      realized: t.realized.length,
+      ambiguous: scan.ambiguousSlotPairs,
+    };
+  };
+  const ab = await run([ACCT_A, ACCT_B]);
+  const ba = await run([ACCT_B, ACCT_A]);
+  assert.deepEqual(ab, ba, "the provider's listing order must not change the report");
+  assert.deepEqual(ab.order, ["sigBuy", "sigSell"], "the stable source order is the sorted one");
+  assert.equal(ab.gaps, 0, "the full round trip, no flip");
+});
+
 test("scan: ambiguousSlotPairs counts EVERY cross-source pair of the slot, not adjacent ones", async () => {
   // four owner-seen txs and two account-seen txs in ONE slot: the unknowable pairwise
   // orders are every (owner, account) combination = 4×2 = 8, not "the adjacent ones" (1)

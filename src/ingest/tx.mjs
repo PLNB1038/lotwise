@@ -7,8 +7,9 @@
  * affected accounts — owner filtering is the consumer's job.
  * opts.moneyMints (Set) additionally parses the money legs (USDC) of the same tx:
  * net deltas per owner land in moneyDeltas — the stable counter-leg is what turns a
- * transfer into a priced trade. Without the option the response shape is
- * byte-identical to what every existing consumer expects.
+ * transfer into a priced trade — and tracked mints touched with a zero net delta land
+ * in zeroNetMints (a round-trip trace for the pricing rule). Without the option the
+ * response shape is byte-identical to what every existing consumer expects.
  */
 export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   const moneyMints = opts.moneyMints ?? null;
@@ -74,6 +75,16 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   }
   const deltas = [...byOwner.values()].filter((d) => d.deltaRaw !== 0n && !isMoney(d.mint));
 
+  // A tracked mint PRESENT in the balances with a zero net delta still leaves a trace:
+  // getTransaction lists the accounts the tx touched, so an owner-level row with net 0
+  // means the tx DID touch the token (a same-tx round-trip, a self-transfer between the
+  // owner's own accounts). The pricing rule needs that trace: without it, a round-trip
+  // mixed into a priced trade silently rode the trade's money leg — the spread ended up
+  // in somebody else's proceeds. Money mints never land here (they are not positions).
+  const zeroNetMints = [...byOwner.values()]
+    .filter((d) => d.deltaRaw === 0n && match(d.mint))
+    .map(({ owner, mint }) => ({ owner, mint }));
+
   // Money legs: the same owner-level aggregation, kept separately so the report can
   // price trades without confusing a stable leg with a tracked position.
   let moneyDeltas;
@@ -89,7 +100,7 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     blockTime: tx.blockTime ?? null,
     err: tx.meta?.err ?? null,
     deltas,
-    ...(moneyMints !== null ? { moneyDeltas } : {}),
+    ...(moneyMints !== null ? { moneyDeltas, zeroNetMints } : {}),
   };
 }
 
