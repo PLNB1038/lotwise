@@ -77,7 +77,9 @@ test("scan: a stuck endpoint (the same page over and over) — terminated by the
   const { client, calls } = stuckClient();
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
   assert.equal(scan.signatures, 2);
-  assert.ok(calls() <= 3, `the guard must break the loop in 2-3 calls, not spin until an empty page (calls=${calls()})`);
+  // the guard bounds every source walk independently — the address plus one
+  // derived ATA per (mint × token program), 3 calls each (a page + two no-progress pages)
+  assert.ok(calls() <= 3 * (2 * REGISTRY.length + 1), `the guard must break each source loop in 2-3 calls, not spin until an empty page (calls=${calls()})`);
 }, { timeout: 5000 });
 
 test("streamSignatures: the same semantics — a short page continues, an empty one ends", async () => {

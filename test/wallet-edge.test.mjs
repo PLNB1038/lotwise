@@ -96,7 +96,7 @@ test("scanWallet: an empty history across all sources — zeros, not truncated, 
   assert.deepEqual(scan.txs, []);
   assert.deepEqual(scan.skipped, []);
   assert.equal(scan.truncated, false);
-  assert.equal(client.sigCalls.length, 1, "one source (the address) — one signature request");
+  assert.equal(client.sigCalls.length, 5, "one walk per source: the address + a derived ATA per (registry mint × token program) — each empty after one page");
   assert.equal(client.txCalls.length, 0, "nothing to fetch");
 });
 
@@ -183,8 +183,9 @@ test("scanWallet: pagination by before — the cursor = the last signature of a 
   assert.equal(scan.signatures, 5, "all five signatures from all pages");
   assert.equal(scan.truncated, false);
   // the third page is short (1 < 2) — no longer the end: the fourth request confirms
-  // (a repeated page = no progress/no new uniques) and only then a stop
-  assert.deepEqual(client.sigCalls, [undefined, "s1", "s3", "s4"], "the cursor — the last signature of each read page");
+  // (a repeated page = no progress/no new uniques) and only then a stop. Round28 S3:
+  // after the address walk, 4 more first pages (one per derived ATA of SPYx/AAPLx × 2 programs)
+  assert.deepEqual(client.sigCalls, [undefined, "s1", "s3", "s4", undefined, undefined, undefined, undefined], "the cursor — the last signature of each read page; derived sources walk after the listed ones");
 });
 
 test("scanWallet: maxTxs:0 — the window is empty but truncated:true (emptiness is not masked as completeness)", async () => {

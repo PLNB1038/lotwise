@@ -102,7 +102,10 @@ test("scan: alternating duplicate pages with different tails — termination aft
   });
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
   assert.equal(scan.signatures, 4);
-  assert.ok(client.calls() <= 7, `after two pages with no new signatures — stop (calls=${client.calls()})`);
+  // the same no-progress guarantee now bounds EVERY source walk — the address
+  // (≤7 as before) plus one derived ATA per (mint × token program) (2 mints... here 1 mint
+  // → 2 sources, ≤3 calls each: a first page + two no-progress pages)
+  assert.ok(client.calls() <= 7 + 2 * 3, `after two pages with no new signatures — stop, in every source walk (calls=${client.calls()})`);
 }, { timeout: 5000 });
 
 test("streamSignatures: the same guards — a null element is skipped, a non-array throws, alternation terminates", async () => {

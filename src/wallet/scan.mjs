@@ -4,6 +4,15 @@
 // 4 signatures instead of the full history). v2: address signatures + signatures of every live
 // token account, deduplicated, plus current account balances to reconcile the report with the chain.
 // Fail-closed: failed and unavailable txs go into skipped with a reason, not silently.
+// signatures of the DERIVED ATA of every registry mint under BOTH token
+// programs are queried independently of the listing — a closed ATA disappears from
+// getTokenAccountsByOwner but its address stays derivable (a deterministic PDA) and the
+// node keeps serving its history; with a delegate-signed disposal this was a TOTAL history
+// loss certified complete:true.
+// the account listing is requested with an explicit limit; a FULL page
+// (no cursor pagination exists for this method) is indistinguishable from a provider-capped
+// page and is treated as possibly-truncated — a loud operator warn + scan.truncated=true.
+import { createHash } from "node:crypto";
 import { fetchWalletDeltas } from "../ingest/tx.mjs";
 import { MONEY_MINTS } from "./money.mjs";
 
@@ -43,14 +52,152 @@ export function isValidAddress(addr) {
   return bytes === 32;
 }
 
+// ---------------------------------------------------------------------------
+// Dependency-free PDA/ATA derivation (node:crypto sha256 + BigInt
+// field arithmetic, no npm packages — a repo contract). The associated token account
+// address is findProgramAddress([owner, tokenProgram, mint], ASSOC_TOKEN_PROGRAM):
+// the hash output must land OFF the ed25519 curve — that is what makes the address
+// program-owned. The on-curve check is a dalek-style decompress; every derived
+// constant is computed from the curve definition (no hard-trusted 76-digit numbers)
+// and the whole stack is pinned in test/ata-pda.test.mjs against vectors
+// emitted by an independent Rust implementation (solders/curve25519-dalek).
+// ---------------------------------------------------------------------------
+
+// The SPL associated token account program: the owner of every ATA PDA.
+export const ASSOC_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+// S4: the scanner asks for an EXPLICIT page size instead of trusting the endpoint
+// default. getTokenAccountsByOwner has no cursor pagination: a full page cannot be
+// distinguished from a provider-capped page, so it is treated as possibly-truncated.
+export const ACCOUNTS_PAGE_LIMIT = 1000;
+
+// ed25519: p = 2^255 − 19; curve −x² + y² = 1 + d·x²·y² with d = −121665/121666.
+// d and √−1 are DERIVED (Fermat inversion and 2^((p−1)/4) mod p) — only p and the
+// curve coefficient ratio are trusted, and they ARE the definition of the curve.
+const ED_P = 2n ** 255n - 19n;
+
+function modPow(base, exp, mod) {
+  let r = 1n;
+  let b = base % mod;
+  for (let e = exp; e > 0n; e >>= 1n) {
+    if (e & 1n) r = (r * b) % mod;
+    b = (b * b) % mod;
+  }
+  return r;
+}
+const ED_D = ((ED_P - 121665n) * modPow(121666n, ED_P - 2n, ED_P)) % ED_P;
+const ED_SQRT_M1 = modPow(2n, (ED_P - 1n) / 4n, ED_P); // √−1 in the field
+
+export function encodeBase58(bytes) {
+  let n = 0n;
+  for (const b of bytes) n = (n << 8n) | BigInt(b);
+  let out = "";
+  while (n > 0n) {
+    out = B58[Number(n % 58n)] + out;
+    n /= 58n;
+  }
+  let i = 0;
+  while (i < bytes.length && bytes[i] === 0) {
+    out = `1${out}`; // leading zero bytes → leading "1"s (one-to-one)
+    i++;
+  }
+  return out;
+}
+
+// 32-byte seed from an isValidAddress-checked string (the length contract is the caller's)
+function decodeBase58To32(addr) {
+  let n = 0n;
+  for (const ch of addr) n = n * 58n + BigInt(B58_INDEX.get(ch));
+  const out = new Uint8Array(32);
+  let i = 31;
+  while (n > 0n && i >= 0) {
+    out[i--] = Number(n & 0xffn);
+    n >>= 8n;
+  }
+  return out;
+}
+
+/**
+ * Is `bytes` a compressed ed25519 point (somebody's pubkey, i.e. NOT a PDA)?
+ * Dalek-style decompress: y from the little-endian bytes (bit 255 is the sign of x and
+ * does not affect the verdict; non-canonical y ≥ p is rejected), then x² = (y²−1)/(d·y²+1)
+ * is probed via the (p−5)/8 root formula with the √−1 second case, each candidate
+ * verified by substitution — no verified root ⇒ off-curve ⇒ usable as a program address.
+ */
+export function isOnCurveEd25519(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 32) return false;
+  let y = 0n;
+  for (let i = 31; i >= 0; i--) y = (y << 8n) | BigInt(i === 31 ? bytes[i] & 0x7f : bytes[i]);
+  if (y >= ED_P) return false;
+  const yy = (y * y) % ED_P;
+  const u = (yy + ED_P - 1n) % ED_P; // y² − 1
+  const v = (ED_D * yy + 1n) % ED_P; // d·y² + 1
+  if (v === 0n) return u === 0n; // total function; unreachable for ed25519's d
+  const v3 = ((v * v) % ED_P) * v % ED_P;
+  const v7 = ((v3 * v3) % ED_P) * v % ED_P;
+  let x = u * v3 % ED_P * modPow((u * v7) % ED_P, (ED_P - 5n) / 8n, ED_P) % ED_P;
+  const onCurve = (c) => (v * ((c * c) % ED_P)) % ED_P === u; // v·x² == u ⇔ x² == u/v
+  if (onCurve(x)) return true;
+  x = (x * ED_SQRT_M1) % ED_P;
+  return onCurve(x);
+}
+
+/**
+ * Solana find_program_address: sha256(seeds… ‖ bump ‖ programId ‖ "ProgramDerivedAddress"),
+ * bump 255→0, the first hash OFF the curve wins (an on-curve output would be somebody's
+ * secret-key pubkey — never a program address).
+ * @returns {{address: string, bump: number}}
+ */
+export function findProgramAddress(seeds, programIdBytes) {
+  for (let bump = 255; bump >= 0; bump--) {
+    const h = createHash("sha256");
+    for (const seed of seeds) h.update(seed);
+    h.update(Uint8Array.of(bump));
+    h.update(programIdBytes);
+    h.update("ProgramDerivedAddress");
+    const out = h.digest(); // Buffer — a Uint8Array subclass
+    if (!isOnCurveEd25519(out)) return { address: encodeBase58(out), bump };
+  }
+  throw new WalletScanError("no valid bump seed below 256 — bad PDA inputs", "pda-overflow");
+}
+
+/**
+ * The associated token account of (owner, mint) under `tokenProgramId` — a deterministic
+ * PDA derivable BEFORE creation and AFTER closing. That is the foundation of the S3 fix:
+ * a closed ATA stops being listed by getTokenAccountsByOwner, but its address stays
+ * computable and getSignaturesForAddress keeps answering with its full history.
+ */
+export function deriveAta(owner, mint, tokenProgramId) {
+  if (!isValidAddress(owner) || !isValidAddress(mint) || !isValidAddress(tokenProgramId)) {
+    throw new WalletScanError(
+      `deriveAta needs three valid base58 pubkeys (owner, mint, token program), got ${JSON.stringify([owner, mint, tokenProgramId]).slice(0, 120)}`,
+      "invalid-address",
+    );
+  }
+  // spl-associated-token-account: seeds = [owner, token program, mint]
+  return findProgramAddress(
+    [decodeBase58To32(owner), decodeBase58To32(tokenProgramId), decodeBase58To32(mint)],
+    decodeBase58To32(ASSOC_TOKEN_PROGRAM_ID),
+  ).address;
+}
+
 /**
  * Current token accounts of the owner for registry mints.
+ * @param {object} [opts] pageLimit — explicit page size for getTokenAccountsByOwner (S4);
+ *   onAccountsPageCapped(programId) — called when a page comes back FULL (length >= limit):
+ *   the listing is not certifiably complete, the scan must go fail-closed.
  * @returns {Promise<Map<string, {addresses: string[], currentRaw: bigint}>>}
  *   mint -> ALL accounts (ATA + legacy): balance = the sum, every address is scanned.
  *   One account per mint is the norm, but legacy wallets hold two: silently dropping
  *   one loses its history (a quiet lie), breaking the scan denies an honest wallet.
  */
-export async function fetchOwnerTokenAccounts(client, owner, registry) {
+export async function fetchOwnerTokenAccounts(client, owner, registry, {
+  pageLimit = ACCOUNTS_PAGE_LIMIT,
+  onAccountsPageCapped,
+} = {}) {
+  if (!Number.isSafeInteger(pageLimit) || pageLimit < 1) {
+    throw new WalletScanError(`bad accounts page limit: ${JSON.stringify(pageLimit)}`, "invalid-page-limit");
+  }
   // programId is a pubkey too: a corrupt constant yields something far from the obvious -32602
   for (const pid of TOKEN_PROGRAMS) {
     if (!PUBKEY_RE.test(pid)) throw new WalletScanError(`bad token program id: ${pid}`, "invalid-program-id");
@@ -77,7 +224,9 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
     const res = await client.call("getTokenAccountsByOwner", [
       owner,
       { programId },
-      { encoding: "jsonParsed", commitment: "confirmed" },
+      // S4: explicit page size — the scanner controls the page instead of trusting a
+      // provider default it cannot see
+      { encoding: "jsonParsed", commitment: "confirmed", limit: pageLimit },
     ]);
     // a non-array from the gateway is an EXPLICIT malformed-source (mirror of
     // an "empty account set" from a lying source is indistinguishable from zero.
@@ -86,6 +235,14 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
         `malformed getTokenAccountsByOwner response: expected array, got ${res?.value === null ? "null" : typeof res?.value}`,
         "malformed-source",
       );
+    }
+    // S4: a FULL page is a truncation we cannot see past — the method has no cursor
+    // pagination, so "length >= limit" means accounts MAY exist beyond the page (a provider
+    // cap and a genuinely full page are indistinguishable). Not certifying this would
+    // silently erase positions: a loud warn + truncated.
+    if (res.value.length >= pageLimit) {
+      console.error(`[wallet-scan] ${owner}: getTokenAccountsByOwner returned a FULL page (${res.value.length} >= limit ${pageLimit}) for ${programId} — accounts beyond the page are unreachable and the listing may be capped; the scan is marked truncated (fail-closed)`);
+      onAccountsPageCapped?.(programId);
     }
     for (const entry of res.value) {
       if (entry === null || typeof entry !== "object") continue;
@@ -132,9 +289,10 @@ export async function fetchOwnerTokenAccounts(client, owner, registry) {
  * @param {Array} registry — token registry (only .mint is needed)
  * @param {object} [opts] maxTxs — cap on signatures PER SOURCE (the address or each account),
  *   onProgress({fetched, total}) — after every transaction
- * @returns {{owner, signatures, fetched, txs, skipped, truncated, accounts}}
+ * @returns {{owner, signatures, fetched, txs, skipped, truncated, accounts, ambiguousSlotPairs, derivedSources}}
  *   txs — chronological (oldest first), deltas of all owners (filtered in the report);
- *   accounts — Map mint->{address, currentRaw} for balance reconciliation
+ *   accounts — Map mint->{address, currentRaw} for balance reconciliation;
+ *   derivedSources — S3: ATA addresses queried as signature sources by derivation (not the listing).
  */
 export async function scanWallet(client, owner, registry, { maxTxs = 300, limit = 100, onProgress, signal } = {}) {
   if (!isValidAddress(owner)) {
@@ -146,10 +304,38 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     if (signal?.aborted) throw new WalletScanError("scan aborted by client", "aborted");
   };
   const mintSet = new Set(registry.map((t) => t.mint));
-  const accounts = await fetchOwnerTokenAccounts(client, owner, registry);
+  let accountsTruncated = false; // S4: a full listing page ⇒ completeness is not certifiable
+  const accounts = await fetchOwnerTokenAccounts(client, owner, registry, {
+    onAccountsPageCapped: () => { accountsTruncated = true; },
+  });
 
   // 1) signatures per source: wallet address + ALL token accounts of registry mints
-  const sources = [owner, ...[...accounts.values()].flatMap((a) => a.addresses).filter(Boolean)];
+  //    + the DERIVED ATAs of registry mints (S3, independent of the listing).
+  const liveAddresses = [...accounts.values()].flatMap((a) => a.addresses).filter(Boolean);
+  // S3: a CLOSED token account is absent from the listing but remains a signature source —
+  // its ATA address is a deterministic PDA (computable after closing) and the node still
+  // serves its history (with a delegate-signed disposal this was a TOTAL loss).
+  // Derive the ATA of every registry mint under BOTH token programs; addresses already
+  // known from the live listing are skipped (one address = one walk, no wasted RPC).
+  // Derived sources go LAST so the source order of the listed ones — and the same-slot
+  // tiebreak semantics built on it — stays byte-for-byte unchanged.
+  const seenSources = new Set([owner, ...liveAddresses]);
+  const derivedSources = [];
+  for (const { mint } of registry) {
+    if (!isValidAddress(mint)) {
+      // a registry mint that is not a pubkey can never match an on-chain account either —
+      // skip the derivation loudly instead of crashing the scan
+      console.error(`[wallet-scan] ${owner}: registry mint ${JSON.stringify(mint).slice(0, 60)} is not a valid base58 pubkey — ATA derivation skipped (no derived signature source)`);
+      continue;
+    }
+    for (const programId of TOKEN_PROGRAMS) {
+      const ata = deriveAta(owner, mint, programId);
+      if (seenSources.has(ata)) continue;
+      seenSources.add(ata);
+      derivedSources.push(ata);
+    }
+  }
+  const sources = [owner, ...liveAddresses, ...derivedSources];
   const sigs = new Map(); // signature -> {slot, blockTime, err, src, idx} (dedup across sources)
   let truncated = false;
   for (const [srcIdx, source] of sources.entries()) {
@@ -303,5 +489,15 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     ambiguousSlotPairs += (k * (k - 1)) / 2 - within;
   }
 
-  return { owner, signatures: sigs.size, fetched, txs, skipped, truncated, accounts, ambiguousSlotPairs };
+  return {
+    owner,
+    signatures: sigs.size,
+    fetched,
+    txs,
+    skipped,
+    truncated: truncated || accountsTruncated, // S4: a capped/full listing page counts too
+    accounts,
+    ambiguousSlotPairs,
+    derivedSources, // S3: observability — how many sources came from derivation, not the listing
+  };
 }
