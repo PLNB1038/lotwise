@@ -4,10 +4,16 @@
 
 /**
  * Deltas for a set of mints (Set) or a single mint (string): owners of ALL
- *  affected accounts — owner filtering is the consumer's job.
+ * affected accounts — owner filtering is the consumer's job.
+ * opts.moneyMints (Set) additionally parses the money legs (USDC) of the same tx:
+ * net deltas per owner land in moneyDeltas — the stable counter-leg is what turns a
+ * transfer into a priced trade (round 21). Without the option the response shape is
+ * byte-identical to what every existing consumer expects.
  */
-export async function fetchWalletDeltas(client, signature, mints) {
+export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
+  const moneyMints = opts.moneyMints ?? null;
   const match = typeof mints === "string" ? (m) => m === mints : (m) => mints.has(m);
+  const isMoney = (m) => moneyMints !== null && moneyMints.has(m);
   const tx = await client.call("getTransaction", [
     signature,
     { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 },
@@ -28,12 +34,12 @@ export async function fetchWalletDeltas(client, signature, mints) {
   // not a phantom buy. accountIndex is unique within a tx.
   const byAccount = new Map(); // accountIndex → {owner, mint, preRaw, postRaw}
   for (const b of tx.meta?.preTokenBalances ?? []) {
-    if (!match(b.mint)) continue;
+    if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
     byAccount.set(key, { owner: b.owner, mint: b.mint, preRaw: BigInt(b.uiTokenAmount.amount), postRaw: 0n });
   }
   for (const b of tx.meta?.postTokenBalances ?? []) {
-    if (!match(b.mint)) continue;
+    if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
     const cur = byAccount.get(key);
     if (cur !== undefined && cur.owner !== b.owner) {
@@ -66,7 +72,16 @@ export async function fetchWalletDeltas(client, signature, mints) {
     cur.deltaRaw += a.postRaw - a.preRaw;
     byOwner.set(key, cur);
   }
-  const deltas = [...byOwner.values()].filter((d) => d.deltaRaw !== 0n);
+  const deltas = [...byOwner.values()].filter((d) => d.deltaRaw !== 0n && !isMoney(d.mint));
+
+  // Money legs: the same owner-level aggregation, kept separately so the report can
+  // price trades without confusing a stable leg with a tracked position.
+  let moneyDeltas;
+  if (moneyMints !== null) {
+    moneyDeltas = [...byOwner.values()]
+      .filter((d) => d.deltaRaw !== 0n && isMoney(d.mint))
+      .map(({ owner, mint, deltaRaw }) => ({ owner, mint, deltaRaw }));
+  }
 
   return {
     signature,
@@ -74,6 +89,7 @@ export async function fetchWalletDeltas(client, signature, mints) {
     blockTime: tx.blockTime ?? null,
     err: tx.meta?.err ?? null,
     deltas,
+    ...(moneyMints !== null ? { moneyDeltas } : {}),
   };
 }
 

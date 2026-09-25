@@ -624,6 +624,29 @@ function renderWallet(rep) {
           ? '<dt class="err">scan gap</dt><dd class="err" title="' + esc(gapsFull) + '">' + esc(t.gaps[0].missingQtyRaw) +
               ' base units predate the scan window' + (t.gaps.length > 1 ? ' +' + (t.gaps.length - 1) + ' more (hover)' : '') + '</dd>'
           : '';
+        // Round 21: the USDC leg of each trade prices the report (basis on buys, proceeds on
+        // sells). basisKnown === undefined means an older cached report — such lots are neither
+        // priced nor "unpriced", they render exactly as before.
+        var lotsPriced = t.lots.filter(function (l) { return l.basisKnown === true; });
+        var openBasis = lotsPriced.reduce(function (a, l) { return a + BigInt(l.basisRaw); }, 0n);
+        var lotsUnknown = t.lots.filter(function (l) { return l.basisKnown === false; }).length;
+        var realized = t.realized || [];
+        var pricedDisposals = realized.filter(function (r) { return r.pnlRaw !== null && r.pnlRaw !== undefined; });
+        var pnl = pricedDisposals.reduce(function (a, r) { return a + BigInt(r.pnlRaw); }, 0n);
+        var proceeds = realized.filter(function (r) { return r.proceedsKnown === true; })
+          .reduce(function (a, r) { return a + BigInt(r.proceedsRaw); }, 0n);
+        var unpriced = realized.length - pricedDisposals.length;
+        var lotsRow = '<dt>open lots (FIFO)</dt><dd>' + t.lots.length +
+          (openBasis > 0n ? ', basis ' + esc(fmtUi(String(openBasis), 6)) + ' USDC' : '') +
+          (lotsUnknown > 0 ? ' <span class="note">(' + lotsUnknown + ' lot' + (lotsUnknown > 1 ? 's' : '') + ' unpriced — bought without a USDC leg)</span>' : '') +
+          (t.realized ? '' : (t.realizedCount ? ', realized ' + t.realizedCount + ' disposals' : '')) + '</dd>';
+        var pnlRow = realized.length
+          ? '<dt>realized P&L (USDC)</dt><dd>' + (pricedDisposals.length
+              ? '<span class="' + (pnl >= 0n ? 'verdict ok' : 'err') + '">' + esc(fmtUi(String(pnl), 6)) + '</span>' +
+                ' <span class="note">proceeds ' + esc(fmtUi(String(proceeds), 6)) +
+                (unpriced > 0 ? ', ' + unpriced + ' disposal' + (unpriced > 1 ? 's' : '') + ' unpriced' : '') + '</span>'
+              : '<span class="note">no priced disposals — the sales had no USDC leg</span>') + '</dd>'
+          : '';
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
           '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd>' +
             // Wave I1: a negative window delta is NOT an error but an artifact of the scan
@@ -642,9 +665,7 @@ function renderWallet(rep) {
               (t.excludedReason ? ' (' + esc(t.excludedReason) + ')' : '') + '</span></dd>'
             : '<dt>adjusted (exact)</dt><dd>' + esc(fmtUi(t.adjusted.whole, t.decimals)) +
               (t.adjusted.exact ? '' : ' + ' + esc(t.adjusted.remainder) + '/' + esc(t.adjusted.den) + ' base units') + '</dd>') +
-          '<dt>open lots (FIFO)</dt><dd>' + t.lots.length +
-            (t.realizedCount ? ', realized ' + t.realizedCount + ' disposals' : '') + '</dd>' +
-          gaps + '</dl></div>';
+          lotsRow + pnlRow + gaps + '</dl></div>';
       }).join('');
   el('wallet-out').innerHTML = head + body;
 }

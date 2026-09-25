@@ -243,7 +243,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       return json(res, 200, report);
     }
     if (url.pathname === "/accruals") {
-      // The applyEvents accrual engine is wired in pointwise: the dividends of ONE token
+      // Dividend accruals are computed pointwise: the dividends of ONE token
       // for ONE wallet. A separate endpoint, not a field in /lots: the /lots report is
       // wallet-wide (its contract has no symbol) and its wire shape is pinned by tests
       // (dividend-e2e GAP 2: there must be no "accrual" rows in /lots).
@@ -277,37 +277,41 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const dividends = (eventsByMint.get(mint) ?? []).filter((e) => e.type === "DIVIDEND_ACCRUAL");
       // no position in the token or no dividend events — no accruals: an honest []
       if (!token || dividends.length === 0) return json(res, 200, []);
-      // Report lots lack the engine context (a lot carries no mint/owner/basisRaw — the
-      // seam is documented in round6-report-lots): we complete it. acquiredDate: null (a
-      // tx without blockTime is a legitimate Solana reality) is POISON to applyEvents: the
-      // engine throws LotError "refusing to guess" and its atomicity rolls back applying
-      // the WHOLE history (contract in the report.mjs header). Such lots are excluded
-      // BEFORE the engine: the acquisition date is unknown — the engine refuses to guess
-      // "before or after the ex-date", and so will we.
-      const engineLots = token.lots
-        .filter((l) => l.acquiredDate !== null && l.acquiredDate !== undefined)
-        .map((l) => ({ ...l, mint, owner: report.owner, qtyRaw: BigInt(l.qtyRaw), basisRaw: 0n }));
-      let engine;
+      // Round 21 (finance audit F1): the accrual base is the position held ON THE EX-DATE,
+      // replayed from the scan window's deltas — Σ of this owner's deltas in transactions
+      // strictly earlier than the ex-date (unix ms). The previous shape fed the engine
+      // today's open FIFO lots, so a sale AFTER the ex-date silently shrank the dividend
+      // income (dividends are declared per ex-date holding, not per current ownership).
+      // A tx without blockTime cannot be ordered against the ex-date and a scan gap means
+      // history the window never saw: both flag the base as incomplete instead of lying.
+      const symbol = byMint.get(mint)?.symbol ?? null;
       try {
-        engine = applyEvents(engineLots, dividends);
+        const rows = dividends.map((e) => {
+          const exMs = parseIsoDateMs(e.effectiveDate);
+          let base = 0n;
+          let considered = 0;
+          let incomplete = token.gaps.length > 0;
+          for (const tx of scan.txs) {
+            const d = tx.deltas.find((x) => x.owner === report.owner && x.mint === mint);
+            if (!d) continue;
+            if (tx.blockTime == null) { incomplete = true; continue; }
+            if (tx.blockTime * 1000 < exMs) { base += d.deltaRaw; considered++; }
+          }
+          const amount = BigInt(e.amountPerUnitRaw);
+          return {
+            symbol,
+            effectiveDate: e.effectiveDate,
+            amountPerUnitRaw: String(amount), // BigInt does not serialize in JSON — strings go out
+            totalRaw: String(base * amount),
+            lotsConsidered: considered, // how many window transactions formed the ex-date base
+            ...(incomplete ? { baseIncomplete: true } : {}),
+          };
+        });
+        return json(res, 200, rows);
       } catch (err) {
         // a broken event from the store does not take the server down: a clear reason instead of a generic 500
         return json(res, 500, { error: `accrual engine failed: ${err.message}` });
       }
-      const symbol = byMint.get(mint)?.symbol ?? null;
-      // lotsConsidered — how many lots fed the event's base ("strictly earlier than
-      // effectiveDate", a unix-ms comparison): the heldBefore pair in lots.mjs. The engine
-      // does not return the counter (an accrual carries only the qty sum), but the showcase
-      // needs to see "which lots paid for it". The parse here cannot yield null: the engine
-      // already ran the same rows through the same parseIsoDateMs — a garbage date would
-      // have reached it as a LotError above.
-      return json(res, 200, engine.accruals.map((a) => ({
-        symbol,
-        effectiveDate: a.event.effectiveDate,
-        amountPerUnitRaw: String(a.amountPerUnitRaw), // BigInt does not serialize in JSON — strings go out
-        totalRaw: String(a.totalRaw),
-        lotsConsidered: engineLots.filter((l) => parseIsoDateMs(l.acquiredDate) < parseIsoDateMs(a.event.effectiveDate)).length,
-      })));
     }
     if (url.pathname === "/crosscheck") {
       const mint = resolveMint(q);

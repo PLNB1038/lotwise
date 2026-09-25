@@ -692,3 +692,50 @@ test("scan UX: a network failure (a fetch reject) — the unreachable sentence, 
   assert.ok(html.includes("Solana RPC is unreachable"), "the human phrase for the network class");
   assert.ok(html.includes("fetch failed"), "the original error kept in the tooltip");
 });
+
+// ---- round 21: the USDC leg prices the wallet report in the UI ----
+test("wallet UI: priced lots show basis and realized P&L; unpriced ones say so honestly", async () => {
+  const rep = {
+    owner: ADDR_A,
+    counts: { signatures: 2, fetched: 2, skipped: 0, relevantTxs: 2 },
+    truncated: false, complete: true,
+    tokens: [{
+      symbol: "SPYx", name: "S&P 500", decimals: 8,
+      rawBalance: "1", netDeltaRaw: "1", onchainNow: "1", reconciles: true,
+      multiplier: { now: "1", events: 0 },
+      adjusted: { exact: true, whole: "1", remainder: "0", den: "1" },
+      lots: [
+        { id: "l1", qtyRaw: "1", acquiredDate: "2026-01-01T00:00:00.000Z", basisRaw: "2500000", basisKnown: true },
+        { id: "l2", qtyRaw: "2", acquiredDate: "2026-01-02T00:00:00.000Z", basisRaw: null, basisKnown: false },
+      ],
+      realized: [
+        { date: "2026-03-01T00:00:00.000Z", qtyRaw: "1", basisRaw: "1000000", basisKnown: true, proceedsRaw: "3000000", proceedsKnown: true, pnlRaw: "2000000" },
+        { date: "2026-03-02T00:00:00.000Z", qtyRaw: "1", basisRaw: null, basisKnown: false, proceedsRaw: null, proceedsKnown: false, pnlRaw: null },
+      ],
+      realizedCount: 2, realizedQtyRaw: "2", gaps: [],
+    }],
+  };
+  const { sb, els } = runScanClient((url) => url.startsWith("/lots?") ? { ok: true, status: 200, body: rep } : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const html = els.get("wallet-out").innerHTML;
+  assert.ok(html.includes("basis 2.500000 USDC"), "the priced lot's basis is shown in USDC");
+  assert.ok(html.includes("1 lot unpriced"), "an unpriced lot is named, not hidden");
+  assert.ok(html.includes("realized P&L (USDC)"), "the realized P&L row renders");
+  assert.ok(html.includes("2.000000"), "the summed pnl of priced disposals");
+  assert.ok(html.includes("1 disposal unpriced"), "an unpriced disposal is named");
+  assert.ok(html.includes("proceeds 3.000000"), "known proceeds sum");
+});
+
+test("wallet UI: an old cached report (no realized array) renders exactly as before", async () => {
+  const oldRep = { ...repA, tokens: [{ ...repA.tokens[0], lots: [{ id: "l1", qtyRaw: "100", acquiredDate: "2026-01-01T00:00:00.000Z" }] }] };
+  const { sb, els } = runScanClient((url) => url.startsWith("/lots?") ? { ok: true, status: 200, body: oldRep } : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const html = els.get("wallet-out").innerHTML;
+  assert.ok(html.includes("open lots (FIFO)</dt><dd>1"), "the legacy open-lots line is intact");
+  assert.ok(!html.includes("realized P"), "no P&L row for a report that predates pricing");
+  assert.ok(!html.includes("unpriced"), "no unpriced notes on a legacy report");
+});

@@ -131,3 +131,38 @@ test("a MULTIPLIER_CHANGE — a no-op for raw lots (the multiplier lives in the 
   assert.deepEqual(lots[0], before);
   assert.equal(applied, 1);
 });
+
+// Round 21 (finance audit F4): the same dividend reaching the engine from two sources
+// (a press page and an API node — different sourceUrl, identical economics) must accrue
+// ONCE. The producer dedups only exact duplicates (sourceUrl is part of its key), so the
+// engine dedups semantically: same mint + same ex-date + same per-unit amount.
+test("DIVIDEND_ACCRUAL: one dividend from two sources — a single accrual, not double income", () => {
+  const div = (sources) => ev({
+    type: "DIVIDEND_ACCRUAL",
+    effectiveDate: "2026-09-10",
+    amountPerUnitRaw: 2,
+    decimals: 6,
+    sources,
+  });
+  const { accruals } = applyEvents(
+    [lot()],
+    [
+      div(["https://issuer.example/press/q3"]),
+      div(["https://api.issuer.example/nodes/q3-abc"]),
+    ],
+  );
+  assert.equal(accruals.length, 1, "the second sighting of the same dividend does not double the income");
+  assert.equal(accruals[0].totalRaw, 2n * 1_000_000n);
+});
+
+test("DIVIDEND_ACCRUAL: same day, different amounts — two different dividends, both accrue", () => {
+  const div = (amountPerUnitRaw) => ev({
+    type: "DIVIDEND_ACCRUAL",
+    effectiveDate: "2026-09-10",
+    amountPerUnitRaw,
+    decimals: 6,
+    sources: [`https://issuer.example/x/${amountPerUnitRaw}`],
+  });
+  const { accruals } = applyEvents([lot()], [div(2), div(3)]);
+  assert.equal(accruals.length, 2, "a different per-unit amount is a different dividend");
+});

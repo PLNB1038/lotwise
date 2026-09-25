@@ -55,6 +55,18 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     const date = iso(tx.blockTime);
     // other owners' deltas are untouched: scan by address — report by address
     const mine = tx.deltas.filter((d) => d.owner === owner && byMint.has(d.mint) && d.deltaRaw !== 0n);
+    if (mine.length === 0) continue;
+
+    // Round 21 (F2): the money leg prices the trade. Net USDC delta of THIS owner in THIS
+    // tx; the pricing rule is deliberately narrow — exactly one tracked token moved against
+    // a counter-directed USDC leg. Several tracked tokens in one tx would require guessing
+    // the allocation, a missing leg is a transfer, not a trade — both are honestly unknown.
+    const usdc = (tx.moneyDeltas ?? []).reduce((acc, m) => (m.owner === owner ? acc + m.deltaRaw : acc), 0n);
+    const buys = mine.filter((d) => d.deltaRaw > 0n);
+    const sells = mine.filter((d) => d.deltaRaw < 0n);
+    const buyBasis = buys.length === 1 && usdc < 0n ? -usdc : null;
+    const sellProceeds = sells.length === 1 && usdc > 0n ? usdc : null;
+
     for (const d of mine) {
       const s = stateOf(d.mint);
       s.rawBalance += d.deltaRaw;
@@ -62,21 +74,68 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
         // id = full mint + _seq: a 6-char prefix collides across different mints
         // (the fuzzer caught identical ids), while mint is unique by construction. Technical
         // field — length is not critical, and there are no collisions by construction.
-        s.queue.push({ id: `${d.mint}-${++s.lotSeq}`, qtyRaw: d.deltaRaw, acquiredDate: date });
+        s.queue.push({
+          id: `${d.mint}-${++s.lotSeq}`,
+          qtyRaw: d.deltaRaw,
+          acquiredDate: date,
+          basis: buyBasis,
+          basisKnown: buyBasis !== null,
+        });
       } else {
         let due = -d.deltaRaw;
+        const due0 = due; // the FULL size of the sale — the proceeds pool is shared by every piece and the gap
+        const pieces = [];
         while (due > 0n && s.queue.length > 0) {
           const lot = s.queue[0];
-          const take = lot.qtyRaw < due ? lot.qtyRaw : due;
+          const pre = lot.qtyRaw;
+          const take = pre < due ? pre : due;
           lot.qtyRaw -= take;
           due -= take;
-          s.realized.push({ qtyRaw: take, date });
-          if (lot.qtyRaw === 0n) s.queue.shift();
+          // basis transfers out proportionally (BigInt trunc); the lot's own trunc remainder
+          // rides the piece that closes it — Σ(open lot basis) + Σ(realized basis) is exact
+          let basisPiece = null;
+          if (lot.basisKnown) basisPiece = (lot.basis * take) / pre;
+          let proceedsPiece = null;
+          if (sellProceeds !== null) proceedsPiece = (sellProceeds * take) / due0;
+          pieces.push({
+            date,
+            qtyRaw: take,
+            basis: basisPiece,
+            basisKnown: basisPiece !== null,
+            proceeds: proceedsPiece,
+            proceedsKnown: sellProceeds !== null,
+            pnl: basisPiece !== null && proceedsPiece !== null ? proceedsPiece - basisPiece : null,
+          });
+          if (lot.qtyRaw === 0n) {
+            // the lot's trunc remainder (basis − what this piece already took) rides the closing piece
+            if (lot.basisKnown) pieces[pieces.length - 1].basis += lot.basis - basisPiece;
+            s.queue.shift();
+          } else if (lot.basisKnown) {
+            lot.basis -= basisPiece;
+          }
         }
+        // the proceeds trunc remainder rides the last covered piece — but ONLY when the
+        // sale was fully covered; with a gap, the remainder is the gap piece's own share
+        if (sellProceeds !== null && pieces.length > 0 && due === 0n) {
+          const given = pieces.reduce((a, p) => a + p.proceeds, 0n);
+          const rem = sellProceeds - given;
+          if (rem !== 0n) {
+            const last = pieces[pieces.length - 1];
+            last.proceeds += rem;
+            if (last.pnl !== null) last.pnl = last.proceeds - last.basis;
+          }
+        }
+        s.realized.push(...pieces);
         if (due > 0n) {
           // spend without coverage: the owner already held a position before the scan window started —
-          // it is not zero and not an invented lot, it is a hole with a date and a size
-          s.gaps.push({ date, missingQtyRaw: due });
+          // it is not zero and not an invented lot, it is a hole with a date and a size.
+          // Its proceeds share is real money (the sale did receive it) and is booked here,
+          // never into a covered piece; its basis is unknown by construction.
+          const hole = { date, missingQtyRaw: due };
+          if (sellProceeds !== null) {
+            hole.proceeds = sellProceeds - pieces.reduce((a, p) => a + p.proceeds, 0n);
+          }
+          s.gaps.push(hole);
         }
       }
     }
@@ -114,10 +173,31 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
         remainder: String(scaled.remainder),
         den: String(scaled.den),
       },
-      lots: s.queue.map((l) => ({ ...l, qtyRaw: String(l.qtyRaw) })),
+      lots: s.queue.map((l) => ({
+        id: l.id,
+        qtyRaw: String(l.qtyRaw),
+        acquiredDate: l.acquiredDate,
+        // basis: known only when the lot was bought against a USDC leg (round 21);
+        // a transfer-in or a multi-token tx stays honestly null — never an invented 0
+        basisRaw: l.basisKnown ? String(l.basis) : null,
+        basisKnown: l.basisKnown,
+      })),
+      realized: s.realized.map((r) => ({
+        date: r.date,
+        qtyRaw: String(r.qtyRaw),
+        basisRaw: r.basis !== null ? String(r.basis) : null,
+        basisKnown: r.basisKnown,
+        proceedsRaw: r.proceeds !== null ? String(r.proceeds) : null,
+        proceedsKnown: r.proceedsKnown,
+        pnlRaw: r.pnl !== null ? String(r.pnl) : null, // proceeds − basis; null when either side is unknown
+      })),
       realizedCount: s.realized.length,
       realizedQtyRaw: String(s.realized.reduce((acc, r) => acc + r.qtyRaw, 0n)),
-      gaps: s.gaps.map((g) => ({ ...g, missingQtyRaw: String(g.missingQtyRaw) })),
+      gaps: s.gaps.map((g) => ({
+        date: g.date,
+        missingQtyRaw: String(g.missingQtyRaw),
+        ...(g.proceeds !== undefined ? { proceedsRaw: String(g.proceeds) } : {}), // the gap piece's own sale share
+      })),
     };
     // honest flag only on the fallback branch: absence of the field = adjusted was computed
     if (!tl) row.adjustedAvailable = false; // identity-fallback (see the header): adjusted==raw is unproven

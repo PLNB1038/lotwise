@@ -5,6 +5,7 @@
 // token account, deduplicated, plus current account balances to reconcile the report with the chain.
 // Fail-closed: failed and unavailable txs go into skipped with a reason, not silently.
 import { fetchWalletDeltas } from "../ingest/tx.mjs";
+import { MONEY_MINTS } from "./money.mjs";
 
 export const PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -219,7 +220,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     aborted();
     let tx;
     try {
-      tx = await fetchWalletDeltas(client, s.signature, mintSet);
+      tx = await fetchWalletDeltas(client, s.signature, mintSet, { moneyMints: MONEY_MINTS });
     } catch (err) {
       // Wave H3-1/H3-2 [P1]: ONE poisoned tx (garbage meta from a lying gateway,
       // a permanent RpcError on a versioned tx) crashed the ENTIRE scan — the wallet became
@@ -249,7 +250,13 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       continue;
     }
     if (tx.deltas.length > 0) {
-      txs.push({ signature: s.signature, slot: tx.slot, blockTime: tx.blockTime, deltas: tx.deltas });
+      txs.push({
+        signature: s.signature,
+        slot: tx.slot,
+        blockTime: tx.blockTime,
+        deltas: tx.deltas,
+        ...(tx.moneyDeltas !== undefined ? { moneyDeltas: tx.moneyDeltas } : {}), // the USDC leg (round 21)
+      });
     }
   }
 

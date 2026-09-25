@@ -18,7 +18,7 @@ Lotwise closes that gap with one canonical event stream, verified against the ch
 - **Token registry**: 31 tokenized equities from 4 issuers (xStocks/Backed 16, PreStocks 8, Backpack 4, Tessera 3). Token-2022 mints — decimals per issuer family: 8 (xStocks), 6 (Backpack), 9 (PreStocks/Tessera) — every mint and its decimals verified against mainnet.
 - **Canonical events**: one schema, 6 event types (`SPLIT`, `DIVIDEND_ACCRUAL`, `MERGER`, `TICKER_CHANGE`, `REDEEM`, `MULTIPLIER_CHANGE`). Strict validation: canonical ISO-8601 dates, exact decimal multipliers as strings (no floats), mandatory source references.
 - **Event sources**: the xStocks issuer API (paginated history with a completeness check: the oldest node must start at multiplier `1`), and for PreStocks/Backpack the mint state itself, read via an on-chain journal that backfills and diffs across restarts.
-- **Adjusted lots**: FIFO lots rebuilt from wallet history and adjusted through the multiplier timeline, with exact dust arithmetic (BigInt rationals; `sampleScaledQty` reports the exact remainder).
+- **Adjusted lots**: FIFO lots rebuilt from wallet history and adjusted through the multiplier timeline, with exact dust arithmetic (BigInt rationals; `sampleScaledQty` reports the exact remainder). Swaps against a **USDC leg carry their cost basis**: a lot bought against USDC knows its `basisRaw`, a disposal against USDC books `proceedsRaw` and `pnlRaw` per FIFO piece (basis transfers proportionally with exact trunc-remainder accounting). A trade without a USDC leg — a transfer, a token→token swap, several tracked tokens inside one tx — is flagged `basisKnown: false` / `proceedsKnown: false`, never an invented number.
 - **Price cross-check**: daily GeckoTerminal candles around event dates, per-event verdicts (`consistent` / `mismatch` / `suspicious` / `inconclusive` / `no-price-data`).
 - **Fail-closed reconcile**: issuer-reported multiplier vs live on-chain Scaled UI amount. An unavailable source is a `503`, never a fabricated value; tokens with a broken multiplier history are excluded from reporting and flagged with a reason, not silently shown as `1`.
 - **Report page and REST API**: the page at `/` is a working sample consumer of the API. Zero runtime dependencies (`node:http` and the standard library only).
@@ -48,8 +48,8 @@ GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `4
 | `/events?symbol=&type=` | Canonical events for one token, optional type filter |
 | `/multiplier?symbol=&date=&raw=` | Multiplier at a date plus a raw-to-adjusted sample with exact dust |
 | `/onchain?symbol=&date=` | Issuer-reported vs on-chain multiplier reconcile verdict |
-| `/lots?address=` | Wallet report: FIFO lots, raw vs adjusted balances |
-| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet (engine-computed from issuer dividend declarations; xStocks publishes no per-unit amounts, so dividend rebases currently appear in the live feed as multiplier events) |
+| `/lots?address=` | Wallet report: FIFO lots with cost basis, raw vs adjusted balances, realized P&L from USDC legs |
+| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet. The base is the position held **on the ex-date**, replayed from the scan window — a sale after the ex-date does not shrink the dividend; rows flag `baseIncomplete` when a transaction cannot be ordered against the ex-date or the scan has gaps. Accruals come from operator-supplied dividend declarations; xStocks publishes no per-unit amounts, so in the live feed today dividend rebases appear as multiplier events |
 | `/crosscheck?symbol=` | Price cross-check verdicts per event |
 | `/health` | Event/token counts, journal and registry integrity flags, excluded tokens |
 
@@ -89,7 +89,7 @@ Response shape (a real `/events` row, truncated):
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
-Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit.
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit. Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis.
 
 Rate limits, per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy, else the socket): 12 wallet scans/min, 60 on-chain/price calls/min; configure via `RATE_LIMIT_SCAN_PER_MIN` / `RATE_LIMIT_RPC_PER_MIN`. Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree` — the verdict compares the issuer plan (`api`, evaluated at the requested date) against `onChainEffective` (the mint's current `active` multiplier with an already-activated `pending` applied); the raw `active` value may legitimately differ from `api` when a pending rebase sits in between. `/crosscheck` verdicts are the five values listed above.
 
@@ -124,7 +124,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-692 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+716 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

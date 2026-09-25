@@ -70,7 +70,18 @@ export function applyEvents(lots, events) {
 
   const lotsOf = (mint) => out.filter((l) => l.mint === mint);
 
+  // Round 21 (F4): semantic dedup of dividend sightings. The producer's key includes
+  // sourceUrl, so the same dividend reaching the store from two sources (a press page and
+  // an API node) survives as two events — and without this gate would accrue twice,
+  // doubling the declared income. mint + ex-date + per-unit amount is the dividend's identity.
+  const seenDividends = new Set();
+
   for (const e of events) {
+    if (e.type === "DIVIDEND_ACCRUAL") {
+      const key = `${e.mint}|${parseIsoDateMs(e.effectiveDate)}|${e.amountPerUnitRaw}`;
+      if (seenDividends.has(key)) continue;
+      seenDividends.add(key);
+    }
     switch (e.type) {
       case "SPLIT": {
         const { ratioNumerator: N, ratioDenominator: D } = e;
