@@ -10,7 +10,7 @@ import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
 import { scanWallet } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot } from "../src/events/journal.mjs";
-import { parseServeArgs, ServeArgsError, assertHostResolvable, checkPortAvailable } from "../src/cli/flags.mjs";
+import { parseServeArgs, ServeArgsError, assertHostResolvable, checkPortAvailable, envPositiveInt as envPositiveIntShared } from "../src/cli/flags.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -303,10 +303,7 @@ const priceProvider = {
 // Rate limits for expensive endpoints per client IP (see src/api/ratelimit.mjs):
 // the demo is public through the funnel, RPC quota is finite; XFF is trusted — the only
 // public path to the port is the funnel, direct connections only come from the tailnet
-const envPositiveInt = (name, fallback) => {
-  const v = Number(process.env[name]);
-  return Number.isInteger(v) && v > 0 ? v : fallback;
-};
+const envPositiveInt = envPositiveIntShared; // round 21 (SRE P3-1): loud fallback, moved to src/cli/flags.mjs
 const rateLimits = {
   scan: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12) }, // /lots, /accruals
   rpc: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_RPC_PER_MIN", 60) }, // /onchain, /crosscheck

@@ -157,3 +157,30 @@ test("the interruption scenario: a new write does not clobber the corrupted file
   assert.deepEqual(JSON.parse(readFileSync(p, "utf8")), {});
   assert.equal(readFileSync(backup, "utf8"), torn); // the corrupted history not lost
 });
+
+
+// ---- round 21 SRE P3: the journal's own BOM and rewrite hygiene ----
+
+test("journal: a BOM-prefixed valid journal loads (round 21, SRE P3-5 — not quarantined)", () => {
+  const dir = freshDir();
+  const p = path.join(dir, "onchain-journal.json");
+  writeFileSync(p, "\ufeff" + JSON.stringify({ ["Mint11111111111111111111111111111111"]: { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] } }, null, 1) + "\n");
+  const r = loadJournalOnchain(p);
+  assert.equal(r.ok, true, `must load (reason: ${r.reason})`);
+  assert.equal(r.corrupted, false);
+  assert.equal(r.journal["Mint11111111111111111111111111111111"].lastEffective, "5");
+});
+
+test("journal: saveJournalAtomic skips the write when the serialization is unchanged (round 21, SRE P3-4)", () => {
+  const dir = freshDir();
+  const p = path.join(dir, "onchain-journal.json");
+  const journal = { ["Mint11111111111111111111111111111111"]: { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] } };
+  const first = saveJournalAtomic(p, journal);
+  assert.equal(first.written, true, "the first save writes the file");
+  const before = readFileSync(p, "utf8");
+  const second = saveJournalAtomic(p, { ["Mint11111111111111111111111111111111"]: { lastEffective: "5", observedAt: "2026-09-01T00:00:00.000Z", events: [] } });
+  assert.equal(second.written, false, "an identical journal (even a fresh deep-equal object) does not rewrite the file");
+  assert.equal(readFileSync(p, "utf8"), before, "the file bytes are untouched");
+  const third = saveJournalAtomic(p, { ["Mint11111111111111111111111111111111"]: { lastEffective: "7", observedAt: "2026-09-02T00:00:00.000Z", events: [] } });
+  assert.equal(third.written, true, "a changed observation writes again");
+});

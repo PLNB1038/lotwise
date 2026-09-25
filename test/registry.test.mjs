@@ -1,4 +1,7 @@
 import test from "node:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import assert from "node:assert/strict";
 import {
   loadRegistry,
@@ -88,4 +91,17 @@ test("assertBootableRegistrySize: at the cap passes, above it refuses with the n
     (err) => err instanceof RegistryError && /2049 tokens/.test(err.message) && /linear/.test(err.message) && /cap 2048/.test(err.message),
     "the refusal names the size, the reason and the cap",
   );
+});
+
+// round 21 (SRE P3-5): a UTF-8 BOM is an editor fingerprint, not corruption — a valid
+// registry behind a BOM loads instead of going to the quarantine
+test("loadRegistrySafe: a BOM-prefixed valid registry loads (no quarantine)", async () => {
+  const { loadRegistrySafe } = await import("../src/registry/registry.mjs");
+  const dir = mkdtempSync(path.join(tmpdir(), "lw-reg-bom-"));
+  const p = path.join(dir, "tokens.json");
+  writeFileSync(p, "﻿" + JSON.stringify([good], null, 1) + "\n");
+  const r = await loadRegistrySafe(p);
+  assert.equal(r.ok, true, `must load (reason: ${r.reason})`);
+  assert.equal(r.corrupted, false);
+  assert.equal(r.registry.length, 1);
 });

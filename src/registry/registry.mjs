@@ -37,7 +37,8 @@ export async function loadRegistry(path = "data/tokens.json") {
   }
   let list;
   try {
-    list = JSON.parse(raw);
+    // Round 21 (SRE P3-5): strip a UTF-8 BOM — a valid registry must not be quarantined for an editor fingerprint
+    list = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch (err) {
     throw new RegistryError(`registry is not valid JSON: ${err.message}`);
   }
@@ -78,7 +79,8 @@ export async function loadRegistrySafe(path = "data/tokens.json", preserveOpts =
   }
   let list;
   try {
-    list = JSON.parse(raw);
+    // round 21 (SRE P3-5): strip a UTF-8 BOM before parsing — a valid registry must not be quarantined for an editor fingerprint
+    list = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch (err) {
     return quarantineRegistryFile(path, `registry is not valid JSON: ${err.message}`, preserveOpts);
   }

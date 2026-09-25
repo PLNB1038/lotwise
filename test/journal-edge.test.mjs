@@ -217,18 +217,19 @@ test("loadJournalOnchain: an empty file (0 bytes) — corrupted, not a \"first r
   assert.equal(existsSync(p), false);
 });
 
-test("loadJournalOnchain: a BOM before the JSON — corrupted (not silently trimmed); without the BOM the same object is read", () => {
+// Round 21 (SRE P3-5) REWRITES this pin: a BOM used to be treated as corruption (an
+// earlier round chose "not silently trimmed"). The SRE pass priced the operator cost:
+// a perfectly valid journal went to quarantine and needed a manual strip-and-restore.
+// A UTF-8 BOM is an editor fingerprint, not damage; the loader strips it in-memory.
+test("loadJournalOnchain: a BOM before the JSON is stripped and the journal loads (round 21 rewrite of the quarantine pin)", () => {
   const dir = freshDir();
   const p = path.join(dir, "onchain-journal.json");
   writeFileSync(p, "\uFEFF{\"M\":{}}");
   const r = loadJournalOnchain(p);
-  assert.equal(r.ok, false);
-  assert.equal(r.corrupted, true);
-  assert.match(r.reason, /JSON/i);
-  writeFileSync(p, "{\"M\":{}}");
-  const ok = loadJournalOnchain(p);
-  assert.equal(ok.ok, true);
-  assert.deepEqual(ok.journal, { M: {} });
+  assert.equal(r.ok, true, "a BOM-prefixed valid journal loads");
+  assert.equal(r.corrupted, false);
+  assert.deepEqual(r.journal, { M: {} });
+  assert.equal(readFileSync(p, "utf8").charCodeAt(0), 0xFEFF, "the file itself is untouched — the strip is in-memory only");
 });
 
 test("loadJournalOnchain: a valid object with garbage values — loaded as is (depth validation is the transition layer)", () => {

@@ -25,7 +25,7 @@ import { fetchWalletDeltas } from "../src/ingest/tx.mjs";
 import { multiplierHistoryToEvents } from "../src/events/normalize-xstocks.mjs";
 import { metadataSources as tesseraSources } from "../src/issuer/tessera.mjs";
 import { metadataSources as prestocksSources } from "../src/events/normalize-prestocks.mjs";
-import { parseServeArgs } from "../src/cli/flags.mjs";
+import { parseServeArgs, envPositiveInt } from "../src/cli/flags.mjs";
 import { loadRegistry } from "../src/registry/registry.mjs";
 
 const MINT = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
@@ -210,4 +210,28 @@ test("/health carries the declarations stats when the server is given them", asy
   } finally {
     server.close();
   }
+});
+
+// round 21 (SRE P3-1): an env limit that is SET but invalid used to fall back silently
+// (1e21 even disabled the limiter — Number.isInteger accepts it). Loud warn + default now.
+test("envPositiveInt: unset is silent; invalid values warn loudly and fall back; 1e21 is rejected as unsafe", () => {
+  const warns = [];
+  const w = (m) => warns.push(m);
+  const env = (v) => ({ RATE_LIMIT_SCAN_PER_MIN: v });
+
+  assert.equal(envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12, env(undefined), w), 12, "unset — the default, no noise");
+  assert.equal(warns.length, 0);
+
+  assert.equal(envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12, env("24"), w), 24, "a valid integer passes");
+  assert.equal(warns.length, 0, "a valid value is not a warning");
+
+  for (const bad of ["0", "-5", "abc", "1e21", ""]) {
+    assert.equal(envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12, env(bad), w), 12, `${JSON.stringify(bad)} falls back`);
+  }
+  assert.equal(warns.length, 5, "every invalid value warned");
+  for (const line of warns) {
+    assert.match(line, /RATE_LIMIT_SCAN_PER_MIN/, "the warning names the variable");
+    assert.match(line, /12/, "the warning names the default in use");
+  }
+  assert.match(warns[3], /1e21/, "the unsafe 1e21 case is visible by value");
 });

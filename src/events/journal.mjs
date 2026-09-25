@@ -191,7 +191,20 @@ export function issuerChainComplete(nodes) {
  * @param {object} journal — map { mint: entry }
  */
 export function saveJournalAtomic(journalPath, journal) {
+  // Round 21 (SRE P3-4): a boot with an unchanged journal used to rewrite the whole file
+  // every time (a 55 MB journal = a 55 MB rewrite per boot, forever). The journal changes
+  // only when an observation changes — an identical serialization skips the write entirely.
+  // "\n" — the trailing newline atomicWriteJson appends, kept identical for the comparison
+  const data = JSON.stringify(journal, null, 1) + "\n";
+  let current = null;
+  try {
+    current = readFileSync(journalPath, "utf8");
+  } catch {
+    // no file yet — the write below is the first one
+  }
+  if (current === data) return { written: false };
   atomicWriteJson(journalPath, journal);
+  return { written: true };
 }
 
 /**
@@ -215,7 +228,9 @@ export function loadJournalOnchain(journalPath) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    // Round 21 (SRE P3-5): a UTF-8 BOM (an editor's fingerprint) makes JSON.parse throw,
+    // and a perfectly valid journal went to the corrupted quarantine for it.
+    parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch (err) {
     return { ok: false, corrupted: true, journal: {}, reason: `truncated/invalid JSON: ${err.message}` };
   }

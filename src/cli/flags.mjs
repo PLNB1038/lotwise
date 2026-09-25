@@ -124,3 +124,18 @@ export function checkPortAvailable(port, host = "127.0.0.1") {
     probe.listen(port, host);
   });
 }
+
+/**
+ * Round 21 (SRE P3-1): an env limit that is SET but invalid (garbage, 0, negative,
+ * 1e21 — beyond Number.MAX_SAFE_INTEGER, which silently disables the limiter) used to
+ * fall back to the default without a word. The fallback stays (operators keep booting),
+ * but it is now loud, and the ceiling is the safe-integer range.
+ */
+export function envPositiveInt(name, fallback, env = process.env, warn = console.error) {
+  const raw = env[name];
+  if (raw === undefined) return fallback;
+  const v = Number(raw);
+  if (Number.isSafeInteger(v) && v > 0) return v;
+  warn(`[serve] ${name}=${JSON.stringify(raw)} is not a positive safe integer — using the default ${fallback}`);
+  return fallback;
+}
