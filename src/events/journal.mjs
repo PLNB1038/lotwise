@@ -416,13 +416,6 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
   try {
     let merged = { ...journal };
     const existing = loadJournalOnchain(journalPath);
-    // the boot path rewrote the WHOLE journal on every boot even with
-    // zero changes (a 50 MB file = a 50 MB rewrite per boot). The loaded file's raw text
-    // is already in hand: an identical serialization skips the write entirely.
-    const serialized = JSON.stringify(merged, null, 1) + "\n";
-    if (existing.ok && existing.raw === serialized) {
-      return { written: false };
-    }
     if (existing.ok) {
       for (const [mint, entry] of Object.entries(existing.journal)) {
         // a "__proto__"/"constructor" key from a foreign file is neither a mint nor data —
@@ -434,6 +427,14 @@ export function saveJournalMerged(journalPath, journal, { staleMs = 10_000, atte
         }
         if (!Object.hasOwn(merged, mint)) merged[mint] = entry;
       }
+    }
+    // the boot path used to rewrite the WHOLE journal on every boot even with
+    // zero changes (a 50 MB file = a 50 MB rewrite per boot). The skip must compare the
+    // MERGED map's serialization: against our own pre-merge bytes a foreign mint in the
+    // file made equality impossible, and every boot rewrote a byte-identical file.
+    const serialized = JSON.stringify(merged, null, 1) + "\n";
+    if (existing.ok && existing.raw === serialized) {
+      return { written: false };
     }
     atomicWriteJson(journalPath, merged);
     return { written: true };

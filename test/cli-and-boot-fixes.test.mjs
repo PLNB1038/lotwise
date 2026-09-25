@@ -17,7 +17,7 @@
 //            (the under-closed remainder of D2); fixed by process.exitCode + the --api flag for tests.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import http from "node:http";
 import net from "node:net";
@@ -163,6 +163,28 @@ test("journal: saveJournalMerged — our mint wins over the on-disk version", ()
     saveJournalMerged(jp, { MYMINT: { lastEffective: "6", observedAt: "2026-09-24T00:00:00.000Z", events: [] } });
     const after = JSON.parse(readFileSync(jp, "utf8"));
     assert.equal(after.MYMINT.lastEffective, "6", "the fresh boot observation overwrites the stale one");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("journal: saveJournalMerged — byte-identical MERGED bytes skip the rewrite (a foreign mint is in the file)", () => {
+  // the skip compares against the file as it would look AFTER the merge: against the
+  // pre-merge serialization of our own map a foreign mint made equality impossible,
+  // and every boot rewrote a byte-identical file (the very rewrite the skip exists to spare)
+  const dir = mkdtempSync(path.join(tmpdir(), "lw-j26skip-"));
+  try {
+    const jp = path.join(dir, "onchain-journal.json");
+    const ours = { MYMINT: { lastEffective: "5", observedAt: "2026-09-24T00:00:00.000Z", events: [] } };
+    const r1 = saveJournalMerged(jp, ours);
+    assert.equal(r1.written, true, "boot 1 creates the file");
+    // a foreign writer adds its mint; the bytes are exactly what our next boot's merge produces
+    const foreign = { OTHERMINT: { lastEffective: "3", observedAt: "2026-09-24T00:00:00.000Z", events: [] } };
+    writeFileSync(jp, JSON.stringify({ ...ours, ...foreign }, null, 1) + "\n");
+    const mtimeBefore = statSync(jp).mtimeMs;
+    const r2 = saveJournalMerged(jp, ours); // same our journal, boot 2
+    assert.equal(r2.written, false, "the merged bytes are identical — the write is skipped");
+    assert.equal(statSync(jp).mtimeMs, mtimeBefore, "the file was not touched");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
