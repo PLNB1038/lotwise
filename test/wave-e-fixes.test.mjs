@@ -175,7 +175,11 @@ test("cli: enrich-decimals on an unreachable/refusing API — exit 1, not 0xC000
   await new Promise((r) => bad.listen(0, "127.0.0.1", r));
   const dir = mkdtempSync(path.join(tmpdir(), "lw-enr14-"));
   try {
-    writeFileSync(path.join(dir, "data-tokens.json"), JSON.stringify([])); // an empty registry: ids= → 400
+    // a one-token registry: ids is non-empty and the API still refuses with 400
+    // (round 21: an empty registry is now an explicit no-op exit 0 BEFORE any network)
+    writeFileSync(path.join(dir, "data-tokens.json"), JSON.stringify([
+      { mint: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W", symbol: "SPYx", name: "S&P 500", issuer: "backed", decimals: 8 },
+    ]));
     // spawn (not spawnSync!): the local server lives in THIS process — a sync wait
     // blocks the event loop and catches itself with a dead lock (the round-14 rake)
     const child = spawn(process.execPath, [

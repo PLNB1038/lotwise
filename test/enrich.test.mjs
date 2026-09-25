@@ -257,3 +257,46 @@ test("the real data/tokens.json is consistent: every record's sourceDecimals —
     assert.ok(t.decimals >= 0 && t.decimals <= 18, `${t.symbol}: decimals=${t.decimals} outside the 0..18 contract`);
   }
 });
+
+// ---- round 21 (SRE P2-1): the CLI's own exit contract on a broken registry ----
+// serve degrades a corrupt registry with evidence and a /health flag, webhook-deliver exits
+// 2 — enrich used to die with a raw SyntaxError stack and exit 1, and a non-array file
+// slipped through as a silent "filled=0" success. The wrapper now refuses before any I/O.
+import { spawnSync } from "node:child_process";
+
+const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "enrich-decimals.mjs");
+
+test("CLI enrich: a truncated/BOM/null registry — exit 2, a named reason, no stack trace, no network", () => {
+  for (const [name, content] of [
+    ["truncated", '[{"mint":"XsoCS'],
+    ["empty-file", ""],
+    ["bom", "﻿[]"],
+    ["null-literal", "null"],
+    ["object-not-array", '{"tokens":[]}'],
+  ]) {
+    const dir = freshDir();
+    const reg = path.join(dir, "tokens.json");
+    writeFileSync(reg, content);
+    const r = spawnSync(process.execPath, [SCRIPT, "--registry", reg, "--api", "http://127.0.0.1:1"], { encoding: "utf8", timeout: 30_000 });
+    assert.equal(r.status, 2, `${name}: usage-class exit 2 (not a raw crash)`);
+    assert.ok(/registry/.test(r.stderr), `${name}: the message names the registry`);
+    assert.ok(!/^s+at /mu.test(r.stderr), `${name}: no stack trace for the operator`);
+    assert.equal(r.stdout.trim(), "", `${name}: no success output`);
+  }
+});
+
+test("CLI enrich: a missing registry file — exit 2 with the path, not an ENOENT stack", () => {
+  const r = spawnSync(process.execPath, [SCRIPT, "--registry", path.join(freshDir(), "nope.json"), "--api", "http://127.0.0.1:1"], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(r.status, 2);
+  assert.ok(/registry unreadable/.test(r.stderr));
+  assert.ok(!/^s+at /mu.test(r.stderr));
+});
+
+test("CLI enrich: an empty-but-valid registry — exit 0 and an EXPLICIT message, not a silent success", () => {
+  const dir = freshDir();
+  const reg = path.join(dir, "tokens.json");
+  writeFileSync(reg, "[]");
+  const r = spawnSync(process.execPath, [SCRIPT, "--registry", reg, "--api", "http://127.0.0.1:1"], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(r.status, 0);
+  assert.ok(/registry is empty/.test(r.stdout), "the operator is told, not left to guess");
+});

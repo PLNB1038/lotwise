@@ -6,6 +6,20 @@ export const ISSUERS = ["backed", "backpack", "prestocks", "tessera"];
 
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
+// Round 21 (SRE P2-2): the serve boot walk is LINEAR in the registry (an RPC read plus
+// backoff per non-xStocks token) — a runaway registry (a bad merge, a glued file) turned
+// a restart into a multi-hour pre-listen downtime with a "green" process. The boot
+// refuses loudly instead; the measured worst case was ~0.36s/token on an unreachable RPC.
+export const MAX_BOOT_REGISTRY_TOKENS = 2048;
+
+export function assertBootableRegistrySize(list) {
+  if (Array.isArray(list) && list.length > MAX_BOOT_REGISTRY_TOKENS) {
+    throw new RegistryError(
+      `registry has ${list.length} tokens; the boot walk is linear and would take hours — refusing (cap ${MAX_BOOT_REGISTRY_TOKENS}). Split or shrink data/tokens.json.`,
+    );
+  }
+}
+
 export class RegistryError extends Error {
   constructor(msg, entry) {
     super(msg);

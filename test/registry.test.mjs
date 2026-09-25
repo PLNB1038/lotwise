@@ -7,6 +7,8 @@ import {
   getTokensByIssuer,
   findBySymbol,
   RegistryError,
+  assertBootableRegistrySize,
+  MAX_BOOT_REGISTRY_TOKENS,
 } from "../src/registry/registry.mjs";
 
 const good = {
@@ -75,4 +77,15 @@ test("the week-1 plan: the registry >=30 tokens, the decimals enriched for all (
   for (const t of list) {
     assert.ok(Number.isInteger(t.decimals), `${t.symbol}: decimals=${t.decimals}, an integer expected after enrich`);
   }
+});
+
+// ---- round 21 (SRE P2-2): the boot walk is linear in the registry — a runaway file must refuse, not hang for hours ----
+test("assertBootableRegistrySize: at the cap passes, above it refuses with the numbers", () => {
+  assert.doesNotThrow(() => assertBootableRegistrySize([]));
+  assert.doesNotThrow(() => assertBootableRegistrySize(new Array(MAX_BOOT_REGISTRY_TOKENS).fill({ mint: "x", symbol: "y", name: "n", issuer: "backed", decimals: 8 })));
+  assert.throws(
+    () => assertBootableRegistrySize(new Array(MAX_BOOT_REGISTRY_TOKENS + 1).fill({ mint: "x", symbol: "y", name: "n", issuer: "backed", decimals: 8 })),
+    (err) => err instanceof RegistryError && /2049 tokens/.test(err.message) && /linear/.test(err.message) && /cap 2048/.test(err.message),
+    "the refusal names the size, the reason and the cap",
+  );
 });

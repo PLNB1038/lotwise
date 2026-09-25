@@ -5,7 +5,7 @@
 import { journalTransition } from "./normalize-onchain.mjs";
 import { readFileSync, openSync, closeSync, unlinkSync, statSync, writeSync } from "node:fs";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
-import { canonicalDecimalString } from "../schema/events.mjs";
+import { canonicalDecimalString, EVENT_TYPES } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
 
 // Canonicalization of a journal entry AT READ TIME (round 9 fix 15): a journal written by a
@@ -75,10 +75,21 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
   // ({lastEffective, events}): it used to slip into "no history" (base=null), backfill
   // re-emitted a duplicate, the final persist clobbered the evidence; loadJournalOnchain
   // rejects an array at the TOP of the file as corruption — per-entry must do the same.
+  // Round 21 (SRE P2-3): an events array with an INVALID ELEMENT is the same corruption —
+  // a future/downgraded writer's record used to survive every boot: the replay validation
+  // threw, the token was silently dead each session, and the broken record was rewritten
+  // to disk forever. An element is trusted only as a non-null object with a KNOWN event
+  // type (the schema's EVENT_TYPES — the same list replay validation enforces); the rest
+  // routes to the corrupted branch, which rebuilds the token from the chain's fact.
+  const invalidEventElement = Array.isArray(priorEntry?.events)
+    ? priorEntry.events.find((e) => e === null || typeof e !== "object"
+        || (typeof e.type === "string" && !EVENT_TYPES.includes(e.type)))
+    : undefined;
   const priorIsCorrupted = priorEntry !== null && priorEntry !== undefined
     && (typeof priorEntry !== "object"
       || Array.isArray(priorEntry)
-      || (priorEntry.events !== undefined && !Array.isArray(priorEntry.events)));
+      || (priorEntry.events !== undefined && !Array.isArray(priorEntry.events))
+      || invalidEventElement !== undefined);
   if (priorIsCorrupted) {
     console.error(
       `[journal] ${token.symbol ?? token.mint}: journal entry CORRUPTED — ${
@@ -86,7 +97,9 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
           ? `not an object (${typeof priorEntry})`
           : Array.isArray(priorEntry)
             ? "an array instead of an entry object"
-            : `events is not an array (type ${priorEntry.events === null ? "null" : typeof priorEntry.events})`
+            : priorEntry.events !== undefined && !Array.isArray(priorEntry.events)
+              ? `events is not an array (type ${priorEntry.events === null ? "null" : typeof priorEntry.events})`
+              : `events carries an invalid element (${JSON.stringify(invalidEventElement)})`
       }, history is distrusted. Evidence: ${JSON.stringify(priorEntry)}. ` +
       `Replay and backfill over it are NOT performed — no duplicate event is re-emitted; ` +
       `with a live chain the entry will be rebuilt from scratch (no events; the vitrine will warn about a multiplier without history).`,

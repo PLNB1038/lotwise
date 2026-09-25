@@ -355,3 +355,31 @@ test("degrade→restore on disk: an unavailable chain does not roll back events,
   const tl = new MultiplierTimeline(loaded.journal[MINT].events);
   assert.equal(tl.multiplierAt("2026-09-16"), "7", "the recovered journal — a valid chain for the timeline");
 });
+
+// Round 21 (SRE P2-3): a journal record whose events ARRAY carries an invalid ELEMENT
+// (an unknown event type — a future/downgraded writer) is corruption, not a forever-skip.
+// It used to survive every boot: replay validation threw, the token was silently dead
+// each session, and the broken record was rewritten to disk as-is, forever.
+test("planJournalStep: an events array with an invalid element — corrupted, the token recovers instead of dying forever", (t) => {
+  const errLog = t.mock.method(console, "error", () => {});
+  const prior = {
+    lastEffective: "5",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    events: [{ type: "FOO_CHANGE", effectiveDate: "2026-06-10T04:30:00.000Z", status: "confirmed", sources: ["https://x"] }],
+  };
+  const step = planJournalStep(token, prior, BASE, NOW);
+  assert.equal(errLog.mock.callCount(), 1, "the corruption is loud, not a boot-log line to lose in journald rotation");
+  const shouted = String(errLog.mock.calls[0].arguments[0]);
+  assert.match(shouted, /CORRUPTED/);
+  assert.match(shouted, /FOO_CHANGE/, "the evidence names the invalid element");
+  assert.equal(step.corrupted, true, "the mint is marked corrupted — visible in /health counters");
+  assert.deepEqual(step.replay, [], "the untrusted history does not enter the replay (it would throw downstream anyway)");
+  assert.deepEqual(step.entry.events, [], "rebuilt from the chain's fact: the token is ALIVE again, not dead until a manual journal edit");
+  assert.equal(step.entry.lastEffective, "5");
+
+  // the next boot on the rebuilt record is the normal mid-history path
+  const next = planJournalStep(token, step.entry, ROT7, NOW + 60_000);
+  assert.equal(next.corrupted, false);
+  assert.equal(next.event, null);
+  assert.equal(next.entry.lastEffective, "7");
+});

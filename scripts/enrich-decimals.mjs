@@ -44,24 +44,44 @@ if (badFlag) process.exitCode = 2;
 if (!badFlag) {
   const REGISTRY = registryFlag ?? "data/tokens.json";
   const API = apiFlag ?? "https://lite-api.jup.ag";
-  const list = JSON.parse(readFileSync(REGISTRY, "utf8"));
-  const ids = list.map((t) => t.mint).join(",");
-  const res = await fetch(`${API}/price/v3?ids=${ids}`, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; Lotwise/0.1)" },
-  });
-  if (!res.ok) {
-    console.error(`Jupiter HTTP ${res.status}`);
-    process.exitCode = 1;
+  // Round 21 (SRE P2-1): the registry is an OPERATOR file — a truncated/BOM/null/missing
+  // one refused here with exit 2 and a named reason, before any I/O (serve degrades the
+  // same file with evidence; a raw SyntaxError stack and exit 1 was the odd one out).
+  let list = null;
+  let registryError = null;
+  try {
+    list = JSON.parse(readFileSync(REGISTRY, "utf8"));
+  } catch (err) {
+    registryError = err;
+  }
+  if (registryError !== null) {
+    console.error(`registry unreadable: ${REGISTRY}: ${registryError.message}`);
+    process.exitCode = 2;
+  } else if (!Array.isArray(list)) {
+    console.error(`registry must be a JSON array of entries, got ${list === null ? "null" : typeof list}: ${REGISTRY}`);
+    process.exitCode = 2;
+  } else if (list.length === 0) {
+    // an empty-but-valid registry is a no-op the operator should SEE, not a silent "filled=0"
+    console.log("registry is empty — nothing to enrich");
   } else {
-    const prices = await res.json();
+    const ids = list.map((t) => t.mint).join(",");
+    const res = await fetch(`${API}/price/v3?ids=${ids}`, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Lotwise/0.1)" },
+    });
+    if (!res.ok) {
+      console.error(`Jupiter HTTP ${res.status}`);
+      process.exitCode = 1;
+    } else {
+      const prices = await res.json();
 
-    // counter of missing decimals — BEFORE enrichment (wave B): after the mutation the list is
-    // already full and every repeated run lied "0/31"
-    const missingBefore = list.filter((t) => t.decimals === null || t.decimals === undefined).length;
-    const { filled, unknown, skipped, written } = enrichDecimalsFile(REGISTRY, prices);
-    if (!written) console.log("filled=0 — data/tokens.json not rewritten (nothing to write)");
-    console.log(`decimals filled: ${filled}/${missingBefore} without decimals on input`);
-    console.log(unknown.length ? `NOT found in Jupiter: ${unknown.join(", ")}` : "all mints known to Jupiter");
-    if (skipped?.length) console.warn(`SKIPPED (garbage decimals from Jupiter): ${skipped.map((x) => `${x.mint} (${x.reason})`).join(", ")}`);
+      // counter of missing decimals — BEFORE enrichment (wave B): after the mutation the list is
+      // already full and every repeated run lied "0/31"
+      const missingBefore = list.filter((t) => t.decimals === null || t.decimals === undefined).length;
+      const { filled, unknown, skipped, written } = enrichDecimalsFile(REGISTRY, prices);
+      if (!written) console.log("filled=0 — data/tokens.json not rewritten (nothing to write)");
+      console.log(`decimals filled: ${filled}/${missingBefore} without decimals on input`);
+      console.log(unknown.length ? `NOT found in Jupiter: ${unknown.join(", ")}` : "all mints known to Jupiter");
+      if (skipped?.length) console.warn(`SKIPPED (garbage decimals from Jupiter): ${skipped.map((x) => `${x.mint} (${x.reason})`).join(", ")}`);
+    }
   }
 }

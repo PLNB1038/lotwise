@@ -1,6 +1,6 @@
 // Run the Lotwise API on live data: registry + xStocks multiplier history + on-chain plan.
 // Usage: node scripts/serve.mjs [--port 8787] [--host 127.0.0.1] [--rpc URL] [--max-txs 300]
-import { loadRegistrySafe } from "../src/registry/registry.mjs";
+import { loadRegistrySafe, assertBootableRegistrySize } from "../src/registry/registry.mjs";
 import { fetchMultiplierHistory } from "../src/issuer/xstocks.mjs";
 import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
 import { createApiServer } from "../src/api/server.mjs";
@@ -75,6 +75,9 @@ try {
 // the evidence is kept nearby, boot continues on an empty registry; the flag goes into /health.
 const loadedRegistry = await loadRegistrySafe(path.join(ROOT, "data", "tokens.json"));
 const registry = loadedRegistry.registry;
+// Round 21 (SRE P2-2): a runaway (glued/merged) registry would boot for hours before
+// listening — a loud refusal up front, before any RPC quota is spent.
+assertBootableRegistrySize(registry);
 if (!loadedRegistry.ok) {
   console.error(
     `[serve] REGISTRY NOT LOADED (${loadedRegistry.reason}). ` +

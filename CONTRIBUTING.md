@@ -27,6 +27,24 @@ The suite is hermetic: no network, no fixture servers, no mocks on the core path
 the lot engine, timeline and reconcile are tested as pure functions on real-shaped
 data. CI runs the same command on every push.
 
+## Adding a token
+
+The registry is `data/tokens.json` — one entry per tokenized equity, validated on every
+load by `validateRegistryEntry` (`src/registry/registry.mjs`):
+
+- `mint` — the on-chain mint, base58. This is the token's identity; it must exist on
+  mainnet (a well-formed but nonexistent mint passes the loader and fails loudly at scan
+  time — verify the mint before submitting).
+- `symbol`, `name` — non-empty strings; the symbol is what subscriptions and the page address.
+- `issuer` — one of `backed | backpack | prestocks | tessera`: the family decides the
+  decimals contract and which boot path reads the token.
+- `decimals` — `null` until verified; `node scripts/enrich-decimals.mjs` fills it from the
+  Jupiter Price API and refuses to write garbage.
+
+After editing, run the suite, then `node scripts/check-issuers.mjs` — a read-only
+reconciliation of the registry against the issuers' own sources (it reports divergence,
+it never edits the file).
+
 ## Pull requests
 
 1. Write the failing test first. Every behavioral change in this repo landed as
