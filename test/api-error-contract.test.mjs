@@ -152,9 +152,11 @@ test("events: chronological order across mixed event types", async () => {
 
 // Rolled-over dates (Feb 30, Jun 31) are NOT valid days: V8's Date.parse silently moves
 // them to next month — the day-midnight base must use the STRICT parser, answering 503,
-// never a confident totalRaw computed over the wrong day.
-test("accruals: a rolled-over effectiveDate in the store — 503 kind:parse, not money for the wrong day", async () => {
-  for (const bad of ["2026-02-30", "2026-06-31", "2027-02-29", "2026-02"]) {
+// never a confident totalRaw computed over the wrong day. A garbage CLOCK part
+// ("T99:00:00Z" behind a valid day) is the same class: slicing the day off first let it
+// through with a 200, echoed the garbage back, and the dedup swallowed its valid twin.
+test("accruals: a rolled-over or garbage-time effectiveDate in the store — 503 kind:parse, not money for the wrong day", async () => {
+  for (const bad of ["2026-02-30", "2026-06-31", "2027-02-29", "2026-02", "2026-02-01T99:00:00Z"]) {
     await withSrv(async (base) => {
       const r = await fetch(`${base}/accruals?symbol=R23x&address=${ADDR}`);
       assert.equal(r.status, 503, `${bad}: refused`);
@@ -167,12 +169,16 @@ test("accruals: a rolled-over effectiveDate in the store — 503 kind:parse, not
 });
 
 // Cross-midnight twins: one INSTANT written in two timezone skins names two calendar
-// days — one economic fact. The dedup collapses on EITHER the day or the instant.
-test("accruals: cross-midnight twins (same instant, two tz skins) — ONE dividend", async () => {
+// ex-days. The ex-day is what the issuer DECLARES — two declared ex-days are two
+// dividends, each base its own day's midnight. Collapsing on the instant made the
+// SURVIVOR decide the day, and the store order decided the money.
+test("accruals: cross-midnight skins of one instant — TWO declared ex-days, two dividends", async () => {
   await withSrv(async (base) => {
     const rows = await (await fetch(`${base}/accruals?symbol=R23x&address=${ADDR}`)).json();
-    assert.equal(rows.length, 1, "one instant — one dividend");
-    assert.equal(rows[0].totalRaw, "400", "200 × 2 once");
+    assert.equal(rows.length, 2, "two declared ex-days — two dividends");
+    const days = rows.map((r) => String(r.effectiveDate).slice(0, 10)).sort();
+    assert.deepEqual(days, ["2026-02-01", "2026-02-02"], "each row stands on its own day");
+    for (const r of rows) assert.equal(r.totalRaw, "400", "200 × 2 per day — the buy precedes both");
   }, {
     events: [
       { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-02-01T23:00:00-02:00", status: "confirmed", sources: ["https://a.example/1"], amountPerUnitRaw: 2, decimals: 6, mint: MINT },

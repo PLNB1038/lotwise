@@ -114,16 +114,28 @@ test("accruals: honest incompleteness — a tx without blockTime or a scan gap f
 });
 
 test("accruals: no sales — same answer as the engine always gave (the control)", async () => {
-  await withServer(async (base) => {
-    const rows = await (await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
+  // the control must model a scan that RECONCILES: a live account whose balance equals
+  // the window's net delta. (The shared aScan helper carries no accounts, which is a
+  // chain-disagreeing scan — exactly what baseIncomplete exists to flag.)
+  const txs = [aTx("a", 1_000_000n, "2026-09-01"), aTx("b", 2_000_000n, "2026-09-05")];
+  const server = await createApiServer({
+    registry: aRegistry,
+    events: [divEvent("2026-09-10", 2)],
+    walletScanner: async () => ({
+      owner: A_ADDR, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false,
+      accounts: new Map([[A_MINT, { addresses: ["Ata" + "1".repeat(41)], currentRaw: 3_000_000n }]]),
+    }),
+  });
+  const { port } = server.address();
+  try {
+    const rows = await (await fetch(`http://127.0.0.1:${port}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
     assert.equal(rows.length, 1);
     assert.equal(rows[0].totalRaw, "6000000", "3M × 2, unchanged from the pre-F1 behavior");
     assert.equal(rows[0].lotsConsidered, 2);
     assert.equal(rows[0].baseIncomplete, undefined);
-  }, {
-    events: [divEvent("2026-09-10", 2)],
-    txs: [aTx("a", 1_000_000n, "2026-09-01"), aTx("b", 2_000_000n, "2026-09-05")],
-  });
+  } finally {
+    server.close();
+  }
 });
 
 test("accruals: a scan gap (spend without coverage) flags the base incomplete", async () => {
@@ -216,6 +228,71 @@ test("engine: applyEvents dedups tz twins of one calendar ex-day (parity with th
     ev("2026-02-01T00:00:00+02:00", ["https://x.example/2"]),
   ]);
   assert.equal(accruals.length, 1, "the engine sees one dividend, like the route");
+});
+
+// The producer always wrote date-only; the schema accepting datetime forms split the
+// dividend's identity in two and left the class a schema-valid mine for the first
+// datetime producer. The gate canonicalizes: the day part IS the ex-day, everywhere.
+test("schema: a datetime dividend canonicalizes to its calendar ex-day at the validation gate", () => {
+  const e = divEvent("2026-02-01T00:00:00+02:00", 2);
+  assert.equal(e.effectiveDate, "2026-02-01", "date-only, exactly what the producer emits");
+});
+
+// "Same day OR same instant" is not transitive: X—Y share an instant, Y—Z share a day —
+// the dedup collapsed 2 rows or 1 row depending on the store order. One identity
+// (calendar ex-day + amount) is a true equivalence: order decides nothing.
+test("accruals: the dividend identity is order-independent (calendar ex-day + amount)", async () => {
+  const X = () => divEvent("2026-02-01T23:00:00-02:00", 2); // Feb 2 01:00Z, day Feb 1
+  const Y = () => divEvent("2026-02-02T01:00:00Z", 2); // the SAME instant, day Feb 2
+  const Z = () => divEvent("2026-02-02T06:00:00Z", 2); // the same DAY as Y, another instant
+  for (const [name, events] of [["X,Y,Z", [X(), Y(), Z()]], ["Y,Z,X", [Y(), Z(), X()]]]) {
+    await withServer(async (base) => {
+      const rows = await (await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
+      assert.equal(rows.length, 2, `${name}: two declared ex-days — two dividends, in any order`);
+      const days = rows.map((r) => String(r.effectiveDate).slice(0, 10)).sort();
+      assert.deepEqual(days, ["2026-02-01", "2026-02-02"], `${name}: the canonical days, both orders`);
+      for (const r of rows) assert.equal(r.totalRaw, "200", "100 held on the ex-date × 2");
+    }, { events, txs: [aTx("b1", 100n, "2026-01-15")] });
+  }
+});
+
+test("engine: the dividend identity is the calendar ex-day — order-independent like the route", async () => {
+  const { applyEvents } = await import("../src/lots/lots.mjs");
+  const ev = (date) => bindMintAndValidate([{
+    type: "DIVIDEND_ACCRUAL", effectiveDate: date, status: "confirmed",
+    sources: ["https://x.example/1"], amountPerUnitRaw: 2, decimals: 6,
+  }], A_MINT)[0];
+  const lot = { id: "L1", mint: A_MINT, owner: A_ADDR, qtyRaw: 100n, acquiredDate: "2026-01-01", basisRaw: 0n };
+  for (const events of [
+    [ev("2026-02-01T23:00:00-02:00"), ev("2026-02-02T01:00:00Z"), ev("2026-02-02T06:00:00Z")],
+    [ev("2026-02-02T01:00:00Z"), ev("2026-02-02T06:00:00Z"), ev("2026-02-01T23:00:00-02:00")],
+  ]) {
+    const { accruals } = applyEvents([lot], events);
+    assert.equal(accruals.length, 2, "two calendar ex-days — two accruals, any store order");
+  }
+});
+
+// The route listened to gaps, truncation, undated txs and a negative base — but not to the
+// report's own reconcile signal. A holder whose position predates the window (a live
+// account, an empty or shallow window) got a confident "0" — or a silently understated
+// base — with no flag, while /lots in the same breath said reconciles:false.
+test("accruals: a position older than the window is flagged, not answered with a confident zero", async () => {
+  const server = await createApiServer({
+    registry: aRegistry,
+    events: [divEvent("2026-06-01", 2)],
+    walletScanner: async () => ({
+      owner: A_ADDR, signatures: 0, fetched: 0, txs: [], skipped: [], truncated: false,
+      accounts: new Map([[A_MINT, { addresses: ["Ata" + "1".repeat(41)], currentRaw: 1_000_000n }]]),
+    }),
+  });
+  const { port } = server.address();
+  try {
+    const rows = await (await fetch(`http://127.0.0.1:${port}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`)).json();
+    assert.equal(rows[0].baseIncomplete, true, "the window cannot see the opening balance — reconciles:false says so");
+    assert.equal(rows[0].totalRaw, "0", "what the window saw is still reported, flagged");
+  } finally {
+    server.close();
+  }
 });
 
 // a poisoned-date event must not make /events ordering undefined — garbage

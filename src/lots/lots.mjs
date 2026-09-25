@@ -74,19 +74,16 @@ export function applyEvents(lots, events) {
   // sourceUrl, so the same dividend reaching the store from two sources (a press page and
   // an API node) survives as two events — and without this gate would accrue twice,
   // doubling the declared income. mint + ex-date + per-unit amount is the dividend's identity.
-  const seenDivDays = new Set();
-  const seenDivMoments = new Set();
+  const seenDivIdentities = new Set();
   for (const e of events) {
     if (e.type === "DIVIDEND_ACCRUAL") {
-      // the route's identity: same DAY (tz twins) OR same INSTANT (cross-midnight twins)
-      const day = String(e.effectiveDate).slice(0, 10);
-      const moment = parseIsoDateMs(e.effectiveDate);
-      const dayKey = `${e.mint}|${day}|${e.amountPerUnitRaw}`;
-      const momentKey = moment === null ? null : `${e.mint}|${moment}|${e.amountPerUnitRaw}`;
-      if (seenDivDays.has(dayKey)) continue;
-      if (momentKey !== null && seenDivMoments.has(momentKey)) continue;
-      seenDivDays.add(dayKey);
-      if (momentKey !== null) seenDivMoments.add(momentKey);
+      // the route's identity: mint + CALENDAR EX-DAY + amount — the schema canonicalizes
+      // datetime forms to the day at the gate, so this is a true identity. "Same day OR
+      // same instant" was not transitive: three events could dedup to 2 or 1 depending
+      // on the store order, and a cross-midnight pair's survivor decided the base day.
+      const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
+      if (seenDivIdentities.has(key)) continue;
+      seenDivIdentities.add(key);
     }
     switch (e.type) {
       case "SPLIT": {

@@ -234,9 +234,22 @@ const aBuy = (signature, qty, isoDate) => ({
   blockTime: isoDate === null ? null : Math.floor(Date.parse(isoDate) / 1000),
   deltas: [{ owner: A_ADDR, mint: A_MINT, preRaw: 0n, postRaw: qty, deltaRaw: qty }],
 });
-const aScan = (txs) => ({
-  owner: A_ADDR, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false, accounts: {},
-});
+const aScan = (txs) => {
+  // a RECONCILING chain: the live balance equals the window's net delta — the default
+  // fixture models a fully covered position. (An empty accounts map is a chain-disagreeing
+  // scan, and /accruals flags exactly that as an incomplete base.) A zero net position is
+  // NO live account at all: a zero-balance token account does not exist on chain.
+  const netRaw = txs.reduce(
+    (sum, t) => sum + t.deltas.filter((d) => d.mint === A_MINT).reduce((x, d) => x + d.deltaRaw, 0n),
+    0n,
+  );
+  return {
+    owner: A_ADDR, signatures: txs.length, fetched: txs.length, txs, skipped: [], truncated: false,
+    accounts: netRaw > 0n
+      ? new Map([[A_MINT, { addresses: ["Ata" + "1".repeat(41)], currentRaw: netRaw }]])
+      : new Map(),
+  };
+};
 
 const NO_SCANNER = Symbol("no-scanner"); // a sentinel: the walletScanner is not passed to the server at all
 async function withAccrualServer(fn, { events = [], txs = [], scanner = null } = {}) {

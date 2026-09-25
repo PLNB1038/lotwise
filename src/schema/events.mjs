@@ -65,6 +65,9 @@ function requireFields(e, fields) {
 }
 
 // Validation of a single event. Throws EventValidationError carrying the field name.
+// One deliberate side effect: a DIVIDEND_ACCRUAL's effectiveDate is CANONICALIZED to the
+// date-only form here — the single gate every entry path crosses, so the dividend's
+// identity (mint + calendar ex-day + amount) is one thing everywhere downstream.
 export function validateEvent(e) {
   if (!e || typeof e !== "object") throw new EventValidationError("event must be an object");
   requireFields(e, ["type", "mint", "effectiveDate", "status", "sources"]);
@@ -128,6 +131,15 @@ export function validateEvent(e) {
       }
       if (!Number.isInteger(e.decimals) || e.decimals < 0 || e.decimals > 18) {
         throw new EventValidationError("decimals must be an integer 0..18", "decimals");
+      }
+      // The ex-day is the dividend's identity, and an identity must be ONE thing. The
+      // producer always emitted date-only, but the schema also accepted datetime forms —
+      // leaving the class valid while the consumers re-derived "the day" separately and
+      // disagreed about it. A datetime keeps its DECLARED calendar day (the leading date
+      // part; the clock and zone are the source's bookkeeping, not economics). A broken
+      // clock part never reaches this line — isValidIsoDate refused the whole string above.
+      if (typeof e.effectiveDate === "string" && e.effectiveDate.length > 10) {
+        e.effectiveDate = e.effectiveDate.slice(0, 10);
       }
       break;
     case "MERGER":

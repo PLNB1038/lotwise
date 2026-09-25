@@ -206,14 +206,20 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   const toFetch = [];
   for (const [signature, s] of sigs) {
     if (s.err !== null) skipped.push({ signature, reason: "tx failed on-chain" });
-    else toFetch.push({ signature, ...s });
+    else toFetch.push({ signature, ...s, seq: toFetch.length });
   }
 
   // 3) processed chronologically: collection went newest-first.
   // Sort by slot: always present and monotonic; blockTime can be null, and mixing
   // seconds and slots in one comparator means units of different orders. slot from a broken
   // endpoint can be undefined — ?? 0 gives a definite order (H3-6).
-  const ordered = toFetch.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+  // WITHIN one slot the stable sort would keep the list order — and the node lists the
+  // later block position first (reverse ledger order), so a same-slot buy→sell reached
+  // the FIFO as sell→buy: a spurious gap with the proceeds booked into the hole plus a
+  // phantom open lot, the trade gone from realized P&L. The collection sequence is the
+  // tiebreak: collected LATER = earlier in the block; it also makes ties across sources
+  // (the owner page vs a token-account page) deterministic instead of Map-order.
+  const ordered = toFetch.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0) || b.seq - a.seq);
   const txs = [];
   let fetched = 0;
   for (const s of ordered) {
