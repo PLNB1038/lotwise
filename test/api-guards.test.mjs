@@ -199,3 +199,15 @@ test("xstocks normalize: ordinary numbers/strings ride as before", () => {
   ], { symbol: "TESTx" });
   assert.equal(events2[0].multiplierTo, "1.5");
 });
+
+// round 21 (F3): the declarations channel is visible in /health like every other source
+test("/health carries the declarations stats when the server is given them", async () => {
+  const server = await createApiServer({ registry: [], declarationsStats: { loaded: 2, ok: 1 } });
+  const { port } = server.address();
+  try {
+    const h = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+    assert.deepEqual(h.declarations, { loaded: 2, ok: 1 });
+  } finally {
+    server.close();
+  }
+});

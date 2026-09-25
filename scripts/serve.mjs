@@ -1,6 +1,7 @@
 // Run the Lotwise API on live data: registry + xStocks multiplier history + on-chain plan.
 // Usage: node scripts/serve.mjs [--port 8787] [--host 127.0.0.1] [--rpc URL] [--max-txs 300]
 import { loadRegistrySafe, assertBootableRegistrySize } from "../src/registry/registry.mjs";
+import { loadDeclarationsFile } from "../src/events/declarations-file.mjs";
 import { fetchMultiplierHistory } from "../src/issuer/xstocks.mjs";
 import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
 import { createApiServer } from "../src/api/server.mjs";
@@ -89,6 +90,18 @@ if (!loadedRegistry.ok) {
 const registryStats = { corrupted: loadedRegistry.corrupted ? 1 : 0 };
 
 const events = [];
+
+// Round 21 (F3): operator-supplied dividend declarations — the only channel that feeds
+// DIVIDEND_ACCRUAL into the live store (xStocks publishes no per-unit amounts). Read-only
+// file: a broken one degrades to "no accruals" with a loud reason, never a dead boot.
+const loadedDeclarations = loadDeclarationsFile(path.join(ROOT, "data", "declarations.json"), registry);
+const declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0 };
+if (!loadedDeclarations.ok) {
+  console.error(`[serve] DECLARATIONS NOT LOADED (${loadedDeclarations.reason}). Booting without dividend accruals — fix data/declarations.json and restart.`);
+} else if (loadedDeclarations.loaded > 0) {
+  console.log(`[serve] declarations: ${loadedDeclarations.loaded} DIVIDEND_ACCRUAL event(s) from data/declarations.json`);
+}
+events.push(...loadedDeclarations.events);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rpcForJournal = new RpcClient({ endpoint: rpcUrl });
 
@@ -313,6 +326,7 @@ try {
       saveFailed: !journalSaved.written && !journalSaved.readonly ? 1 : 0,
     },
     registryStats, // { corrupted: 0|1 } — /health contract: registry.corrupted (see the round 6 report)
+    declarationsStats,
   });
 } catch (err) {
   console.error(`[serve] failed to come up on port ${port}: ${err.code ?? err.message}`);

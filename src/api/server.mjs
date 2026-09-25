@@ -12,7 +12,7 @@ import { EVENT_TYPES } from "../schema/events.mjs";
 import { renderPage } from "../ui/page.mjs";
 import { createRateLimiter } from "./ratelimit.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, declarationsStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false }) {
   // indexes are built once; when the data changes the server is recreated (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -353,6 +353,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         events: events.length,
         journal: journalStats,
         registry: registryStats,
+        declarations: declarationsStats,
         excluded: [...excludedByMint].map(([mint, reason]) => ({
           mint,
           symbol: byMint.get(mint)?.symbol ?? null,
