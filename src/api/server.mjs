@@ -95,7 +95,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     const { allowed, retryAfterMs } = limiter.check(clientKey(req));
     if (allowed) return true;
     const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
-    json(res, 429, { error: `rate limit exceeded, retry after ${retryAfterSec}s` }, { "Retry-After": String(retryAfterSec) });
+    json(res, 429, { error: `rate limit exceeded, retry after ${retryAfterSec}s`, kind: "rate-limit" }, { "Retry-After": String(retryAfterSec) });
     return false;
   };
 
@@ -233,7 +233,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
       // the report is assembled in the server: this is where the multiplier timelines live
-      const report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
+      // round 23: a scanner that answered nonsense used to fall into the anonymous 500 —
+      // the real reason (a ReportError names the shape) is the contract
+      let report;
+      try {
+        report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
+      } catch (err) {
+        return json(res, 500, { error: err.message, kind: null });
+      }
       // tokens with a broken timeline: the multiplier in the report is the default "1" — mark honestly
       for (const tk of report.tokens) {
         const reason = excludedByMint.get(tk.mint);
@@ -278,7 +285,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
-      const report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
+      // round 23: a scanner that answered nonsense used to fall into the anonymous 500 —
+      // the real reason (a ReportError names the shape) is the contract
+      let report;
+      try {
+        report = buildWalletReport(scan, { registry, timelines, now: new Date().toISOString() });
+      } catch (err) {
+        return json(res, 500, { error: err.message, kind: null });
+      }
       const token = report.tokens.find((t) => t.mint === mint);
       const dividends = (eventsByMint.get(mint) ?? []).filter((e) => e.type === "DIVIDEND_ACCRUAL");
       // no position in the token or no dividend events — no accruals: an honest []
@@ -297,7 +311,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // The identical gate, at the layer that actually consumes the events.
       const seenDividends = new Set();
       const uniqueDividends = dividends.filter((e) => {
-        const key = `${mint}|${parseIsoDateMs(e.effectiveDate)}|${e.amountPerUnitRaw}`;
+        // round 23 (finance v3): the calendar DAY, not the exact instant — "2026-02-01" and
+        // "2026-02-01T00:00:00+02:00" are the same ex-day with different moments (tz twins)
+        // the calendar day = the DATE PART of the canonical string itself: "2026-02-01" and
+        // "2026-02-01T00:00:00+02:00" share it, while their UTC moments differ (tz twins)
+        const key = `${mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
         if (seenDividends.has(key)) return false;
         seenDividends.add(key);
         return true;
@@ -305,6 +323,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       try {
         const rows = uniqueDividends.map((e) => {
           const exMs = parseIsoDateMs(e.effectiveDate);
+          // round 23 (API consumer): parseIsoDateMs answers null (no throw) on garbage — the
+          // comparison below then never fired and a valid amount was multiplied by a ZERO base.
+          if (exMs === null) throw new Error("dividend event with an unparseable effectiveDate in the store");
           let base = 0n;
           let considered = 0;
           // F3 (round 22): a truncated scan window silently understates the ex-date base too
@@ -332,7 +353,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         return json(res, 200, rows);
       } catch (err) {
         // a broken event from the store does not take the server down: a clear reason instead of a generic 500
-        return json(res, 500, { error: `accrual engine failed: ${err.message}` });
+        return json(res, 503, { error: `accrual engine failed: ${err.message}`, kind: "parse" });
       }
     }
     if (url.pathname === "/crosscheck") {
@@ -360,7 +381,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       }
-      const { verdicts, coverage } = crossCheckEvents(eventsByMint.get(mint) ?? [], candles);
+      // round 23 (API consumer): a broken store event threw out of the route into the
+      // anonymous 500 — a typed refusal with the real reason, the /accruals convention
+      let verdicts, coverage;
+      try {
+        ({ verdicts, coverage } = crossCheckEvents(eventsByMint.get(mint) ?? [], candles));
+      } catch (err) {
+        return json(res, 503, { error: `crosscheck failed: ${err.message}`, kind: "parse" });
+      }
       return json(res, 200, { mint, symbol: byMint.get(mint)?.symbol ?? null, pool, coverage, verdicts });
     }
     if (url.pathname === "/health") {
@@ -420,7 +448,16 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         // indistinguishable from "there were no events of this type"
         return json(res, 400, { error: `unknown type ${JSON.stringify(type)}; valid: ${EVENT_TYPES.join(", ")}` });
       }
-      return json(res, 200, type ? list.filter((e) => e.type === type) : list);
+      // round 23 (API consumer): amountPerUnitRaw leaves as a STRING — the README's own
+      // "exact decimal multipliers as strings" contract; /events used to leak the internal
+      // number while /accruals sent a string (per-endpoint typing discrimination for nothing).
+      // The list is served chronologically: the store is append-ordered by source, not by time.
+      const ordered = [...(type ? list.filter((e) => e.type === type) : list)]
+        .sort((a, b) => parseIsoDateMs(a.effectiveDate) - parseIsoDateMs(b.effectiveDate))
+        .map((e) => (e.type === "DIVIDEND_ACCRUAL" && typeof e.amountPerUnitRaw === "number"
+          ? { ...e, amountPerUnitRaw: String(e.amountPerUnitRaw) }
+          : e));
+      return json(res, 200, ordered);
     }
     if (url.pathname === "/multiplier") {
       const mint = resolveMint(q);

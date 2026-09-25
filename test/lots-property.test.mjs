@@ -362,3 +362,80 @@ test(`determinism: a repeated run of the first 25 scenarios — an identical JSO
 // seed=…, scenario #…, invariant …", pinning the ACTUAL behavior.
 // There are no such cases now: all 200 scenarios × 6 invariant groups are green.
 // ===========================================================================
+
+// Round 23: a seeded property run over the USDC-leg math (the 10k full fuzzer lives in
+// _bughunt/round23-property.mjs; this pins 400 deterministic histories in the suite).
+// Invariants: Σ(known lot basis) + Σ(known realized basis) == Σ(known buy legs);
+// Σ(realized proceeds) + Σ(gap proceeds) == Σ(known sale legs); pnl == proceeds − basis
+// only when both are known; no negative lots/bases; netDelta == Σ deltas per mint.
+test("property: 400 seeded histories — basis and proceeds never appear or disappear", () => {
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const OWNER = "Wa11etFuzz" + "z".repeat(34);
+  const MINTS = [
+    "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
+    "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
+    "Xsc5E4z3qq2mNuPrHWJw3sVFwJQ5T9UqypFp7v3XmYe",
+  ];
+  const REG = MINTS.map((mint, i) => ({ mint, symbol: `T${i}x`, name: `Token ${i}`, issuer: "backed", decimals: 8 }));
+  const ri = (r, lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
+
+  for (let seed = 1; seed <= 400; seed++) {
+    const r = rng(seed);
+    const txs = [];
+    let bt = 1700000000;
+    const n = ri(r, 1, 12);
+    for (let i = 0; i < n; i++) {
+      bt += ri(r, 100, 100000);
+      const deltas = [];
+      const legs = ri(r, 1, 2);
+      const used = new Set();
+      for (let L = 0; L < legs; L++) {
+        let m = ri(r, 0, MINTS.length - 1);
+        if (used.has(m)) m = (m + 1) % MINTS.length;
+        used.add(m);
+        deltas.push({ owner: OWNER, mint: MINTS[m], preRaw: 0n, postRaw: 0n, deltaRaw: (r() < 0.5 ? 1n : -1n) * BigInt(ri(r, 1, 40)) * 10n ** 8n });
+      }
+      const money = [];
+      if (r() < 0.45) {
+        const usdc = BigInt(ri(r, 1, 90)) * 10n ** 6n;
+        money.push({ owner: OWNER, mint: USDC, deltaRaw: r() < 0.5 ? -usdc : usdc });
+      }
+      txs.push({ signature: `s${i}`, slot: i + 1, blockTime: bt, err: null, deltas, moneyDeltas: money });
+    }
+    let buys = 0n, sells = 0n;
+    for (const tx of txs) {
+      const mine = tx.deltas.filter((d) => MINTS.includes(d.mint) && d.deltaRaw !== 0n);
+      const usdc = tx.moneyDeltas.reduce((a, m) => a + m.deltaRaw, 0n);
+      const b = mine.filter((d) => d.deltaRaw > 0n).length;
+      const s = mine.filter((d) => d.deltaRaw < 0n).length;
+      if (mine.length === 1 && b === 1 && usdc < 0n) buys += -usdc;
+      if (mine.length === 1 && s === 1 && usdc > 0n) sells += usdc;
+    }
+    const rep = buildWalletReport({ owner: OWNER, txs, skipped: [], truncated: false, signatures: n, fetched: n, accounts: {} }, { registry: REG });
+    let lotBasis = 0n, realizedBasis = 0n, realizedProceeds = 0n, gapProceeds = 0n;
+    for (const t of rep.tokens) {
+      assert.ok(t.lots.every((l) => BigInt(l.qtyRaw) >= 0n), `seed ${seed}: negative lot`);
+      for (const l of t.lots) if (l.basisKnown) lotBasis += BigInt(l.basisRaw);
+      for (const x of t.realized) {
+        if (x.basisKnown) realizedBasis += BigInt(x.basisRaw);
+        if (x.proceedsKnown) realizedProceeds += BigInt(x.proceedsRaw);
+        if (x.pnlRaw !== null) {
+          assert.equal(BigInt(x.pnlRaw), BigInt(x.proceedsRaw) - BigInt(x.basisRaw), `seed ${seed}: pnl`);
+          assert.ok(x.basisKnown && x.proceedsKnown, `seed ${seed}: pnl without both sides`);
+        }
+      }
+      for (const g of t.gaps) if (g.proceedsRaw !== undefined) gapProceeds += BigInt(g.proceedsRaw);
+    }
+    assert.equal(lotBasis + realizedBasis, buys, `seed ${seed}: basis conservation`);
+    assert.equal(realizedProceeds + gapProceeds, sells, `seed ${seed}: proceeds conservation`);
+  }
+});

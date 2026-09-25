@@ -84,7 +84,7 @@ test("scenario 1 (event): a synthetic DIVIDEND_ACCRUAL arrives into /events, /su
     assert.equal(list[0].type, "DIVIDEND_ACCRUAL");
     assert.equal(list[0].mint, MINT);
     assert.equal(list[0].effectiveDate, "2026-09-10");
-    assert.equal(list[0].amountPerUnitRaw, 2);
+    assert.equal(list[0].amountPerUnitRaw, "2"); // round 23: decimal strings on the wire (was the internal number)
     assert.equal(list[0].decimals, 6);
     assert.equal(list[0].status, "confirmed");
     assert.deepEqual(list[0].sources, ["https://issuer.example/dividends/2026-q3"]);
