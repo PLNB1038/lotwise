@@ -332,3 +332,19 @@ test("engine parity: applyEvents prices a datetime twin at the same ex-day midni
   assert.equal(accruals.length, 1);
   assert.equal(accruals[0].totalRaw, 200n, "held at the ex-day's UTC midnight — same as the route");
 });
+
+test("schema: isValidEvent is a pure predicate — the caller's object is not canonicalized under it", async () => {
+  const { isValidEvent } = await import("../src/schema/events.mjs");
+  const e = { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-02-01T00:00:00+02:00", status: "confirmed", sources: ["https://x.example/1"], amountPerUnitRaw: 2, decimals: 6, mint: A_MINT };
+  assert.equal(isValidEvent(e), true);
+  assert.equal(e.effectiveDate, "2026-02-01T00:00:00+02:00", "validation answered, the object is untouched");
+});
+
+test("engine: applyEvents does not mutate the caller's event objects", async () => {
+  const { applyEvents } = await import("../src/lots/lots.mjs");
+  const e = { type: "DIVIDEND_ACCRUAL", effectiveDate: "2026-02-01T00:00:00+02:00", status: "confirmed", sources: ["https://x.example/1"], amountPerUnitRaw: 2, decimals: 6, mint: A_MINT };
+  const lot = { id: "L1", mint: A_MINT, owner: A_ADDR, qtyRaw: 100n, acquiredDate: "2026-01-01", basisRaw: 0n };
+  const { accruals } = applyEvents([lot], [e]);
+  assert.equal(accruals.length, 1, "the event still applies on its calendar day");
+  assert.equal(e.effectiveDate, "2026-02-01T00:00:00+02:00", "the input array is untouched");
+});

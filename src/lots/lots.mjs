@@ -57,7 +57,10 @@ export function applyEvents(lots, events) {
   // Phase 1: full validation of all events before any changes (atomicity).
   for (const e of events) {
     try {
-      validateEvent(e);
+      // a copy: validation canonicalizes a DIVIDEND_ACCRUAL's date in place — the
+      // caller's array must not be mutated under the engine's feet (the engine itself
+      // consumes the day part of datetime strings wherever it needs the ex-day)
+      validateEvent({ ...e });
     } catch (err) {
       throw new LotError(`invalid event rejected: ${err.message}`, e);
     }

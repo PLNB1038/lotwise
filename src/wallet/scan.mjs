@@ -150,9 +150,9 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
 
   // 1) signatures per source: wallet address + ALL token accounts of registry mints
   const sources = [owner, ...[...accounts.values()].flatMap((a) => a.addresses).filter(Boolean)];
-  const sigs = new Map(); // signature -> {slot, blockTime, err} (dedup across sources)
+  const sigs = new Map(); // signature -> {slot, blockTime, err, src, idx} (dedup across sources)
   let truncated = false;
-  for (const source of sources) {
+  for (const [srcIdx, source] of sources.entries()) {
     let before;
     let taken = 0;
     let srcTruncated = false; // per-source flag: one hit its cap — the rest are scanned to their own caps in full
@@ -183,7 +183,10 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
         if (s === null || typeof s !== "object" || typeof s.signature !== "string") continue;
         if (taken >= maxTxs) { srcTruncated = true; break; }
         if (!sigs.has(s.signature)) {
-          sigs.set(s.signature, { slot: s.slot, blockTime: s.blockTime ?? null, err: s.err ?? null });
+          // src/idx preserve the collection topology: within ONE source the list is
+          // reverse-ledger (a later idx = an earlier block position), while ACROSS sources
+          // the ledger order of a same-slot pair is not recoverable from the RPC at all
+          sigs.set(s.signature, { slot: s.slot, blockTime: s.blockTime ?? null, err: s.err ?? null, src: srcIdx, idx: taken });
           // taken AFTER dedup: the cap counts UNIQUE signatures (see.
           taken++;
           added++;
@@ -206,7 +209,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   const toFetch = [];
   for (const [signature, s] of sigs) {
     if (s.err !== null) skipped.push({ signature, reason: "tx failed on-chain" });
-    else toFetch.push({ signature, ...s, seq: toFetch.length });
+    else toFetch.push({ signature, ...s });
   }
 
   // 3) processed chronologically: collection went newest-first.
@@ -216,12 +219,18 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   // WITHIN one slot the stable sort would keep the list order — and the node lists the
   // later block position first (reverse ledger order), so a same-slot buy→sell reached
   // the FIFO as sell→buy: a spurious gap with the proceeds booked into the hole plus a
-  // phantom open lot, the trade gone from realized P&L. The collection sequence is the
-  // tiebreak: collected LATER = earlier in the block; it also makes ties across sources
-  // (the owner page vs a token-account page) deterministic instead of Map-order.
-  const ordered = toFetch.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0) || b.seq - a.seq);
+  // phantom open lot, the trade gone from realized P&L. Within a source the tiebreak is
+  // the collection sequence (collected LATER = earlier in the block). ACROSS sources
+  // (the owner page vs a token-account page) the ledger order of a same-slot pair is not
+  // recoverable from the responses at all: the order below is a deterministic GUESS
+  // (source order), and every such pair is counted into ambiguousSlotPairs so the report
+  // can withdraw its completeness certificate.
+  const ordered = toFetch.sort((a, b) =>
+    (a.slot ?? 0) - (b.slot ?? 0) || (a.src === b.src ? b.idx - a.idx : a.src - b.src));
   const txs = [];
   let fetched = 0;
+  let prevKept = null; // {slot, src} of the last tx that made it into txs
+  let ambiguousSlotPairs = 0;
   for (const s of ordered) {
     aborted();
     let tx;
@@ -256,6 +265,10 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       continue;
     }
     if (tx.deltas.length > 0) {
+      if (prevKept !== null && s.slot === prevKept.slot && s.src !== prevKept.src) {
+        ambiguousSlotPairs++; // the true ledger order of this same-slot pair is unknowable
+      }
+      prevKept = { slot: s.slot, src: s.src };
       txs.push({
         signature: s.signature,
         slot: tx.slot,
@@ -266,5 +279,5 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     }
   }
 
-  return { owner, signatures: sigs.size, fetched, txs, skipped, truncated, accounts };
+  return { owner, signatures: sigs.size, fetched, txs, skipped, truncated, accounts, ambiguousSlotPairs };
 }

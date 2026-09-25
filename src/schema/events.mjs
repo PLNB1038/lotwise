@@ -200,7 +200,9 @@ export function validateEvent(e) {
 
 export function isValidEvent(e) {
   try {
-    validateEvent(e);
+    // a copy: validateEvent canonicalizes a DIVIDEND_ACCRUAL's date in place — a PREDICATE
+    // must not quietly rewrite the object it was asked about
+    validateEvent({ ...e });
     return true;
   } catch {
     return false;

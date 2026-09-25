@@ -228,7 +228,10 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       skipped: scan.skipped.length,
     },
     truncated: Boolean(scan.truncated), // the scan window was cut by the cap — lots may not be fully covered
-    complete: !scan.truncated && !hasGaps && allReconcile,
+    ...(scan.ambiguousSlotPairs
+      ? { ambiguousSlotPairs: scan.ambiguousSlotPairs } // same-slot pairs whose ledger order the RPC cannot tell apart (two sources) — the order in txs is a deterministic guess
+      : {}),
+    complete: !scan.truncated && !hasGaps && allReconcile && !scan.ambiguousSlotPairs, // a guessed order is not a certified history
     tokens,
   };
 }

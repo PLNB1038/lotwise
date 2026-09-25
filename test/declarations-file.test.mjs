@@ -62,3 +62,42 @@ test("declarations: invalid JSON / non-array / a malformed line — the whole fi
     assert.match(r.reason, pattern, `${name}: the reason names the problem`);
   }
 });
+
+test("declarations: a same-amount pair within 3 days warns — a corrected re-declaration would double the income", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v1" },
+    { symbol: "SPYx", exDate: "2026-06-20", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v2" },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(r.loaded, 2, "both lines load — the warning is advisory, the file is the operator's");
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 1, "exactly one warning for the suspicious pair");
+  assert.match(warns[0], /2026-06-18/, "the first ex-date is named");
+  assert.match(warns[0], /2026-06-20/, "the second ex-date is named");
+});
+
+test("declarations: a month-apart pair does not warn (two real dividends are the norm)", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2" },
+    { symbol: "SPYx", exDate: "2026-07-16", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q3" },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(warns.length, 0, "a month apart is two quarterly dividends, not a correction");
+  } finally {
+    console.warn = orig;
+  }
+});

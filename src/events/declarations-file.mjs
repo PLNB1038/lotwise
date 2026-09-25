@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { dividendsFromDeclarations } from "./dividends.mjs";
 import { bindMintAndValidate } from "./normalize-xstocks.mjs";
+import { parseIsoDateMs } from "../schema/isodate.mjs";
 
 /**
  * @param {string} path — the declarations file (conventionally data/declarations.json)
@@ -46,6 +47,27 @@ export function loadDeclarationsFile(path, registry) {
     // DeclarationError from the producer, or EventValidationError from the bind — one
     // malformed line fails the whole file loudly; the operator fixes the file, not us.
     return { ok: false, events: [], loaded: 0, reason: `declarations rejected: ${err.message}` };
+  }
+  // a corrected re-declaration (the issuer amends the ex-day, a new sourceUrl) is
+  // indistinguishable from two nearby dividends of the same amount: the channel is
+  // append-only and a dividend's identity is mint + ex-day + amount, so BOTH would accrue.
+  // The operator sees the suspicious pair at load time instead of discovering doubled
+  // income in a report; the load itself is unaffected (the file is the operator's).
+  const divs = events.filter((e) => e.type === "DIVIDEND_ACCRUAL");
+  for (let i = 0; i < divs.length; i++) {
+    for (let j = i + 1; j < divs.length; j++) {
+      const a = divs[i];
+      const b = divs[j];
+      if (a.mint !== b.mint || a.amountPerUnitRaw !== b.amountPerUnitRaw) continue;
+      const ta = parseIsoDateMs(String(a.effectiveDate).slice(0, 10));
+      const tb = parseIsoDateMs(String(b.effectiveDate).slice(0, 10));
+      if (ta === null || tb === null) continue;
+      if (Math.abs(ta - tb) <= 3 * 86_400_000) {
+        console.warn(
+          `[declarations] two same-amount dividend declarations within 3 days (${a.effectiveDate}, ${b.effectiveDate}, amountPerUnitRaw ${a.amountPerUnitRaw}) — a corrected re-declaration would double the income; resolve the file`,
+        );
+      }
+    }
   }
   return { ok: true, events, loaded: events.length, reason: null };
 }

@@ -88,3 +88,41 @@ test("scan: distinct slots keep their slot order regardless of the list order", 
   assert.equal(t.lots.length, 0);
   assert.equal(t.realized[0].pnlRaw, "500000");
 });
+
+test("scan: a same-slot pair from TWO sources is deterministic but flagged — completeness is withdrawn", async () => {
+  // the delegated sell is visible ONLY through the token-account page, which is collected
+  // AFTER the owner page: the ledger order of such a pair is not recoverable from the RPC
+  // (only within one source the list is reverse-ledger). The order below is a deterministic
+  // guess — the report must not certify a guessed history as complete while reconciles:true.
+  const ATA = USDC; // any valid 32-byte base58 pubkey distinct from the owner and the mint
+  let acctCalls = 0;
+  const client = {
+    async call(method, params) {
+      if (method === "getTokenAccountsByOwner") {
+        acctCalls++;
+        return {
+          value: acctCalls === 1
+            ? [{ pubkey: ATA, account: { data: { parsed: { info: { mint: SPYx, tokenAmount: { amount: "0" } } } } } }]
+            : [],
+        };
+      }
+      if (method === "getSignaturesForAddress") {
+        if (params[0] === OWNER) return [sigEntry("sigBuy", 1000)];
+        // a failed tx precedes the sell on the ATA page, so the sell's per-source index
+        // is 1: a tiebreak that ignores the SOURCE (a plain collection order) would invert
+        // the pair — the index alone does not know which source it came from
+        if (params[0] === ATA) return [{ signature: "sigDropped", slot: 999, blockTime: 1750000000, err: { Err: 1 } }, sigEntry("sigSell", 1000)];
+        return [];
+      }
+      if (method === "getTransaction") return TX_BY_SIG.get(params[0]) ?? null;
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const scan = await scanWallet(client, OWNER, REG);
+  assert.deepEqual(scan.txs.map((t) => t.signature), ["sigBuy", "sigSell"],
+    "deterministic: the owner source orders before the account source");
+  assert.equal(scan.ambiguousSlotPairs, 1, "the cross-source same-slot pair is counted");
+  const rep = buildWalletReport(scan, { registry: REG });
+  assert.equal(rep.complete, false, "a guessed ledger order is not a complete history");
+  assert.equal(rep.ambiguousSlotPairs, 1, "the flag travels with the report");
+});
