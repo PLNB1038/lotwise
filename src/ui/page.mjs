@@ -600,6 +600,27 @@ function renderWallet(rep) {
   rep.tokens.forEach(function (x) { if (x.excluded) excludedCount += 1; });
   // a full ISO timestamp reads hard — date + minutes UTC
   var when = String(rep.now || '—').replace('T', ' ').slice(0, 16) + (rep.now ? ' UTC' : '');
+  // money-only legs — USDC moved without a tracked-token trade (a same-tx round-trip
+  // spread, a USDC fee or transfer; the report does not guess which). The net is shown
+  // per mint (mints are never merged); the full row list lives in the tooltip.
+  // Shown only when the field is present: an older report without it renders as before.
+  var moneyOnly = rep.moneyOnly || [];
+  var moFull = moneyOnly.map(function (r) {
+    return (r.date ? String(r.date).replace('T', ' ').slice(0, 16) + ' UTC — ' : '') +
+      fmtUi(r.amountRaw, 6) + ' USDC  ' + r.signature;
+  }).join('; ');
+  var moNets = moneyOnly.reduce(function (acc, r) {
+    acc[r.mint] = (acc[r.mint] === undefined ? 0n : acc[r.mint]) + BigInt(r.amountRaw);
+    return acc;
+  }, {});
+  var moNetStr = Object.keys(moNets).map(function (mint) {
+    return esc(fmtUi(String(moNets[mint]), 6)) + ' USDC';
+  }).join(' + ');
+  var moneyRow = moneyOnly.length
+    ? '<dt>USDC without a token trade</dt><dd title="' + esc(moFull) + '">' + moneyOnly.length +
+        ' tx, net ' + esc(moNetStr) +
+        ' <span class="note">(no token moved — spread, USDC fee or transfer; not in realized P&L)</span></dd>'
+    : '';
   var head = '<dl class="kv">' +
     '<dt>owner</dt><dd>' + esc(rep.owner) + '</dd>' +
     '<dt>report generated at</dt><dd>' + esc(when) + '</dd>' +
@@ -610,7 +631,8 @@ function renderWallet(rep) {
         : rep.ambiguousSlotPairs
           ? rep.ambiguousSlotPairs + ' same-slot pair' + (rep.ambiguousSlotPairs > 1 ? 's' : '') + ' from different sources — ledger order guessed, history not certified'
           : 'has gaps — lots may miss an opening balance') +
-      (excludedCount > 0 ? ' — ' + excludedCount + ' tokens excluded' : '') + '</dd></dl>';
+      (excludedCount > 0 ? ' — ' + excludedCount + ' tokens excluded' : '') + '</dd>' +
+    moneyRow + '</dl>';
   var body = rep.tokens.length === 0
     ? '<p class="note">No tracked tokens found in this wallet.</p>'
     : rep.tokens.map(function (t) {

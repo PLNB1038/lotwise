@@ -51,11 +51,36 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     return s;
   };
 
+  // money-only legs: USDC rows of txs where no tracked token moved for this owner — see
+  // the booking site in the loop below for the full contract
+  const moneyOnly = [];
+
   for (const tx of scan.txs) {
     const date = iso(tx.blockTime);
     // other owners' deltas are untouched: scan by address — report by address
     const mine = tx.deltas.filter((d) => d.owner === owner && byMint.has(d.mint) && d.deltaRaw !== 0n);
-    if (mine.length === 0) continue;
+    if (mine.length === 0) {
+      // a money-only tx: no tracked token moved for THIS owner, yet a money leg did — a
+      // same-tx round-trip (the spread used to be invisible anywhere, silently overstating
+      // realized P&L), a USDC fee, or a plain USDC transfer. The report cannot tell these
+      // causes apart and does not guess: a row is the FACT — signature, date, money mint,
+      // signed net per mint (distinct mints are never merged). Deliberately NOT lots and
+      // NOT gaps: FIFO math is untouched (a zero token delta is no lot), and completeness
+      // is a certificate about lot history, not about the money ledger. Fail-closed both
+      // ways: a legacy scan without moneyDeltas yields no rows, and a zero NET leg (money
+      // that only moved between the owner's own accounts) yields no row either.
+      if (Array.isArray(tx.moneyDeltas)) {
+        const net = new Map();
+        for (const m of tx.moneyDeltas) {
+          if (m.owner !== owner) continue;
+          net.set(m.mint, (net.get(m.mint) ?? 0n) + m.deltaRaw);
+        }
+        for (const [mint, amount] of net) {
+          if (amount !== 0n) moneyOnly.push({ signature: tx.signature, date, mint, amountRaw: String(amount) });
+        }
+      }
+      continue;
+    }
 
     // the money leg prices the trade. Net USDC delta of THIS owner in THIS
     // tx; the pricing rule is deliberately narrow — exactly one tracked token moved against
@@ -231,6 +256,11 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     ...(scan.ambiguousSlotPairs
       ? { ambiguousSlotPairs: scan.ambiguousSlotPairs } // same-slot pairs whose ledger order the RPC cannot tell apart (two sources) — the order in txs is a deterministic guess
       : {}),
+    // money-only legs: USDC moved without a tracked-token trade — a same-tx round-trip
+    // spread, a USDC fee, a USDC transfer; the report does not guess which. Absent field =
+    // none seen in this window (a legacy scan without money legs cannot see them — re-scan
+    // for the money view).
+    ...(moneyOnly.length > 0 ? { moneyOnly } : {}),
     complete: !scan.truncated && !hasGaps && allReconcile && !scan.ambiguousSlotPairs, // a guessed order is not a certified history
     tokens,
   };

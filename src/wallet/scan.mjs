@@ -263,10 +263,21 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       skipped.push({ signature: s.signature, reason: "failed-tx" });
       continue;
     }
-    if (tx.deltas.length > 0) {
-      let bySrc = slotSrcs.get(s.slot);
-      if (!bySrc) { bySrc = new Map(); slotSrcs.set(s.slot, bySrc); }
-      bySrc.set(s.src, (bySrc.get(s.src) ?? 0) + 1);
+    // Kept: token deltas (FIFO material) OR a non-empty money leg. A round-trip in ONE tx
+    // (a multi-hop swap that buys and sells the same token) nets the token delta to 0, and
+    // dropping the tx here lost its USDC leg entirely: the spread was invisible in
+    // realized and in gaps, silently OVERSTATING realized P&L. The report books money-only
+    // legs into its moneyOnly section. Order observability stays FIFO-only below: a
+    // money-only tx has no lots, its position cannot flip FIFO math — it must neither
+    // create nor mask a same-slot pair.
+    const hasTokenDeltas = tx.deltas.length > 0;
+    const hasMoneyLeg = Array.isArray(tx.moneyDeltas) && tx.moneyDeltas.length > 0;
+    if (hasTokenDeltas || hasMoneyLeg) {
+      if (hasTokenDeltas) {
+        let bySrc = slotSrcs.get(s.slot);
+        if (!bySrc) { bySrc = new Map(); slotSrcs.set(s.slot, bySrc); }
+        bySrc.set(s.src, (bySrc.get(s.src) ?? 0) + 1);
+      }
       txs.push({
         signature: s.signature,
         slot: tx.slot,
