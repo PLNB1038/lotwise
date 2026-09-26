@@ -143,7 +143,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-847 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+850 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 
