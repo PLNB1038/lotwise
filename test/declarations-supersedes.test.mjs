@@ -306,6 +306,8 @@ test("supersedes: broken references of ALL symbols are named in the single refus
   assert.equal(r.ok, false);
   assert.match(String(r.reason), /2026-06-11/, "the SPYx dangling target is named");
   assert.match(String(r.reason), /2026-07-01/, "the KOx dangling target is named too — symbols do not hide each other");
+  assert.match(String(r.reason), /SPYx: \(/, "each symbol's segment is bracketed — attributable by eye, not only by regex");
+  assert.match(String(r.reason), /KOx: \(/, "the second symbol's segment is bracketed too");
 });
 
 // A file with hundreds of broken references must not produce a hundred-kilobyte reason:

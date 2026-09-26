@@ -11,7 +11,7 @@ import { EVENT_TYPES } from "../schema/events.mjs";
 import { renderPage } from "../ui/page.mjs";
 import { createRateLimiter } from "./ratelimit.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, declarationsStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, declarationsStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false, accessLog = false }) {
   // indexes are built once; when the data changes the server is recreated (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -126,6 +126,18 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   let pageHtml = null; // rendered once, the page is static (it pulls data from the API)
 
   const server = createServer(async (req, res) => {
+    if (accessLog) {
+      // One line per FINISHED response — the operator's window into who is visiting the
+      // demo (judges land through the funnel). The IP is the same key the rate limiter
+      // uses (the funnel-overwritten XFF hop behind trustProxy, the socket otherwise),
+      // so log lines and rate buckets corroborate. Off by default: tests/embedders run
+      // quiet, the demo deployment opts in.
+      const startedAt = Date.now();
+      res.on("finish", () => {
+        const ua = String(req.headers["user-agent"] ?? "-").slice(0, 80);
+        console.log(`[http] ${clientKey(req)} ${req.method} ${req.url} ${res.statusCode} ${Date.now() - startedAt}ms ${ua}`);
+      });
+    }
     try {
       let url;
       // A request-target with a leading "//" is the protocol-relative form: new URL

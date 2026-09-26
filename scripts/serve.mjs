@@ -144,7 +144,12 @@ if (journalCorrupted) {
 }
 let journalReplayed = 0;
 let journalUnavailable = 0;
-for (const t of registry.filter((x) => x.issuer !== "backed")) {
+// Boot milestones: with live sources a boot runs ~1.5 min and per-token lines appear only
+// for events and warnings — a silent phase reads as a hang. One line per phase boundary,
+// no per-token spam.
+const onchainBoot = registry.filter((x) => x.issuer !== "backed");
+console.log(`[serve] boot: on-chain mint state, ${onchainBoot.length} token(s)...`);
+for (const t of onchainBoot) {
   const priorEntry = journal[t.mint] ?? null;
   let parsed = null;
   try {
@@ -186,6 +191,7 @@ for (const t of registry.filter((x) => x.issuer !== "backed")) {
   }
   await sleep(200);
 }
+console.log(`[serve] boot: on-chain journal done — ${journalReplayed} event(s) replayed, ${journalUnavailable} token(s) unavailable`);
 // Final journal write — the single write point (persistJournalOnBoot).
 // In read-only mode (evidence could not be preserved) the write is NOT performed: the corrupted
 // original outlives the boot until restart.
@@ -202,7 +208,10 @@ if (journalSaved.readonly) {
 // node of the page did not start from "1", and the timeline threw TimelineError at the start
 // (the same boot-loop as with the on-chain journal).
 const HISTORY_MAX_PAGES = 10;
-for (const t of registry.filter((x) => x.issuer === "backed")) {
+const backedBoot = registry.filter((x) => x.issuer === "backed");
+console.log(`[serve] boot: xStocks issuer history, ${backedBoot.length} token(s)...`);
+let issuerEvents = 0;
+for (const t of backedBoot) {
   try {
     const nodes = [];
     let hasNextPage = true;
@@ -221,6 +230,7 @@ for (const t of registry.filter((x) => x.issuer === "backed")) {
     }
     if (nodes.length > 0) {
       events.push(...bindMintAndValidate(multiplierHistoryToEvents(nodes, { symbol: t.symbol, network: "Ethereum" }), t.mint));
+      issuerEvents += nodes.length;
       console.log(`[serve] ${t.symbol}: ${nodes.length} multiplier events`);
     }
   } catch (err) {
@@ -228,6 +238,7 @@ for (const t of registry.filter((x) => x.issuer === "backed")) {
   }
   await sleep(300); // politeness toward the public API
 }
+console.log(`[serve] boot: issuer history done — ${issuerEvents} multiplier event(s)`);
 
 // Shared cache runner: TTL + dedup of concurrent calls (the same pattern
 // for the on-chain reader, the wallet scanner and the price provider — extracted into a helper)
@@ -325,6 +336,7 @@ let server;
 try {
   server = await createApiServer({
     registry, events, port, host, onchainReader, walletScanner, priceProvider, rateLimits, trustProxy: true,
+    accessLog: true, // one "[http] ip method path status ms ua" line per finished response — see who visits the demo
     journalStats: {
       replayed: journalReplayed,
       unavailable: journalUnavailable,

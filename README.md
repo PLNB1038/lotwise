@@ -37,6 +37,25 @@ On startup the server loads the registry, reads mint state for every non-xStocks
 
 Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota.
 
+## 30-second tour
+
+The demo runs on live mainnet — read-only, no wallet scans, safe to curl:
+
+```sh
+# Pulse: 31 tokens, event counts, journal and registry integrity flags
+curl https://lotwise.tail88c821.ts.net/health
+
+# The SPACEX rebase, straight from the mint: multiplier 1 → 5,
+# sourced from the on-chain scaledUiAmountConfig — verifiable in any explorer
+curl "https://lotwise.tail88c821.ts.net/events?symbol=SPACEX"
+
+# The same rebase, reconciled: issuer plan vs live on-chain state — verdict: "ok"
+curl "https://lotwise.tail88c821.ts.net/onchain?symbol=SPACEX"
+
+# The whole registry: per-token event counts and current multipliers (SPACEX "5", OPENAI "1.4861347")
+curl https://lotwise.tail88c821.ts.net/summary
+```
+
 ## API
 
 GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March.
@@ -48,8 +67,8 @@ GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `4
 | `/events?symbol=&type=` | Canonical events for one token, optional type filter |
 | `/multiplier?symbol=&date=&raw=` | Multiplier at a date plus a raw-to-adjusted sample with exact dust |
 | `/onchain?symbol=&date=` | Issuer-reported vs on-chain multiplier reconcile verdict |
-| `/lots?address=` | Wallet report: FIFO lots with cost basis, raw vs adjusted balances, realized P&L from USDC legs; `moneyOnly` rows list USDC the pricing did not consume (a same-tx round-trip spread — alone or mixed with a trade whose pricing was withdrawn, a multi-token swap's fee, or a plain transfer) — a signed net per mint, deliberately outside lots/realized/gaps. The pricing is also withdrawn when a tracked account is merely SEEN in the same tx's balances with no balance change (a passive approval, an empty account): whether it moved and returned is not recoverable from balances, so the trade stays unpriced and the money a fact row — conservative by design. One wallet scan runs at a time: a concurrent scan request answers `503` with `kind: "scan-busy"` and `Retry-After` (a real scan holds the RPC queue for minutes; queuing a second one would starve every other endpoint). `/lots` and `/accruals` are GET-only: a HEAD probe answers `405` without running a scan. Point reads (the boot journal, `/onchain`) are prioritized over the scan stream inside the shared RPC pacing queue — the vitrine stays responsive while a scan runs. The economic result of the window is assembled by the consumer as: Σ `pnlRaw` + Σ `moneyOnly` nets − Σ `basisRaw` of disposals with `proceedsKnown: false` and `basisKnown: true` + Σ `proceedsRaw` of disposals with `proceedsKnown: true` and `basisKnown: false` (a priced sale of an unbased lot: money received, basis unknown) + Σ `gaps[].proceedsRaw` (the hole's own sale share — really received money) |
-| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet. The base is the position held **at the start of the ex-date** (its UTC midnight — a buy during the ex-date itself does not qualify), replayed from the scan window — a sale after the ex-date does not shrink the dividend; rows flag `baseIncomplete` when a transaction cannot be ordered against the ex-date, the scan has gaps, the window was truncated, or the scan's net delta did not reconcile with the live chain, and answer `totalRaw: null` (never a negative number) when the window saw only disposals. A dividend's identity is its calendar ex-day and per-unit amount — the same dividend from two sources accrues once. Two declarations naming different ex-days are two dividends — including two timezone skins of one instant (the declared ex-day is the economic fact); the declarations channel is append-only, so a corrected re-declaration would double the income until resolved — the loader warns about same-amount declarations within three days. **To express a correction, do not re-declare — supersede**: append a new line for the same symbol carrying `supersedes: {"exDate": "...", "amountPerUnitRaw": "..."}` naming the replaced declaration by its identity (the canonical ex-day and the per-unit amount as originally declared; the correction may carry a new ex-day, a new amount, or both). The replacement removes the superseded line's accrual — the corrected amount accrues alone, `/health` shows `declarations.superseded`. The reference is one level deep and must resolve: a missing target, a correction of a correction, a self-reference, or two corrections on one target refuse the whole file at load (`declarations.ok: 0`, the reason in the boot log) — a half-applied correction would leave the stale amount accruing, which is the doubling this field exists to prevent. Lines without the field accrue exactly as before. Accruals come from operator-supplied dividend declarations — `data/declarations.json`, loaded at boot, one line per declaration: `{symbol, exDate, amountPerUnitRaw, decimals, sourceUrl}` (`amountPerUnitRaw` is per RAW unit — a per-share declaration must be divided by the ex-date multiplier before submission); xStocks publishes no per-unit amounts, so in the live feed today dividend rebases appear as multiplier events. A `200 []` here is either "no dividends" or "the declarations channel is down" — the separator is the response header `X-Declarations-Unavailable: 1` (present only when the channel refused the file; the mirror lives in `/health` `declarations.ok`). Like `/lots`, this endpoint is GET-only (a HEAD probe answers 405 without a scan) |
+| `/lots?address=` | Wallet report: FIFO lots with cost basis, raw vs adjusted balances, realized P&L from USDC legs. One scan runs at a time — a concurrent scan answers `503` with `kind: "scan-busy"` and `Retry-After` — and the endpoint is GET-only: a HEAD probe answers `405` without running a scan. `moneyOnly` (USDC the pricing did not consume) and the window's economic-result formula: full semantics in [docs/API_SEMANTICS.md](docs/API_SEMANTICS.md) |
+| `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet: the base is the position held **at the start of the ex-date**, replayed from the scan window, with honest `baseIncomplete` flags and `totalRaw: null` where the window cannot answer. GET-only like `/lots`; a `200 []` is "no dividends" or a down declarations channel — the separator is the `X-Declarations-Unavailable: 1` response header. Dividend identity, the declarations file and the `supersedes` correction contract: full semantics in [docs/API_SEMANTICS.md](docs/API_SEMANTICS.md) |
 | `/crosscheck?symbol=` | Price cross-check verdicts per event (its `ratio` is the one non-string decimal — a float) |
 | `/health` | Event/token counts, journal and registry integrity flags, excluded tokens |
 
@@ -124,7 +143,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-843 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+844 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

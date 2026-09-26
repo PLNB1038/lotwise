@@ -572,3 +572,22 @@ test("/accruals: a declarations stats object without a truthy ok surfaces the de
     declarationsStats: { loaded: 0, reason: "boom" }, // ok is absent
   }));
 });
+
+// Access log: one line per finished response when the deployment opts in (the demo runs
+// with it to see who visits); off by default so tests and embedders stay quiet.
+test("access log: a finished response logs ip/method/path/status in one line", async () => {
+  await withServer(async (base) => {
+    const lines = [];
+    const orig = console.log;
+    console.log = (...a) => lines.push(a.join(" "));
+    try {
+      const r = await fetch(`${base}/health`);
+      await r.json();
+    } finally {
+      console.log = orig;
+    }
+    const hit = lines.find((l) => l.includes("GET /health "));
+    assert.ok(hit, `an [http] line is written for the finished response: ${JSON.stringify(lines)}`);
+    assert.match(hit, /\[http\] [\d.:a-f]+ GET \/health 200 \d+ms /, "the line carries ip, method, path, status, duration");
+  }, () => ({ accessLog: true }));
+});

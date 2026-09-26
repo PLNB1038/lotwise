@@ -62,7 +62,9 @@ export function loadDeclarationsFile(path, registry) {
       // DeclarationError from the producer (a malformed line or a broken supersedes
       // reference — dangling, chained, doubled), or EventValidationError from the bind —
       // one broken line fails the whole file loudly; the operator fixes the file, not us.
-      rejections.push(`${t.symbol}: ${err.message}`);
+      // The message itself is "; "-joined inside a symbol — bracketing keeps each
+      // symbol's segment attributable by eye instead of only by regex.
+      rejections.push(`${t.symbol}: (${err.message})`);
     }
   }
   if (rejections.length > 0) {
