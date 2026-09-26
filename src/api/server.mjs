@@ -153,19 +153,22 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // so log lines and rate buckets corroborate. Off by default: tests/embedders run
       // quiet, the demo deployment opts in.
       const startedAt = Date.now();
+      // the IP is captured at REQUEST time: on a torn-down connection the socket is
+      // already destroyed when "close" fires and remoteAddress would read "unknown"
+      const ip = clientKey(req);
       const ua = () => String(req.headers["user-agent"] ?? "-").slice(0, 80);
       // the URL is capped: a 3KB query made a 3KB journal line; the wallet address
       // part of /lots fits comfortably, the noise does not
       const shortUrl = () => String(req.url).slice(0, 200);
       res.on("finish", () => {
-        console.log(`[http] ${clientKey(req)} ${req.method} ${shortUrl()} ${res.statusCode} ${Date.now() - startedAt}ms ${ua()}`);
+        console.log(`[http] ${ip} ${req.method} ${shortUrl()} ${res.statusCode} ${Date.now() - startedAt}ms ${ua()}`);
       });
       // a connection torn down BEFORE a response (an impatient visitor, a cancelled
       // scan) never fires "finish" — without this hook the visit would be invisible
       // to the very log that exists to see visitors
       res.on("close", () => {
         if (!res.writableFinished) {
-          console.log(`[http] ${clientKey(req)} ${req.method} ${shortUrl()} aborted ${Date.now() - startedAt}ms ${ua()}`);
+          console.log(`[http] ${ip} ${req.method} ${shortUrl()} aborted ${Date.now() - startedAt}ms ${ua()}`);
         }
       });
     }

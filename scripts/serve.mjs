@@ -374,13 +374,21 @@ console.log(`[serve] try: / | /health | /events?symbol=SPYx | /multiplier?symbol
 const SHUTDOWN_DRAIN_MS = 15_000;
 let stopping = false;
 const stop = () => {
-  if (stopping) return; // a repeated signal must not start a second drain on top of the first
+  if (stopping) {
+    // a REPEATED signal during the drain is an operator's "enough": leave now instead
+    // of ignoring it for the rest of the window
+    process.exit(1);
+  }
   stopping = true;
   console.log(`[serve] shutdown: draining (${server.isScanBusy() ? "scan active" : "idle"})`);
   server
     .shutdown({ drainMs: SHUTDOWN_DRAIN_MS })
     .catch((err) => console.error(`[serve] shutdown error: ${err?.message ?? err}`))
-    .finally(() => process.exit(0)); // the exit happens only after the drain, not at signal time
+    // the exit is DELAYED: the drain-abort's 503 travels to the client through the
+    // route's own async frames, and a synchronous exit(0) in this finally wins that
+    // race — the client saw a bare connection reset where the contract promised a 503.
+    // A short grace lets the response (and its access-log line) flush first.
+    .finally(() => setTimeout(() => process.exit(0), 200));
 };
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);

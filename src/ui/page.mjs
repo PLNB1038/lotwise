@@ -431,7 +431,9 @@ function loadPlanes(t) {
         '<dt>issuer API multiplier</dt><dd>' + esc(b.api) + '</dd>' +
         '<dt>live on-chain now</dt><dd>' + esc(b.onChain.active) + '</dd>' +
         '<dt>issuer plan (pending)</dt><dd>' + esc(b.onChain.pending || 'none') +
-        (b.onChain.pendingEffectiveDate ? ' (activates ' + esc(b.onChain.pendingEffectiveDate) + ')' : '') + '</dd>' +
+        (b.onChain.pendingEffectiveDate ? ' (' + (new Date(b.onChain.pendingEffectiveDate) <= new Date()
+          ? 'in force since '
+          : 'activates ') + esc(String(b.onChain.pendingEffectiveDate).slice(0, 10)) + ')' : '') + '</dd>' +
         '<dt>on-chain effective</dt><dd>' + esc(b.onChainEffective) + '</dd>';
       // A visitor sees "live 1" next to a headline multiplier of 5 and reads a
       // contradiction. It is the story of the product: balances ALREADY run at the
