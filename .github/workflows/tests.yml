@@ -16,3 +16,8 @@ jobs:
       # The suite is hermetic: no network, no fixture servers, ~7s (the StockBasis
       # lesson — running the tests bare is safe). Public tree = git ls-files.
       - run: node --test test/*.test.mjs
+      # The README's "N tests, all green" claim must match the run above: the check
+      # re-runs the suite (hermetic, ~7s) and fails naming both numbers + the README
+      # line when the claim drifts. No auto-fix — the bump belongs to the commit
+      # that adds the tests.
+      - run: node scripts/check-test-count.mjs

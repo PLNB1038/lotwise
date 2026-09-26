@@ -228,7 +228,7 @@ export async function fetchOwnerTokenAccounts(client, owner, registry, {
       // S4: explicit page size — the scanner controls the page instead of trusting a
       // provider default it cannot see
       { encoding: "jsonParsed", commitment: "confirmed", limit: pageLimit },
-    ], { signal });
+    ], { signal, priority: "low" });
     // a non-array from the gateway is an EXPLICIT malformed-source (mirror of
     // an "empty account set" from a lying source is indistinguishable from zero.
     if (!Array.isArray(res?.value)) {
@@ -355,7 +355,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       const batch = await client.call("getSignaturesForAddress", [
         source,
         { limit, ...(before !== undefined ? { before } : {}) },
-      ], { signal });
+      ], { signal, priority: "low" });
       // Non-array (result:null from a lying gateway) is an EXPLICIT error, not a silent
       // "end of history" with truncated:false: "empty wallet" is indistinguishable
       // from "the source died" — a fail-closed violation).

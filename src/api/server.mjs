@@ -110,10 +110,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   const scanBusy = (res) => json(res, 503, { error: "another wallet scan is in progress, retry shortly", kind: "scan-busy" }, { "Retry-After": "30" });
   // A broken declarations channel makes /accruals 200 [] indistinguishable from "no
   // dividends" — the separator lives in a header so the body contract stays an array
-  // (the /health mirror is for operators, integrators do not poll /health). The gate
-  // accepts BOTH shapes: serve.mjs builds ok as a NUMBER (1|0, JSON-stable in /health),
-  // tests and embedders pass a boolean — one shape used to leave the header dead.
-  const declHeaders = () => (declarationsStats && (declarationsStats.ok === false || declarationsStats.ok === 0) ? { "X-Declarations-Unavailable": "1" } : {});
+  // (the /health mirror is for operators, integrators do not poll /health). The gate is
+  // falsy-based, not a whitelist of shapes: any missing/unset ok of a PRESENT stats
+  // object means "not confirmed healthy" — a future builder shape cannot leave the
+  // header dead the way the boolean-vs-number mismatch did.
+  const declHeaders = () => (declarationsStats && !declarationsStats.ok ? { "X-Declarations-Unavailable": "1" } : {});
 
   const ENDPOINTS = ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots", "/accruals", "/crosscheck"];
 

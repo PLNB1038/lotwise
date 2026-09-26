@@ -320,3 +320,23 @@ test("rpc: the caller's signal is passed to fetch and an abort stops the call wi
   assert.equal(fetches, 1, "no retry after an abort — the caller is gone");
   assert.equal(seenSignal, ac.signal, "the signal reaches the wire");
 });
+
+// A transport-level AbortError WITHOUT the caller's signal (an exotic gateway aborting
+// its side) is a retryable network error, not a "caller departed" stop — the old check
+// matched the error name alone and could fake a departed client that never left.
+test("rpc: a transport AbortError without a caller signal stays a retryable network error", async () => {
+  const { RpcClient } = await import("../src/ingest/rpc.mjs");
+  let fetches = 0;
+  const client = new RpcClient({
+    endpoint: "https://rpc.example",
+    sleep: async () => {},
+    fetcher: async () => {
+      fetches++;
+      throw Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+    },
+  });
+  let threw;
+  try { await client.call("getAccountInfo", ["x"]); } catch (e) { threw = e; }
+  assert.equal(threw.kind, "network", "no caller signal — no 'aborted' verdict");
+  assert.equal(fetches, 4, "all attempts used: a transport abort is retried like any network error");
+});

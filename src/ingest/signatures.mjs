@@ -14,7 +14,9 @@ export async function* streamSignatures(client, mint, { limit = 100, maxPages = 
   let zeroProgressPages = 0;
   for (let page = 0; page < maxPages; page++) {
     const params = [mint, { limit, ...(before !== undefined ? { before } : {}) }];
-    const batch = await client.call("getSignaturesForAddress", params);
+    // scan-side traffic: the backfill must not jump the vitrine's point reads in the
+    // shared RpcClient lanes (the priority contract)
+    const batch = await client.call("getSignaturesForAddress", params, { priority: "low" });
     if (!Array.isArray(batch)) {
       throw new Error(`malformed getSignaturesForAddress response: expected array, got ${batch === null ? "null" : typeof batch}`);
     }

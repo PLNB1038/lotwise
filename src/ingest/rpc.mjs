@@ -49,30 +49,83 @@ export class RpcClient {
     this._id = 0;
     this._lastCall = 0;
     this.requestCount = 0;
-    this._queue = Promise.resolve();
+    // Two FIFO lanes over ONE pacing gate: a wallet scan pours hundreds of
+    // calls into the queue, and under plain FIFO a vitrine getAccountInfo stood in that
+    // tail for minutes — an empty wallet alone used to hold the gate for ~23 s. The
+    // lanes change only WHO gets the next slot — never the rate: both drain through the
+    // same minIntervalMs gate, so the provider sees exactly the same call cadence.
+    this._lanes = { high: [], low: [] };
+    this._draining = false;
   }
 
-  // Interval pacing only works inside the queue: concurrent calls
-  // (GET /lots from two browser tabs) line up at the tail; otherwise every call computes
-  // wait from the same _lastCall and they all fire at once. A failed slot must not poison the tail.
-  async _throttle() {
-    const turn = this._queue.then(async () => {
-      const wait = this._lastCall + this.minIntervalMs - Date.now();
-      if (wait > 0) await this.sleep(wait);
-      this._lastCall = Date.now();
+  // Interval pacing works inside a single serial gate: concurrent calls (GET /lots from
+  // two browser tabs) line up at the tail; otherwise every call computes wait from the
+  // same _lastCall and they all fire at once. The gate is a drain loop now, not a promise
+  // chain: a chain fixes the order at ENQUEUE time, priority needs the decision at SLOT
+  // time (a high call arriving after the lows must still pass them). No preemption: a
+  // high arrival while a low call already owns the in-flight sleep waits that one tick —
+  // preempting would waste the committed slot, and the high latency stays bounded by
+  // minIntervalMs instead of by the backlog. A failed slot cannot poison anyone: the loop
+  // never awaits caller code, it only wakes the selected waiter — errors surface in that
+  // caller's own call(), the gate moves on (the old chain's .then(() => {}, () => {})).
+  async _drain() {
+    if (this._draining) return;
+    this._draining = true;
+    try {
+      while (this._lanes.high.length > 0 || this._lanes.low.length > 0) {
+        // the whole feature is this one line: high first, low only when high is empty.
+        // The low lane is then honest FIFO — no aging, no starvation guard: the high lane
+        // here is point reads (getAccountInfo) behind a 10-min cache and a per-IP limiter,
+        // bounded; unbounded growth lives on the scan side, which is exactly the lane
+        // allowed to wait.
+        const waiter = (this._lanes.high.length > 0 ? this._lanes.high : this._lanes.low).shift();
+        try {
+          const wait = this._lastCall + this.minIntervalMs - Date.now();
+          if (wait > 0) await this.sleep(wait);
+        } catch (err) {
+          // an injected sleep rejected (test harness, exotic timer): the selected caller
+          // gets the failure honestly, the gate keeps draining instead of deadlocking
+          waiter.reject(err);
+          continue;
+        }
+        this._lastCall = Date.now();
+        waiter.resolve();
+      }
+    } finally {
+      this._draining = false;
+    }
+  }
+
+  _throttle(priority) {
+    return new Promise((resolve, reject) => {
+      this._lanes[priority].push({ resolve, reject });
+      this._drain();
     });
-    this._queue = turn.then(() => {}, () => {});
-    await turn;
   }
 
-  async call(method, params, { signal } = {}) {
+  async call(method, params, { signal, priority = "low" } = {}) {
+    // Default LOW (compatibility first): traffic that multiplies is scan traffic — new
+    // sources, backfills, ingest loops — and a future bulk call site that forgets the
+    // option then degrades to today's FIFO instead of silently jumping the vitrine queue
+    // again. Point calls are few and stable, and they opt in explicitly (scripts/serve.mjs).
+    // Typos fail LOUDLY: a silent "unknown → low" would bury a point call behind the
+    // backlog on a mere "hight", with nothing in the logs to explain the hang.
+    if (priority !== "high" && priority !== "low") {
+      throw new RangeError(`call priority must be "high" or "low", got ${JSON.stringify(priority)}`);
+    }
     let lastErr;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       // the caller departed before this attempt even started: stop now — a retry would
       // burn quota and pacing time for a client that is already gone
       if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
       if (attempt > 0) await this.sleep(this.minIntervalMs * 2 ** attempt); // exponential backoff
-      await this._throttle();
+      // a retry re-enters ITS OWN lane: a scan call leaving backoff must not resurface
+      // as high traffic just because it is technically a fresh slot request
+      await this._throttle(priority);
+      // the abort is re-checked AFTER the lane wait too: a caller that departed while
+      // this call sat in the queue must not spend a paced slot and an RPC request —
+      // the fetch would reject immediately, but the slot (and requestCount) is spent
+      if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
       const id = ++this._id;
       this.requestCount++;
       let res;
@@ -87,8 +140,10 @@ export class RpcClient {
           ...(signal ? { signal } : {}),
         });
       } catch (err) {
-        // an abort is an immediate stop, not a network error to retry
-        if (signal?.aborted || err?.name === "AbortError") throw new RpcError("aborted", "request aborted by the caller");
+        // an abort by OUR caller is an immediate stop, not a network error to retry.
+        // Only the caller's signal decides: a transport AbortError WITHOUT it (an
+        // exotic gateway abort) stays a retryable network error
+        if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
         lastErr = new RpcError("network", redactUrls(err.message));
         continue;
       }
@@ -103,6 +158,9 @@ export class RpcClient {
       try {
         body = await res.json();
       } catch (err) {
+        // the body read races the caller's departure on the LAST attempt too: without
+        // this check the abort leaked out as a retryable "bad JSON" network error
+        if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
         lastErr = new RpcError("network", `bad JSON: ${err.message}`);
         continue;
       }

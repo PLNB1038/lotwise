@@ -558,3 +558,17 @@ test("/accruals: the degradation header fires for the numeric prod shape of decl
     declarationsStats: { ok: 0, loaded: 0, superseded: 0, reason: "declarations rejected: test" },
   }));
 });
+
+// The degradation header is falsy-gated, not shape-whitelisted: any PRESENT stats object
+// whose ok is not truthy (missing, null, a future builder shape) must surface the header —
+// a whitelist let the boolean-vs-number mismatch leave it dead once already.
+test("/accruals: a declarations stats object without a truthy ok surfaces the degradation header", async () => {
+  await withServer(async (base) => {
+    const r = await fetch(`${base}/accruals?symbol=SPYx&address=${OWNER}`);
+    assert.equal(r.headers.get("x-declarations-unavailable"), "1",
+      "an unset ok of a present stats object means 'not confirmed healthy'");
+  }, () => ({
+    walletScanner: async () => ({ owner: OWNER, signatures: 0, fetched: 0, skipped: [], truncated: false, accounts: new Map(), txs: [] }),
+    declarationsStats: { loaded: 0, reason: "boom" }, // ok is absent
+  }));
+});

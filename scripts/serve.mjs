@@ -148,7 +148,9 @@ for (const t of registry.filter((x) => x.issuer !== "backed")) {
   const priorEntry = journal[t.mint] ?? null;
   let parsed = null;
   try {
-    const raw = await rpcForJournal.call("getAccountInfo", [t.mint, { encoding: "jsonParsed", commitment: "confirmed" }]);
+    // boot-time point read, high lane: the journal loop must not queue behind a scan
+    // backlog left over from a previous process (the RpcClient priority contract)
+    const raw = await rpcForJournal.call("getAccountInfo", [t.mint, { encoding: "jsonParsed", commitment: "confirmed" }], { priority: "high" });
     parsed = parseScaledUiAmount(raw.value);
   } catch (err) {
     console.warn(`[serve] ${t.symbol}: on-chain journal unavailable (${err.message}) — fail-closed`);
@@ -276,7 +278,9 @@ const onchainCached = cached("onchain");
 const onchainReader = (mint) =>
   onchainCached(mint, () =>
     rpc
-      .call("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }])
+      // the vitrine's point read, high lane: this exact call used to stand in the
+      // scan backlog's tail for minutes
+      .call("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }], { priority: "high" })
       .then((result) => parseScaledUiAmount(result.value)),
   );
 

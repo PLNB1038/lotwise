@@ -19,7 +19,7 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   const tx = await client.call("getTransaction", [
     signature,
     { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 },
-  ], signal ? { signal } : undefined);
+  ], signal ? { signal, priority: "low" } : { priority: "low" });
   // null — transaction unavailable on the endpoint; undefined — RPC answered with neither
   // result nor error (a lying/throttling gateway): both are an honest skip of one transaction,
   // not a TypeError that takes down the entire wallet scan 
