@@ -363,3 +363,24 @@ console.log(`[serve] vitrine: http://${boundHost}:${bound.port}/`);
 console.log(`[serve] tokens: ${registry.length}, events: ${events.length}, on-chain RPC: ${rpcDisplay}`);
 console.log(`[serve] rate limits (per IP): ${rateLimits.scan.max}/min wallet scans, ${rateLimits.rpc.max}/min on-chain/prices (env: RATE_LIMIT_SCAN_PER_MIN, RATE_LIMIT_RPC_PER_MIN)`);
 console.log(`[serve] try: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);
+
+// SIGTERM (the systemd restart timer) and SIGINT used to kill the process outright:
+// a wallet scan in flight died mid-RPC — minutes of pacing quota burned for nothing,
+// the client saw a hard reset. The handler hands the process to server.shutdown: new
+// connections are refused at once, the scan gets a 15s grace window (it either finishes
+// — its client keeps the 200 — or is aborted), then the process exits ON ITS OWN.
+// 15s + the handler overhead fits the unit's TimeoutStopSec=30 (see the deployment
+// notes) — systemd's SIGKILL is the outer backstop, never the normal path.
+const SHUTDOWN_DRAIN_MS = 15_000;
+let stopping = false;
+const stop = () => {
+  if (stopping) return; // a repeated signal must not start a second drain on top of the first
+  stopping = true;
+  console.log(`[serve] shutdown: draining (${server.isScanBusy() ? "scan active" : "idle"})`);
+  server
+    .shutdown({ drainMs: SHUTDOWN_DRAIN_MS })
+    .catch((err) => console.error(`[serve] shutdown error: ${err?.message ?? err}`))
+    .finally(() => process.exit(0)); // the exit happens only after the drain, not at signal time
+};
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);

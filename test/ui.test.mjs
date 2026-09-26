@@ -810,3 +810,74 @@ test("wallet UI: known proceeds with unknown basis — shown as proceeds, not 'n
   assert.ok(html.includes("basis unknown"), "the reason P&L is absent is named");
   assert.ok(!html.includes("no priced disposals"), "the misleading 'no leg' sentence is gone for this case");
 });
+
+// A 16-digit multiplier is visual noise and a first reason not to trust the number:
+// the table shows a short value, the exact one rides the tooltip; the stat card speaks
+// human instead of "fail-closed reconcile policy"; the active-vs-effective "trap" that
+// IS the product story gets its explanation line.
+test("showcase: short multiplier with exact tooltip, human stat card, explained planes", async () => {
+  const { els } = runClient((url) => {
+    if (url.startsWith("/health")) return { ok: true, status: 200, body: { tokens: 1, events: 4, journal: null } };
+    if (url.startsWith("/summary")) return { ok: true, status: 200, body: [
+      { symbol: "SPYx", name: "S&P 500", issuer: "backed", mint: ADDR_A, decimals: 8, events: 4, currentMultiplier: "1.0032690125398187" },
+    ] };
+    if (url.startsWith("/events")) return { ok: true, status: 200, body: [] };
+    if (url.startsWith("/onchain")) return { ok: true, status: 200, body: {
+      api: "5", onChain: { active: "1", pending: "5", pendingEffectiveDate: "2026-06-10T04:30:00.000Z", hasExtension: true },
+      onChainEffective: "5", verdict: "ok",
+    } };
+    if (url.startsWith("/multiplier")) return { ok: true, status: 200, body: { now: "1.0032690125398187", events: 4 } };
+    return undefined;
+  });
+  await flush();
+  await flush(); // the second tick lets the selected token's /onchain promise land
+  const rows = els.get("tokens").innerHTML;
+  assert.ok(rows.includes(">1.003269<"), "the table shows a short multiplier");
+  assert.ok(!rows.includes(">1.0032690125398187<"), "the 16-digit string is not the visible text");
+  assert.ok(rows.includes('title="exact: 1.0032690125398187"'), "the exact value rides the tooltip");
+  const stats = els.get("stats").innerHTML;
+  assert.ok(stats.includes("cross-checked"), "the stat card speaks human");
+  assert.ok(!stats.includes("fail-closed"), "the jargon card is gone");
+  const planes = els.get("planes").innerHTML;
+  assert.ok(planes.includes("what this means"), "the active-vs-effective difference is explained");
+  assert.ok(planes.includes("raw trackers read the stale number"), "the product story is said where the trap is visible");
+});
+
+// An empty wallet card must show the effort and tell "no history at all" from "history
+// without tracked tokens" — a bare sentence read as a possible error.
+test("showcase: an empty wallet card names the signatures checked", async () => {
+  const rep = {
+    owner: ADDR_A,
+    counts: { signatures: 42, fetched: 40, skipped: 2, relevantTxs: 3 },
+    truncated: false, complete: true, tokens: [],
+  };
+  const { sb, els } = runScanClient((url) => url.startsWith("/lots?") ? { ok: true, status: 200, body: rep } : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const out = els.get("wallet-out").innerHTML;
+  assert.ok(out.includes("42 signatures checked"), "the effort is visible");
+  assert.ok(out.includes("none of the tracked tokens"), "the distinction is named");
+});
+
+// The page lives inside a template literal: a single backslash in the source (\d) is
+// cooked into a bare "d" in the emitted script, silently killing the whole-number guard
+// (an audit catch). The pin renders the REAL emitted page, not the source.
+test("fmtMul: whole multipliers stay whole in the EMITTED page script", async () => {
+  const { renderPage } = await import("../src/ui/page.mjs");
+  const vm = await import("node:vm");
+  const els = new Map();
+  const stub = (id) => {
+    if (!els.has(id)) els.set(id, { id, value: "", innerHTML: "", textContent: "", className: "", style: {}, onclick: null, scrollIntoView() {}, querySelectorAll: () => [] });
+    return els.get(id);
+  };
+  const sb = { document: { getElementById: stub, querySelectorAll: () => [] }, fetch: () => new Promise(() => {}) };
+  vm.createContext(sb);
+  const m = renderPage().match(/<script>([\s\S]*?)<\/script>/);
+  new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb);
+  assert.equal(sb.fmtMul("5"), "5", "a whole multiplier is not padded to 5.000000");
+  assert.equal(sb.fmtMul("0"), "0", "zero stays zero");
+  assert.equal(sb.fmtMul("1"), "1", "one stays one");
+  assert.equal(sb.fmtMul("1.0032690125398187"), "1.003269", "a long decimal shortens");
+  assert.ok(String(sb.fmtMul("12345678901234567890")).length < 25, "a huge integer does not explode into a float artifact");
+});

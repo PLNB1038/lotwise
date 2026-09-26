@@ -107,6 +107,26 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // the running scan is untouched. The semaphore covers only the RPC phase (the scanner
   // call): report building is local and instant.
   let scanActive = false;
+  // shutdown bookkeeping for the ONE slot: the AbortController of the scan in flight
+  // (so a grace-window expiry can abort the scan point-blank, not just know THAT one
+  // runs) and the waiters to release when the slot frees. The begin/end pair below
+  // serves both routes — /lots and /accruals already duplicated the semaphore checks,
+  // and shutdown bookkeeping duplicated per route would drift exactly the same way.
+  let activeScanAbort = null;
+  let scanSettlers = [];
+  const scanBegin = (abort) => {
+    scanActive = true;
+    activeScanAbort = abort;
+  };
+  const scanEnd = () => {
+    scanActive = false;
+    activeScanAbort = null;
+    // waiters fire AFTER the flags flip: a shutdown resolved before scanActive=false
+    // could let the process exit while the route is still inside its own finally
+    const settlers = scanSettlers;
+    scanSettlers = [];
+    for (const settle of settlers) settle();
+  };
   const scanBusy = (res) => json(res, 503, { error: "another wallet scan is in progress, retry shortly", kind: "scan-busy" }, { "Retry-After": "30" });
   // A broken declarations channel makes /accruals 200 [] indistinguishable from "no
   // dividends" — the separator lives in a header so the body contract stays an array
@@ -133,9 +153,20 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // so log lines and rate buckets corroborate. Off by default: tests/embedders run
       // quiet, the demo deployment opts in.
       const startedAt = Date.now();
+      const ua = () => String(req.headers["user-agent"] ?? "-").slice(0, 80);
+      // the URL is capped: a 3KB query made a 3KB journal line; the wallet address
+      // part of /lots fits comfortably, the noise does not
+      const shortUrl = () => String(req.url).slice(0, 200);
       res.on("finish", () => {
-        const ua = String(req.headers["user-agent"] ?? "-").slice(0, 80);
-        console.log(`[http] ${clientKey(req)} ${req.method} ${req.url} ${res.statusCode} ${Date.now() - startedAt}ms ${ua}`);
+        console.log(`[http] ${clientKey(req)} ${req.method} ${shortUrl()} ${res.statusCode} ${Date.now() - startedAt}ms ${ua()}`);
+      });
+      // a connection torn down BEFORE a response (an impatient visitor, a cancelled
+      // scan) never fires "finish" — without this hook the visit would be invisible
+      // to the very log that exists to see visitors
+      res.on("close", () => {
+        if (!res.writableFinished) {
+          console.log(`[http] ${clientKey(req)} ${req.method} ${shortUrl()} aborted ${Date.now() - startedAt}ms ${ua()}`);
+        }
       });
     }
     try {
@@ -256,11 +287,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // honest retry (after the scan released) hit a 429 on top of the wait
       if (scanActive) return scanBusy(res);
       if (!allow(scanLimiter, req, res)) return;
-      scanActive = true;
       // A client that walked away must not keep burning the RPC quota : abort
       // is passed into the scanner, the scan stops between pages/transactions; the
       // result of a cancelled scan is NOT cached (the cache helper only caches success).
       const abort = new AbortController();
+      scanBegin(abort);
       req.on("aborted", () => abort.abort());
       let scan;
       try {
@@ -268,7 +299,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       } finally {
-        scanActive = false;
+        scanEnd();
       }
       // the report is assembled in the server: this is where the multiplier timelines live
       // a scanner that answered nonsense used to fall into the anonymous 500 —
@@ -318,8 +349,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       if (scanActive) return scanBusy(res);
       if (!allow(scanLimiter, req, res)) return;
-      scanActive = true;
       const abort = new AbortController();
+      scanBegin(abort);
       req.on("aborted", () => abort.abort());
       let scan;
       try {
@@ -327,7 +358,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
       } finally {
-        scanActive = false;
+        scanEnd();
       }
       // a scanner that answered nonsense used to fall into the anonymous 500 —
       // the real reason (a ReportError names the shape) is the contract
@@ -568,6 +599,39 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       return json(res, 500, { error: "internal error" });
     }
   });
+
+  // Graceful stop for the process signals (serve.mjs) and for tests: close() alone stops
+  // accepting connections but node keeps the process alive while a handler runs — and the
+  // wallet scan runs for minutes of RPC pacing, so a plain SIGTERM used to murder it
+  // mid-scan (the daily restart timer burned the work, the client saw a hard reset).
+  // drainMs is the grace window: a scan finishing inside it keeps its work AND its client
+  // (the 200 goes out); a scan outliving the window is aborted point-blank — the RPC burn
+  // stops, the route's own catch answers the client, and the promise resolves at the
+  // window's edge (waiting for the aborted scan to settle would only delay the restart).
+  // In-flight non-scan requests are NOT waited for: every route except the scans answers
+  // within its own RPC timeout, so close() plus the exit after this promise is enough.
+  server.shutdown = ({ drainMs = 15_000 } = {}) =>
+    new Promise((resolve) => {
+      server.close(); // the listener is down: no new connection enters the drain
+      // keep-alive sockets without a request in flight would hold the process for
+      // their own idle timeout — they carry nothing, drop them at once
+      server.closeIdleConnections();
+      if (!scanActive) return resolve();
+      let done = false;
+      let timer = null;
+      const settle = () => {
+        if (done) return; // the scan may settle and the timer may fire in the same tick — first wins
+        done = true;
+        if (timer !== null) clearTimeout(timer);
+        resolve();
+      };
+      scanSettlers.push(settle); // the scan finishing inside the window releases the drain
+      timer = setTimeout(() => {
+        activeScanAbort?.abort(); // the window ran out: stop the scan's RPCs point-blank
+        settle();
+      }, drainMs);
+    });
+  server.isScanBusy = () => scanActive; // the SIGTERM handler's "scan active|idle" log line
 
   return new Promise((resolve, reject) => {
     server.once("error", reject); // a busy port and the like — reject instead of a raw crash

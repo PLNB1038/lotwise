@@ -195,7 +195,16 @@ export function renderPage() {
 var state = { tokens: [], selected: null };
 
 function el(id) { return document.getElementById(id); }
-function fmtMul(s) { return s === '1' ? '1' : s; }
+// The table shows a SHORT multiplier (6 decimals read fine; 16 are visual noise and a
+// first reason not to trust the number) — the exact value rides the cell's tooltip.
+function fmtMul(s) {
+  if (s === '1') return '1';
+  // the doubled backslash: this script is emitted through a template literal, a single
+  // \d is cooked into a bare "d" and the guard silently dies (an audit catch)
+  if (/^\\d+$/.test(s)) return s;
+  var n = Number(s);
+  return isFinite(n) ? n.toFixed(6) : s;
+}
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
 function esc(s) {
@@ -219,7 +228,7 @@ function renderStats(h, tokens) {
     '<div class="stat"><b>' + esc(h.tokens) + '</b><i>tokens tracked</i></div>' +
     '<div class="stat"><b>' + esc(h.events) + '</b><i>events normalized</i></div>' +
     '<div class="stat"><b>' + Object.keys(issuers).length + '</b><i>issuers</i></div>' +
-    '<div class="stat"><b>fail-closed</b><i>reconcile policy</i></div>';
+    '<div class="stat"><b>cross-checked</b><i>issuer vs on-chain</i></div>';
   // The RPC may have been down at startup: journal.unavailable — tokens not read from
   // the chain, and the showcase paints multiplier "1" for them. Silence = a quiet lie;
   // show an honest warn.
@@ -255,7 +264,7 @@ function renderTokens(list) {
       '<td class="num">' + esc(t.events) + '</td>' +
       '<td class="num">' + (t.excluded
         ? '<span class="err" title="' + esc(t.excludedReason || 'timeline error') + '">excluded</span>'
-        : esc(fmtMul(t.currentMultiplier))) + '</td></tr>';
+        : '<span title="exact: ' + esc(t.currentMultiplier) + '">' + esc(fmtMul(t.currentMultiplier)) + '</span>') + '</td></tr>';
   }).join('');
   document.querySelectorAll('#tokens tr').forEach(function (tr) {
     tr.onclick = function () { select(tr.getAttribute('data-symbol')); };
@@ -420,10 +429,18 @@ function loadPlanes(t) {
       var b = res.body;
       var rows =
         '<dt>issuer API multiplier</dt><dd>' + esc(b.api) + '</dd>' +
-        '<dt>on-chain active</dt><dd>' + esc(b.onChain.active) + '</dd>' +
-        '<dt>on-chain pending</dt><dd>' + esc(b.onChain.pending || 'none') +
+        '<dt>live on-chain now</dt><dd>' + esc(b.onChain.active) + '</dd>' +
+        '<dt>issuer plan (pending)</dt><dd>' + esc(b.onChain.pending || 'none') +
         (b.onChain.pendingEffectiveDate ? ' (activates ' + esc(b.onChain.pendingEffectiveDate) + ')' : '') + '</dd>' +
         '<dt>on-chain effective</dt><dd>' + esc(b.onChainEffective) + '</dd>';
+      // A visitor sees "live 1" next to a headline multiplier of 5 and reads a
+      // contradiction. It is the story of the product: balances ALREADY run at the
+      // effective value while the raw storage never moved — say it, do not leave the
+      // trap unexplained.
+      if (b.verdict === 'ok' && String(b.onChain.active) !== String(b.onChainEffective)) {
+        rows += '<dt>what this means</dt><dd>balances already run at ×' + esc(b.onChainEffective) +
+          '; the raw count still says ' + esc(b.onChain.active) + ' — raw trackers read the stale number</dd>';
+      }
       if (!b.onChain.hasExtension) {
         rows += '<dt>extension</dt><dd>scaledUiAmount not present — plain token, multiplier 1</dd>';
       }
@@ -648,7 +665,9 @@ function renderWallet(rep) {
       (excludedCount > 0 ? ' — ' + excludedCount + ' tokens excluded' : '') + '</dd>' +
     moneyRow + '</dl>';
   var body = rep.tokens.length === 0
-    ? '<p class="note">No tracked tokens found in this wallet.</p>'
+    ? '<p class="note">No tracked tokens found in this wallet — ' + esc(c.signatures) +
+        ' signatures checked, ' + esc(c.skipped) + ' skipped (' +
+        (Number(c.signatures) === 0 ? 'the wallet has no history at all' : 'it holds none of the tracked tokens') + ').</p>'
     : rep.tokens.map(function (t) {
         // adjusted was not computed: the token is excluded from multipliers (t.excluded) or
         // the API honestly reported adjustedAvailable:false (an excluded mint). The raw
