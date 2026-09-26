@@ -10,6 +10,20 @@ the retry policy, rate limits) lives in the README and applies here too.
 Both endpoints are synchronous: wallet scans walk full transaction history, and
 an active wallet can take minutes.
 
+## For the integrator (limits stated up front)
+
+- **No auth**: the API is read-only and public; there is nothing to authenticate with.
+- **Rate limits, per client IP** (defaults): the scan bucket (`/lots`, `/accruals`) is
+  12 requests/min; the RPC bucket (`/onchain`, `/crosscheck`) is 60/min. Every attempt
+  counts, including refusals — see the README error contract for the two rate-limit
+  shapes (429 + `Retry-After`, and the relayed upstream 503).
+- **One scan at a time** (server-wide): a concurrent scan answers `503 kind:"scan-busy"`
+  with `Retry-After` — retry, do not parallelize.
+- **No CORS headers are served**: browsers on other origins will fail — the API is for
+  server-side consumers and the bundled showcase.
+- **No pagination and no versioning**: responses are whole; the contract is pinned by
+  the test suite and a version bump will be a breaking announcement, not a silent drift.
+
 ---
 
 ## `/lots?address=`

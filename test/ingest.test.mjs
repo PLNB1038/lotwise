@@ -340,3 +340,60 @@ test("rpc: a transport AbortError without a caller signal stays a retryable netw
   assert.equal(threw.kind, "network", "no caller signal — no 'aborted' verdict");
   assert.equal(fetches, 4, "all attempts used: a transport abort is retried like any network error");
 });
+
+// A departed caller must leave the PACING LANE at once: the lane wait used to be a
+// bare promise without the signal, so an aborted scan sat out its queued turn (>= one
+// 350ms tick) before noticing the abort — longer than the shutdown grace after exit,
+// and the drain-abort's 503 never reached the client (caught live on the prod probe).
+test("rpc: an abort during the lane wait rejects immediately and frees the queue", async () => {
+  const { RpcClient } = await import("../src/ingest/rpc.mjs");
+  const ac = new AbortController();
+  let clock = 0;
+  const order = [];
+  const client = new RpcClient({
+    endpoint: "https://rpc.example",
+    minIntervalMs: 350,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)), // real-ish pacing
+    fetcher: async (url, opts) => {
+      order.push("fetch");
+      return { ok: true, status: 200, json: async () => ({ result: null }) };
+    },
+  });
+  // fill the lane with two low calls, then a third with a signal
+  const p1 = client.call("a", [], { priority: "low" });
+  const p2 = client.call("b", [], { priority: "low" });
+  const gated = client.call("c", [], { priority: "low", signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 30)); // the lane is populated, p1 owns the slot
+  const t0 = Date.now();
+  ac.abort();
+  let threw;
+  try { await gated; } catch (e) { threw = e; }
+  const dt = Date.now() - t0;
+  assert.ok(threw, "the aborted lane waiter rejects");
+  assert.equal(threw.kind, "aborted", "a typed abort");
+  assert.ok(dt < 300, `immediately, not after its queued turn (took ${dt}ms)`);
+  await Promise.allSettled([p1, p2]);
+});
+
+// The same for the RETRY BACKOFF: an abort during the exponential sleep must cut it
+// short — a 2.8s sleep outlives the shutdown grace exactly like the lane wait did.
+test("rpc: an abort during the retry backoff cuts the sleep short", async () => {
+  const { RpcClient } = await import("../src/ingest/rpc.mjs");
+  const ac = new AbortController();
+  const client = new RpcClient({
+    endpoint: "https://rpc.example",
+    minIntervalMs: 350,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    fetcher: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+  });
+  const inflight = client.call("x", [], { signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 30));
+  const t0 = Date.now();
+  ac.abort();
+  let threw;
+  try { await inflight; } catch (e) { threw = e; }
+  const dt = Date.now() - t0;
+  assert.ok(threw, "rejects");
+  assert.equal(threw.kind, "aborted", "typed abort, not a burned backoff");
+  assert.ok(dt < 300, `the backoff sleep is cut short (took ${dt}ms)`);
+});

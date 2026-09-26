@@ -96,9 +96,27 @@ export class RpcClient {
     }
   }
 
-  _throttle(priority) {
+  _throttle(priority, signal) {
     return new Promise((resolve, reject) => {
-      this._lanes[priority].push({ resolve, reject });
+      const waiter = { resolve, reject };
+      this._lanes[priority].push(waiter);
+      if (signal) {
+        const onAbort = () => {
+          const lane = this._lanes[priority];
+          const i = lane.indexOf(waiter);
+          if (i !== -1) {
+            // a departed caller leaves the QUEUE at once: it neither waits out its
+            // turn nor burns a paced slot. A bare promise here once outlived the
+            // shutdown grace — the drain-abort's 503 never reached the client.
+            lane.splice(i, 1);
+            this._drain();
+            reject(new RpcError("aborted", "request aborted by the caller"));
+          }
+          // already selected: the post-await guard in call() throws the same error
+        };
+        if (signal.aborted) return onAbort();
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
       this._drain();
     });
   }
@@ -118,10 +136,20 @@ export class RpcClient {
       // the caller departed before this attempt even started: stop now — a retry would
       // burn quota and pacing time for a client that is already gone
       if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
-      if (attempt > 0) await this.sleep(this.minIntervalMs * 2 ** attempt); // exponential backoff
+      if (attempt > 0) {
+        // the backoff is abortable too: a 2.8s sleep outlives the shutdown grace
+        // exactly like the lane wait did — race the sleep against the departure
+        await Promise.race([
+          this.sleep(this.minIntervalMs * 2 ** attempt), // exponential backoff
+          signal
+            ? new Promise((_, rej) => signal.addEventListener("abort",
+                () => rej(new RpcError("aborted", "request aborted by the caller")), { once: true }))
+            : new Promise(() => {}),
+        ]);
+      }
       // a retry re-enters ITS OWN lane: a scan call leaving backoff must not resurface
       // as high traffic just because it is technically a fresh slot request
-      await this._throttle(priority);
+      await this._throttle(priority, signal);
       // the abort is re-checked AFTER the lane wait too: a caller that departed while
       // this call sat in the queue must not spend a paced slot and an RPC request —
       // the fetch would reject immediately, but the slot (and requestCount) is spent
