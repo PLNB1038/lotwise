@@ -270,3 +270,22 @@ test("supersedes: a legacy file without the field reports superseded 0 and loads
   assert.equal(r.loaded, 1);
   assert.equal(r.superseded, 0, "no corrections in a legacy file");
 });
+
+// A file with SEVERAL broken supersedes references must name them ALL in one refusal:
+// one-error-per-restart used to mean N edit-restart cycles for the operator (each boot
+// is 14-90s on the prod container) before the file loads clean.
+test("supersedes: every dangling reference is named in the single all-or-nothing refusal", () => {
+  const file = write([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/a" },
+    { symbol: "SPYx", exDate: "2026-07-15", amountPerUnitRaw: "7000000", decimals: 8, sourceUrl: "https://issuer.example/b" },
+    // two corrections to targets that DO NOT exist
+    { symbol: "SPYx", exDate: "2026-06-20", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/c",
+      supersedes: { exDate: "2026-06-11", amountPerUnitRaw: "4000000" } },
+    { symbol: "SPYx", exDate: "2026-07-16", amountPerUnitRaw: "3000000", decimals: 8, sourceUrl: "https://issuer.example/d",
+      supersedes: { exDate: "2026-07-01", amountPerUnitRaw: "7000000" } },
+  ]);
+  const r = loadDeclarationsFile(file, REG);
+  assert.equal(r.ok, false, "the file is refused");
+  assert.match(String(r.reason), /2026-06-11/, "the first dangling target is named");
+  assert.match(String(r.reason), /2026-07-01/, "the second dangling target is named too — one restart fixes all");
+});

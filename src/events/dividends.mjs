@@ -272,15 +272,20 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
   // reference or a doubly-superseded target refuses the WHOLE feed (all-or-nothing, like
   // a malformed line): a half-applied correction leaves the stale amount accruing while
   // the operator believes it replaced — the exact silent doubling the field exists to
-  // prevent. Serve-side this lands in /health declarations.ok = 0 with the reason logged.
+  // prevent. ALL broken references are named in the single refusal: one error per boot
+  // used to mean an edit-restart cycle per reference (each restart re-pulls the feed).
+  // Serve-side this lands in /health declarations.ok = 0 with the reason logged.
+  const supersedeProblems = [];
   for (const [targetId, corrections] of supersedeTargets) {
     const [day, amount] = targetId.split("|");
     if (corrections > 1) {
-      throw new DeclarationError(`supersedes: the target (ex-day ${day}, amountPerUnitRaw ${amount}) is already superseded by another declaration — one correction per target, resolve the file`);
+      supersedeProblems.push(`supersedes: the target (ex-day ${day}, amountPerUnitRaw ${amount}) is already superseded by another declaration — one correction per target, resolve the file`);
+    } else if (!plainIdentities.has(targetId)) {
+      supersedeProblems.push(`supersedes: no declaration to replace (ex-day ${day}, amountPerUnitRaw ${amount} is not declared) — a correction must name an existing declaration of the same symbol`);
     }
-    if (!plainIdentities.has(targetId)) {
-      throw new DeclarationError(`supersedes: no declaration to replace (ex-day ${day}, amountPerUnitRaw ${amount} is not declared) — a correction must name an existing declaration of the same symbol`);
-    }
+  }
+  if (supersedeProblems.length > 0) {
+    throw new DeclarationError(supersedeProblems.join("; "));
   }
   // REPLACEMENT, not addition: the superseded events are dropped — the correction
   // accrues ALONE (the /accruals day-key dedup is untouched: it sees a resolved feed).

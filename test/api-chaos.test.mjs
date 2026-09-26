@@ -446,3 +446,58 @@ test("two concurrent requests to one resource: the first render of \"/\" and /mu
     await assertAlive(base);
   });
 });
+
+// One wallet scan at a time (admission control): a scan holds the RPC pacing queue for
+// minutes on a real wallet (62 derived ATA sources); a second concurrent scan used to
+// pile onto the same queue — the backlog grew without bound and even /onchain waited
+// behind it. The second address now gets a typed 503 with Retry-After instead of a hang.
+test("scan admission: a second concurrent wallet scan gets a typed 503, the first completes", async () => {
+  const OTHER = "EJBQLNEH1x6buMSpUS4TLCknXygyfkbSQ2eyFqWEkv5U"; // valid base58, a different wallet
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  await withServer(async (base) => {
+    const first = fetch(`${base}/lots?address=${OWNER}`);
+    try {
+      await new Promise((r) => setTimeout(r, 60)); // let the first scan actually start
+      const second = await fetch(`${base}/lots?address=${OTHER}`);
+      assert.equal(second.status, 503, "the concurrent scan is refused, not queued forever");
+      const body = await second.json();
+      assert.equal(body.kind, "scan-busy", "a typed refusal the client can retry on");
+      assert.ok(Number(second.headers.get("retry-after")) > 0, "a retry hint is present");
+    } finally {
+      release(); // never leave the first scan gated on a failed assert
+    }
+    const r1 = await first;
+    assert.equal(r1.status, 200, "the first scan is unaffected and completes");
+  }, () => ({
+    walletScanner: async (address) => {
+      if (address === OWNER) await gate;
+      return { owner: address, signatures: 0, fetched: 0, skipped: [], truncated: false, accounts: new Map(), txs: [] };
+    },
+  }));
+});
+
+// A broken declarations channel must be visible WHERE the dividends are consumed, not
+// only in /health (which integrators do not poll): /accruals answers 200 [] in ALL three
+// states — no declarations declared, none for this token, channel down — and the header
+// is the only honest separator that does not break the array contract of the body.
+test("/accruals: a broken declarations channel is named in a response header", async () => {
+  await withServer(async (base) => {
+    const down = await fetch(`${base}/accruals?symbol=SPYx&address=${OWNER}`);
+    assert.equal(down.status, 200);
+    assert.equal(down.headers.get("x-declarations-unavailable"), "1",
+      "the degradation is visible where the data is consumed");
+    assert.deepEqual(await down.json(), [], "the body contract is unchanged");
+  }, () => ({
+    walletScanner: async () => ({ owner: OWNER, signatures: 0, fetched: 0, skipped: [], truncated: false, accounts: new Map(), txs: [] }),
+    declarationsStats: { ok: false, loaded: 0, superseded: 0, reason: "declarations rejected: test" },
+  }));
+  await withServer(async (base) => {
+    const up = await fetch(`${base}/accruals?symbol=SPYx&address=${OWNER}`);
+    assert.equal(up.headers.get("x-declarations-unavailable"), null,
+      "a healthy channel adds no header");
+  }, () => ({
+    walletScanner: async () => ({ owner: OWNER, signatures: 0, fetched: 0, skipped: [], truncated: false, accounts: new Map(), txs: [] }),
+    declarationsStats: { ok: true, loaded: 0, superseded: 0, reason: null },
+  }));
+});

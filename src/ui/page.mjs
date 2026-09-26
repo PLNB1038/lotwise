@@ -535,6 +535,9 @@ function fmtUi(rawStr, decimals) {
 function humanScanError(body, rawMsg) {
   var m = String(rawMsg || (body && body.error) || '');
   var kind = body && body.kind;
+  if (kind === 'scan-busy') {
+    return 'Another wallet scan is in progress — wait a moment and scan again.';
+  }
   if (kind === 'rate-limit' || /HTTP 429|rate limit/i.test(m)) {
     return 'Rate limit reached (public RPC) — wait a moment and scan again.';
   }

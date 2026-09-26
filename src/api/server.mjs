@@ -100,6 +100,19 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
 
   // Route list for an honest 404: one constant, two consumers (the "//x" guard
   // below and the router's final 404) — otherwise the lists drift apart on the next route.
+  // Admission control for wallet scans: ONE scan at a time. A real-wallet scan holds the
+  // RPC pacing queue for minutes (dozens of signature sources), and concurrent scans used
+  // to pile onto the same queue — the backlog grew without bound and even /onchain waited
+  // behind it. A concurrent scan gets a typed 503 with a retry hint instead of a hang;
+  // the running scan is untouched. The semaphore covers only the RPC phase (the scanner
+  // call): report building is local and instant.
+  let scanActive = false;
+  const scanBusy = (res) => json(res, 503, { error: "another wallet scan is in progress, retry shortly", kind: "scan-busy" }, { "Retry-After": "30" });
+  // A broken declarations channel makes /accruals 200 [] indistinguishable from "no
+  // dividends" — the separator lives in a header so the body contract stays an array
+  // (the /health mirror is for operators, integrators do not poll /health).
+  const declHeaders = () => (declarationsStats && declarationsStats.ok === false ? { "X-Declarations-Unavailable": "1" } : {});
+
   const ENDPOINTS = ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots", "/accruals", "/crosscheck"];
 
   // Resolve only inside the registry: an unknown mint/symbol — 400, not "empty data".
@@ -220,6 +233,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
       if (!allow(scanLimiter, req, res)) return;
+      if (scanActive) return scanBusy(res);
+      scanActive = true;
       // A client that walked away must not keep burning the RPC quota : abort
       // is passed into the scanner, the scan stops between pages/transactions; the
       // result of a cancelled scan is NOT cached (the cache helper only caches success).
@@ -230,6 +245,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         scan = await walletScanner(address, { signal: abort.signal });
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
+      } finally {
+        scanActive = false;
       }
       // the report is assembled in the server: this is where the multiplier timelines live
       // a scanner that answered nonsense used to fall into the anonymous 500 —
@@ -277,6 +294,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
       if (!allow(scanLimiter, req, res)) return;
+      if (scanActive) return scanBusy(res);
+      scanActive = true;
       const abort = new AbortController();
       req.on("aborted", () => abort.abort());
       let scan;
@@ -284,6 +303,8 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         scan = await walletScanner(address, { signal: abort.signal });
       } catch (err) {
         return json(res, 503, { error: err.message, kind: err.kind ?? null });
+      } finally {
+        scanActive = false;
       }
       // a scanner that answered nonsense used to fall into the anonymous 500 —
       // the real reason (a ReportError names the shape) is the contract
@@ -296,7 +317,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const token = report.tokens.find((t) => t.mint === mint);
       const dividends = (eventsByMint.get(mint) ?? []).filter((e) => e.type === "DIVIDEND_ACCRUAL");
       // no position in the token or no dividend events — no accruals: an honest []
-      if (!token || dividends.length === 0) return json(res, 200, []);
+      if (!token || dividends.length === 0) return json(res, 200, [], declHeaders());
       // the accrual base is the position held ON THE EX-DATE,
       // replayed from the scan window's deltas — Σ of this owner's deltas in transactions
       // strictly earlier than the ex-date (unix ms). The previous shape fed the engine
@@ -365,7 +386,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
             ...(incomplete || negative ? { baseIncomplete: true } : {}),
           };
         });
-        return json(res, 200, rows);
+        return json(res, 200, rows, declHeaders());
       } catch (err) {
         // a broken event from the store does not take the server down: a clear reason instead of a generic 500
         console.error(`[api] /accruals refused a store event: ${err.message}`);
