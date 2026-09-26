@@ -689,7 +689,9 @@ function renderWallet(rep) {
                 ? '<span class="note">proceeds ' + esc(fmtUi(String(proceedsOnlySum), 6)) + ' USDC booked on ' +
                   proceedsOnly.length + ' disposal' + (proceedsOnly.length > 1 ? 's' : '') +
                   ' — basis unknown (bought without a USDC leg), P&L not computed</span>'
-                : '<span class="note">no priced disposals — the sales had no USDC leg</span>') + '</dd>'
+          : '<span class="note">no priced disposals — ' + (moneyOnly.length
+              ? 'the USDC leg did not price this trade (see the USDC rows above)'
+              : 'the sales had no USDC leg') + '</span>') + '</dd>'
           : '';
         return '<div class="card"><h3>' + esc(t.symbol) + ' — ' + esc(t.name) + '</h3><dl class="kv">' +
           '<dt>' + (t.reconciles ? 'raw balance (reconciles with chain)' : 'net delta of scan window — not an on-chain balance') + '</dt><dd>' +

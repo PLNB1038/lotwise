@@ -740,6 +740,48 @@ test("wallet UI: an old cached report (no realized array) renders exactly as bef
   assert.ok(!html.includes("unpriced"), "no unpriced notes on a legacy report");
 });
 
+// a report WITH moneyOnly rows must not say "the sales had no USDC leg" — the leg
+// exists, it sits in the USDC rows right above; only a genuinely legless report keeps
+// the old sentence
+test("wallet UI: unpriced disposals with money in moneyOnly — the leg is named, not denied", async () => {
+  const rep = {
+    owner: ADDR_A,
+    counts: { signatures: 2, fetched: 2, skipped: 0, relevantTxs: 2 },
+    truncated: false, complete: true,
+    moneyOnly: [{ signature: "mixed", date: "2026-03-01T00:00:00.000Z", mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", amountRaw: "10500000" }],
+    tokens: [{
+      symbol: "SPYx", name: "S&P 500", decimals: 8,
+      rawBalance: "0", netDeltaRaw: "0", onchainNow: "0", reconciles: true,
+      multiplier: { now: "1", events: 0 },
+      adjusted: { exact: true, whole: "0", remainder: "0", den: "1" },
+      lots: [],
+      realized: [
+        { date: "2026-03-01T00:00:00.000Z", qtyRaw: "10", basisRaw: "9000000", basisKnown: true, proceedsRaw: null, proceedsKnown: false, pnlRaw: null },
+      ],
+      realizedCount: 1, realizedQtyRaw: "10", gaps: [],
+    }],
+  };
+  const { sb, els } = runScanClient((url) => url.startsWith("/lots?") ? { ok: true, status: 200, body: rep } : undefined);
+  els.get("addr-in").value = ADDR_A;
+  sb.scanWalletUi();
+  await flush();
+  const html = els.get("wallet-out").innerHTML;
+  assert.ok(html.includes("the USDC leg did not price this trade"),
+    "the unpriced card names the unattributed leg, pointing at the USDC rows");
+  assert.ok(!html.includes("had no USDC leg"),
+    "the old sentence lies in a report that literally shows the USDC rows above");
+
+  const legless = { ...rep, moneyOnly: undefined, tokens: [{ ...rep.tokens[0], realized: [
+    { date: "2026-03-01T00:00:00.000Z", qtyRaw: "1", basisRaw: "9000000", basisKnown: true, proceedsRaw: null, proceedsKnown: false, pnlRaw: null },
+  ] }] };
+  const leglessRun = runScanClient((url) => url.startsWith("/lots?") ? { ok: true, status: 200, body: legless } : undefined);
+  leglessRun.els.get("addr-in").value = ADDR_A;
+  leglessRun.sb.scanWalletUi();
+  await flush();
+  assert.ok(leglessRun.els.get("wallet-out").innerHTML.includes("had no USDC leg"),
+    "a genuinely legless sale (a barter) keeps the old honest sentence");
+});
+
 // proceeds booked without a basis deserve their own sentence — not the
 // "no USDC leg" text that hides the money the sales DID bring in
 test("wallet UI: known proceeds with unknown basis — shown as proceeds, not 'no priced disposals'", async () => {

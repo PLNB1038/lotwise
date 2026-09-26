@@ -336,6 +336,26 @@ test("mixed legs: a round-trip mixed into a priced sale withdraws the pricing �
   assert.equal(rep.tokens.some((t) => t.mint === SPYx), false, "the round-trip token is no position: no phantom row");
 });
 
+test("mixed legs: a money mint is never a zero-net trace even if registry drift ever lists it as tracked", async () => {
+  // hardening: the zeroNet filter must exclude money mints explicitly — a USDC account
+  // with no net change rides along almost every swap, and were USDC ever added to the
+  // tracked registry, its presence would withdraw the pricing of every priced trade
+  const { fetchWalletDeltas } = await import("../src/ingest/tx.mjs");
+  const MONEY = USDC_MINT;
+  const tx = {
+    slot: 70, blockTime: BT,
+    meta: meta(
+      [row(0, OWNER, SPYx, 0), row(1, OWNER, MONEY, 5_000_000)],
+      [row(0, OWNER, SPYx, 10), row(1, OWNER, MONEY, 5_000_000)],
+    ),
+  };
+  const client = { async call(method, params) { if (method === "getTransaction") return tx; throw new Error("unexpected " + method); } };
+  const out = await fetchWalletDeltas(client, "sig", new Set([SPYx, MONEY]), { moneyMints: new Set([MONEY]) });
+  assert.deepEqual(out.zeroNetMints, [], "the money mint's zero-net account is not a round-trip trace of a tracked position");
+  assert.deepEqual(out.deltas.map((d) => d.mint), [SPYx], "the tracked buy is the delta");
+  assert.deepEqual(out.moneyDeltas, [], "the zero-net money leg is not a money delta");
+});
+
 test("mixed legs: the fee of a two-token swap (both legs tracked) is visible — it vanished before", async () => {
   // SPYx → AAPLx through USDC with a 30_000 fee: neither leg is priced (the net USDC of a
   // two-legged swap is nobody's basis — unchanged), but the fee itself used to disappear

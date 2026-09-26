@@ -80,9 +80,11 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   // means the tx DID touch the token (a same-tx round-trip, a self-transfer between the
   // owner's own accounts). The pricing rule needs that trace: without it, a round-trip
   // mixed into a priced trade silently rode the trade's money leg — the spread ended up
-  // in somebody else's proceeds. Money mints never land here (they are not positions).
+  // in somebody else's proceeds. Money mints never land here even if registry drift ever
+  // lists them as tracked — a zero-net money account rides along almost every swap and
+  // is not a round-trip trace of a position.
   const zeroNetMints = [...byOwner.values()]
-    .filter((d) => d.deltaRaw === 0n && match(d.mint))
+    .filter((d) => d.deltaRaw === 0n && match(d.mint) && !isMoney(d.mint))
     .map(({ owner, mint }) => ({ owner, mint }));
 
   // Money legs: the same owner-level aggregation, kept separately so the report can
