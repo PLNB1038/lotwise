@@ -281,3 +281,42 @@ test("a creation (no pre) and a closure (no post) of an account with a foreign k
   assert.equal(r.deltas.find((d) => d.owner === W1).deltaRaw, -30n); // a closure
   assert.equal(r.deltas.find((d) => d.owner === W2).deltaRaw, 77n); // a creation
 });
+
+// A scan's abort signal must reach the WIRE: the client's fetch used to go out without
+// it, so a departed browser left the scan (and the one-slot scan semaphore) held for the
+// RPC's own timeout — up to minutes per call, tens of minutes per scan. The signal is
+// passed through, and an abort is an IMMEDIATE stop: never a retry subject.
+test("rpc: the caller's signal is passed to fetch and an abort stops the call without retries", async () => {
+  const { RpcClient } = await import("../src/ingest/rpc.mjs");
+  const ac = new AbortController();
+  let fetches = 0;
+  let seenSignal = null;
+  const client = new RpcClient({
+    endpoint: "https://rpc.example",
+    sleep: async () => {},
+    fetcher: (url, opts) => {
+      fetches++;
+      seenSignal = opts?.signal ?? null;
+      return new Promise((resolve, reject) => {
+        const s = opts?.signal;
+        const abortErr = () => Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+        if (!s) {
+          // no signal reaches the wire (the pre-fix reality): a REAL fetch would hang for
+          // the transport timeout — simulated short so the red test fails, not hangs
+          return setTimeout(() => reject(new Error("simulated transport timeout (no signal passed)")), 200);
+        }
+        if (s.aborted) return reject(abortErr());
+        s.addEventListener("abort", () => reject(abortErr()));
+      });
+    },
+  });
+  const inflight = client.call("getAccountInfo", ["x"], { signal: ac.signal });
+  await new Promise((r) => setTimeout(r, 10));
+  ac.abort();
+  let threw;
+  try { await inflight; } catch (e) { threw = e; }
+  assert.ok(threw, "the aborted call rejects immediately");
+  assert.equal(threw.kind, "aborted", "a typed abort, not a retried network error");
+  assert.equal(fetches, 1, "no retry after an abort — the caller is gone");
+  assert.equal(seenSignal, ac.signal, "the signal reaches the wire");
+});

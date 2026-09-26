@@ -285,7 +285,11 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
     }
   }
   if (supersedeProblems.length > 0) {
-    throw new DeclarationError(supersedeProblems.join("; "));
+    // a file with hundreds of broken references must not build a hundred-kilobyte
+    // reason: the first ten teach the fix, the rest are counted
+    const listed = supersedeProblems.slice(0, 10);
+    if (supersedeProblems.length > 10) listed.push(`…and ${supersedeProblems.length - 10} more broken references`);
+    throw new DeclarationError(listed.join("; "));
   }
   // REPLACEMENT, not addition: the superseded events are dropped — the correction
   // accrues ALONE (the /accruals day-key dedup is untouched: it sees a resolved feed).

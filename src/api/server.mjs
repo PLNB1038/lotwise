@@ -110,8 +110,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   const scanBusy = (res) => json(res, 503, { error: "another wallet scan is in progress, retry shortly", kind: "scan-busy" }, { "Retry-After": "30" });
   // A broken declarations channel makes /accruals 200 [] indistinguishable from "no
   // dividends" — the separator lives in a header so the body contract stays an array
-  // (the /health mirror is for operators, integrators do not poll /health).
-  const declHeaders = () => (declarationsStats && declarationsStats.ok === false ? { "X-Declarations-Unavailable": "1" } : {});
+  // (the /health mirror is for operators, integrators do not poll /health). The gate
+  // accepts BOTH shapes: serve.mjs builds ok as a NUMBER (1|0, JSON-stable in /health),
+  // tests and embedders pass a boolean — one shape used to leave the header dead.
+  const declHeaders = () => (declarationsStats && (declarationsStats.ok === false || declarationsStats.ok === 0) ? { "X-Declarations-Unavailable": "1" } : {});
 
   const ENDPOINTS = ["/", "/health", "/tokens", "/events", "/multiplier", "/summary", "/onchain", "/lots", "/accruals", "/crosscheck"];
 
@@ -232,8 +234,15 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
-      if (!allow(scanLimiter, req, res)) return;
+      // GET-only: a HEAD probe carries no body and no address semantics a monitor needs —
+      // running the FULL scan (semaphore + RPC quota) for an empty response is a probe
+      // that can hold the one scan slot
+      if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
+      // the semaphore is checked BEFORE the limiter: a scan-busy refusal costs the caller
+      // nothing — checked after, a dozen refusals used to exhaust the rate bucket and the
+      // honest retry (after the scan released) hit a 429 on top of the wait
       if (scanActive) return scanBusy(res);
+      if (!allow(scanLimiter, req, res)) return;
       scanActive = true;
       // A client that walked away must not keep burning the RPC quota : abort
       // is passed into the scanner, the scan stops between pages/transactions; the
@@ -293,8 +302,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
       if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
-      if (!allow(scanLimiter, req, res)) return;
+      if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       if (scanActive) return scanBusy(res);
+      if (!allow(scanLimiter, req, res)) return;
       scanActive = true;
       const abort = new AbortController();
       req.on("aborted", () => abort.abort());

@@ -13,12 +13,13 @@
  */
 export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   const moneyMints = opts.moneyMints ?? null;
+  const signal = opts.signal;
   const match = typeof mints === "string" ? (m) => m === mints : (m) => mints.has(m);
   const isMoney = (m) => moneyMints !== null && moneyMints.has(m);
   const tx = await client.call("getTransaction", [
     signature,
     { commitment: "confirmed", encoding: "jsonParsed", maxSupportedTransactionVersion: 1 },
-  ]);
+  ], signal ? { signal } : undefined);
   // null — transaction unavailable on the endpoint; undefined — RPC answered with neither
   // result nor error (a lying/throttling gateway): both are an honest skip of one transaction,
   // not a TypeError that takes down the entire wallet scan 

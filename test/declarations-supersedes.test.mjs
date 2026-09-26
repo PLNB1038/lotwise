@@ -289,3 +289,40 @@ test("supersedes: every dangling reference is named in the single all-or-nothing
   assert.match(String(r.reason), /2026-06-11/, "the first dangling target is named");
   assert.match(String(r.reason), /2026-07-01/, "the second dangling target is named too — one restart fixes all");
 });
+
+// The refusal must aggregate across SYMBOLS too: the loader walks the registry symbol by
+// symbol, and the first symbol's throw used to hide every other symbol's broken
+// references — "every dangling reference is named" was true only within one symbol.
+test("supersedes: broken references of ALL symbols are named in the single refusal", () => {
+  const r = loadDeclarationsFile(write([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/a" },
+    { symbol: "KOx", exDate: "2026-07-15", amountPerUnitRaw: "7000000", decimals: 6, sourceUrl: "https://issuer.example/b" },
+    // one dangling correction PER SYMBOL — the SPYx one used to hide the KOx one
+    { symbol: "SPYx", exDate: "2026-06-20", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/c",
+      supersedes: { exDate: "2026-06-11", amountPerUnitRaw: "4000000" } },
+    { symbol: "KOx", exDate: "2026-07-16", amountPerUnitRaw: "3000000", decimals: 6, sourceUrl: "https://issuer.example/d",
+      supersedes: { exDate: "2026-07-01", amountPerUnitRaw: "7000000" } },
+  ]), REG);
+  assert.equal(r.ok, false);
+  assert.match(String(r.reason), /2026-06-11/, "the SPYx dangling target is named");
+  assert.match(String(r.reason), /2026-07-01/, "the KOx dangling target is named too — symbols do not hide each other");
+});
+
+// A file with hundreds of broken references must not produce a hundred-kilobyte reason:
+// the first ten are listed, the rest counted.
+test("supersedes: the refusal caps the listed references", () => {
+  const list = [];
+  for (let i = 0; i < 12; i++) {
+    const day = String(10 + i); // 2026-03-10 .. 2026-03-21
+    list.push({ symbol: "SPYx", exDate: `2026-03-${day}`, amountPerUnitRaw: "1000000", decimals: 8, sourceUrl: `https://issuer.example/p${i}` });
+  }
+  for (let i = 0; i < 12; i++) {
+    const day = String(10 + i);
+    list.push({ symbol: "SPYx", exDate: `2026-04-${day}`, amountPerUnitRaw: "500000", decimals: 8, sourceUrl: `https://issuer.example/c${i}`,
+      supersedes: { exDate: `2026-02-${String(10 + i)}`, amountPerUnitRaw: "1000000" } }); // February: no such targets
+  }
+  const r = loadDeclarationsFile(write(list), REG);
+  assert.equal(r.ok, false);
+  assert.match(String(r.reason), /2 more/, "the overflow is counted, not listed");
+  assert.doesNotMatch(String(r.reason), /2026-03-13/, "the eleventh reference is capped out of the reason");
+});

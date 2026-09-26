@@ -194,6 +194,7 @@ export function deriveAta(owner, mint, tokenProgramId) {
 export async function fetchOwnerTokenAccounts(client, owner, registry, {
   pageLimit = ACCOUNTS_PAGE_LIMIT,
   onAccountsPageCapped,
+  signal,
 } = {}) {
   if (!Number.isSafeInteger(pageLimit) || pageLimit < 1) {
     throw new WalletScanError(`bad accounts page limit: ${JSON.stringify(pageLimit)}`, "invalid-page-limit");
@@ -227,7 +228,7 @@ export async function fetchOwnerTokenAccounts(client, owner, registry, {
       // S4: explicit page size — the scanner controls the page instead of trusting a
       // provider default it cannot see
       { encoding: "jsonParsed", commitment: "confirmed", limit: pageLimit },
-    ]);
+    ], { signal });
     // a non-array from the gateway is an EXPLICIT malformed-source (mirror of
     // an "empty account set" from a lying source is indistinguishable from zero.
     if (!Array.isArray(res?.value)) {
@@ -307,6 +308,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
   let accountsTruncated = false; // S4: a full listing page ⇒ completeness is not certifiable
   const accounts = await fetchOwnerTokenAccounts(client, owner, registry, {
     onAccountsPageCapped: () => { accountsTruncated = true; },
+    signal,
   });
 
   // 1) signatures per source: wallet address + ALL token accounts of registry mints
@@ -353,7 +355,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       const batch = await client.call("getSignaturesForAddress", [
         source,
         { limit, ...(before !== undefined ? { before } : {}) },
-      ]);
+      ], { signal });
       // Non-array (result:null from a lying gateway) is an EXPLICIT error, not a silent
       // "end of history" with truncated:false: "empty wallet" is indistinguishable
       // from "the source died" — a fail-closed violation).
@@ -425,7 +427,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     aborted();
     let tx;
     try {
-      tx = await fetchWalletDeltas(client, s.signature, mintSet, { moneyMints: MONEY_MINTS });
+      tx = await fetchWalletDeltas(client, s.signature, mintSet, { moneyMints: MONEY_MINTS, signal });
     } catch (err) {
       // ONE poisoned tx (garbage meta from a lying gateway,
       // a permanent RpcError on a versioned tx) crashed the ENTIRE scan — the wallet became

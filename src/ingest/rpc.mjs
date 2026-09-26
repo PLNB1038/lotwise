@@ -65,9 +65,12 @@ export class RpcClient {
     await turn;
   }
 
-  async call(method, params) {
+  async call(method, params, { signal } = {}) {
     let lastErr;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // the caller departed before this attempt even started: stop now — a retry would
+      // burn quota and pacing time for a client that is already gone
+      if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
       if (attempt > 0) await this.sleep(this.minIntervalMs * 2 ** attempt); // exponential backoff
       await this._throttle();
       const id = ++this._id;
@@ -78,8 +81,14 @@ export class RpcClient {
           method: "POST",
           headers: { "Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (compatible; Lotwise/0.1)" },
           body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+          // the abort reaches the WIRE: without it a departed scan client left the fetch
+          // (and the one-slot scan semaphore) hanging on the transport's own timeout —
+          // minutes per call, tens of minutes per scan
+          ...(signal ? { signal } : {}),
         });
       } catch (err) {
+        // an abort is an immediate stop, not a network error to retry
+        if (signal?.aborted || err?.name === "AbortError") throw new RpcError("aborted", "request aborted by the caller");
         lastErr = new RpcError("network", redactUrls(err.message));
         continue;
       }

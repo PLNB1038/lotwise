@@ -501,3 +501,60 @@ test("/accruals: a broken declarations channel is named in a response header", a
     declarationsStats: { ok: true, loaded: 0, superseded: 0, reason: null },
   }));
 });
+
+// A scan-busy refusal must not burn the caller's rate budget: the semaphore used to be
+// checked AFTER the limiter, so a dozen cheap 503s exhausted the bucket and the honest
+// retry (after the scan released) hit a 429 — one stuck scan locked a victim out twice.
+test("scan admission: scan-busy refusals do not consume the rate budget", async () => {
+  const OTHER = "EJBQLNEH1x6buMSpUS4TLCknXygyfkbSQ2eyFqWEkv5U";
+  const THIRD = "Ho5371Kc1Kxy7ze85UYzZ4BUfSkLg39Xp3B424RuYrbC";
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  await withServer(async (base) => {
+    const first = fetch(`${base}/lots?address=${OWNER}`);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      for (let i = 0; i < 15; i++) {
+        const r = await fetch(`${base}/lots?address=${OTHER}`);
+        assert.equal(r.status, 503, `refusal ${i}: the concurrent scan is refused`);
+        assert.equal((await r.json()).kind, "scan-busy");
+      }
+    } finally {
+      release();
+    }
+    await first;
+    // the limiter saw none of the scan-busy refusals: a fresh scan passes immediately
+    const after = await fetch(`${base}/lots?address=${THIRD}`);
+    assert.equal(after.status, 200, "the honest retry is not rate-limited by the refusals");
+  }, () => ({
+    walletScanner: async (address) => {
+      if (address === OWNER) await gate;
+      return { owner: address, signatures: 0, fetched: 0, skipped: [], truncated: false, accounts: new Map(), txs: [] };
+    },
+  }));
+});
+
+// HEAD on a scan endpoint used to run the FULL scan (semaphore + RPC quota) for an empty
+// body — a monitoring probe could hold the one scan slot. Scan endpoints are GET-only.
+test("scan endpoints: a HEAD probe does not run a wallet scan", async () => {
+  await withServer(async (base, stubs) => {
+    const r = await fetch(`${base}/lots?address=${OWNER}`, { method: "HEAD" });
+    assert.equal(r.status, 405, "a HEAD probe is refused before any scan work");
+    assert.equal(stubs.calls.wallet, 0, "the scanner was never called");
+  }, (stubs) => ({ walletScanner: stubs.walletScanner }));
+});
+
+// The declarations header must fire for the PROD shape of declarationsStats: serve.mjs
+// builds ok as a NUMBER (1|0, JSON-stable in /health), while the first test pinned a
+// boolean — a green test over a dead feature.
+test("/accruals: the degradation header fires for the numeric prod shape of declarations.ok", async () => {
+  await withServer(async (base) => {
+    const down = await fetch(`${base}/accruals?symbol=SPYx&address=${OWNER}`);
+    assert.equal(down.status, 200);
+    assert.equal(down.headers.get("x-declarations-unavailable"), "1",
+      "the header fires for ok: 0 — the shape serve.mjs actually builds");
+  }, () => ({
+    walletScanner: async () => ({ owner: OWNER, signatures: 0, fetched: 0, skipped: [], truncated: false, accounts: new Map(), txs: [] }),
+    declarationsStats: { ok: 0, loaded: 0, superseded: 0, reason: "declarations rejected: test" },
+  }));
+});

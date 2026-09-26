@@ -48,17 +48,27 @@ export function loadDeclarationsFile(path, registry) {
   }
   const events = [];
   let superseded = 0;
-  try {
-    for (const t of registry) {
+  // Every SYMBOL's broken references are collected, not just the first throw: the loader
+  // walks the registry symbol by symbol, and the first symbol's refusal used to hide all
+  // the others — one edit-restart cycle per symbol for what is one broken file. The cap
+  // keeps the reason readable on a badly mangled feed.
+  const rejections = [];
+  for (const t of registry) {
+    try {
       const built = buildDeclarationEvents(list, { symbol: t.symbol });
       superseded += built.superseded;
       events.push(...bindMintAndValidate(built.events, t.mint));
+    } catch (err) {
+      // DeclarationError from the producer (a malformed line or a broken supersedes
+      // reference — dangling, chained, doubled), or EventValidationError from the bind —
+      // one broken line fails the whole file loudly; the operator fixes the file, not us.
+      rejections.push(`${t.symbol}: ${err.message}`);
     }
-  } catch (err) {
-    // DeclarationError from the producer (a malformed line or a broken supersedes
-    // reference — dangling, chained, doubled), or EventValidationError from the bind —
-    // one broken line fails the whole file loudly; the operator fixes the file, not us.
-    return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations rejected: ${err.message}` };
+  }
+  if (rejections.length > 0) {
+    const listed = rejections.slice(0, 10);
+    if (rejections.length > 10) listed.push(`…and ${rejections.length - 10} more symbols with broken declarations`);
+    return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations rejected: ${listed.join("; ")}` };
   }
   // A corrected re-declaration WITH the supersedes field never reaches this scan: the
   // producer resolved the replacement above, the target event is gone. The warning is
