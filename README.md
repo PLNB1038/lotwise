@@ -5,6 +5,8 @@
 
 A corporate actions engine for tokenized equities on Solana. Lotwise normalizes splits, dividends, mergers, ticker changes and multiplier rebases across xStocks, PreStocks, Backpack and Tessera tokens into adjusted tax lots, and serves them over a REST API with a self-hosted report page.
 
+![The report page](docs/screenshots/landing.png)
+
 ## Problem
 
 Tokenized equity issuers rebase positions when corporate actions happen. In the xStocks model the raw balance never changes: a supply multiplier (Token-2022 `scaledUiAmountConfig`) scales the displayed quantity instead. Other issuers rotate mints outright. The event data behind these rebases lives in issuer APIs and, for some issuers, only in on-chain mint state. There is no normalized, queryable source of corporate actions for tokenized equities. Portfolio trackers do not model them at all, and generic crypto tax services treat every mint as an ordinary token with no concept of a split, dividend accrual, merger or ticker change.
@@ -22,6 +24,10 @@ Lotwise closes that gap with one canonical event stream, verified against the ch
 - **Price cross-check**: daily GeckoTerminal candles around event dates, per-event verdicts (`consistent` / `mismatch` / `suspicious` / `inconclusive` / `no-price-data`).
 - **Fail-closed reconcile**: issuer-reported multiplier vs live on-chain Scaled UI amount. An unavailable source is a `503`, never a fabricated value; tokens with a broken multiplier history are excluded from reporting and flagged with a reason, not silently shown as `1`.
 - **Report page and REST API**: the page at `/` is a working sample consumer of the API. Zero runtime dependencies (`node:http` and the standard library only).
+
+![Tracked tokens](docs/screenshots/tokens.png)
+
+![Wallet report: FIFO lots, raw vs adjusted balances, realized P&L](docs/screenshots/wallet-report.png)
 
 ## Quickstart
 
@@ -55,6 +61,18 @@ curl "https://lotwise.tail88c821.ts.net/onchain?symbol=SPACEX"
 # The whole registry: per-token event counts and current multipliers (SPACEX "5", OPENAI "1.4861347")
 curl https://lotwise.tail88c821.ts.net/summary
 ```
+
+Compose the numbers into your own — one fetch, exact integer math, no SDK:
+
+```js
+const API = "https://lotwise.tail88c821.ts.net";
+const { multiplier } = await (await fetch(
+  `${API}/multiplier?symbol=SPACEX&date=2026-07-01`)).json();
+const raw = 200000000n;                       // on-chain amount of any wallet, 8 decimals
+const adjusted = raw * BigInt(multiplier);    // 1000000000n — exactly 10 shares, zero floats
+```
+
+![SPACEX detail: issuer plan vs on-chain state, raw-to-adjusted calculator](docs/screenshots/spacex-detail.png)
 
 ## API
 
@@ -117,6 +135,45 @@ Rate limits, per client IP: 12 wallet scans/min, 60 on-chain/price calls/min (se
 The API is read-only; deliveries are initiated by an operator or cron through the CLI (`node scripts/webhook-deliver.mjs`), not by the server. Subscriptions live in `data/webhooks.json`; deliveries are signed (`X-Lotwise-Signature` HMAC-SHA256 over the exact body) with a deterministic delivery id for receiver-side dedupe; the SSRF denylist refuses non-public addresses. Full contract — subscription shape, exit codes, retry policy: **docs/WEBHOOKS.md**.
 
 ## Architecture
+
+```mermaid
+flowchart LR
+    subgraph S ["Sources"]
+        I ["xStocks issuer API"]
+        C ["Solana JSON-RPC"]
+        P ["GeckoTerminal candles"]
+        D ["operator declarations"]
+    end
+    subgraph E ["Engine"]
+        SC ["schema — validation, strict dates"]
+        J ["on-chain journal — append-only, replayed on boot"]
+        RC ["reconcile — issuer plan vs chain"]
+        XC ["price cross-check"]
+        ML ["multiplier timeline — exact rationals"]
+        WS ["wallet scan — signatures, tx deltas"]
+        LE ["lot engine — FIFO, refuses to guess"]
+    end
+    subgraph O ["Consumers"]
+        A ["REST API"]
+        W ["webhooks — HMAC-signed"]
+        U ["report page"]
+    end
+    I --> SC
+    D --> SC
+    C --> J
+    J --> SC
+    SC --> RC
+    SC --> ML
+    P --> XC
+    ML --> LE
+    C --> WS
+    WS --> LE
+    RC --> A
+    XC --> A
+    LE --> A
+    A --> U
+    A --> W
+```
 
 `scripts/serve.mjs` wires everything together: registry, then events from both source families, then the API server. Modules under `src/`:
 
