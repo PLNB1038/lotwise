@@ -141,6 +141,14 @@ The base is the position held **at the start of the ex-date** (its UTC
 midnight — a buy during the ex-date itself does not qualify), replayed from the
 scan window — a sale after the ex-date does not shrink the dividend.
 
+### Canonical order
+
+Events apply in a canonical order — chronologically by day, and within a day `SPLIT`, then
+`DIVIDEND_ACCRUAL`, then `MERGER`, then `REDEEM` — so the same facts in any feed order
+produce the same report. A split is therefore always effective before its same-day
+dividend (the dividend accrues on the post-split position), and ties inside one class
+(e.g. two dividends of one day) are reported in a deterministic order independent of the feed.
+
 ### `baseIncomplete` and `totalRaw: null`
 
 Rows flag `baseIncomplete` when:
