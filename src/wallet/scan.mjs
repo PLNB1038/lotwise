@@ -351,6 +351,7 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
     let srcTruncated = false; // per-source flag: one hit its cap — the rest are scanned to their own caps in full
     let zeroProgressPages = 0; // alternating duplicate pages = no progress
     let suspectPages = 0; // mirrors and unparseable pages — unlike overlap, they cast doubt on the tail
+    const queriedFrom = new Set(); // cursors this source already queried — a rewind onto them is a lie
     for (;;) {
       aborted();
       const batch = await client.call("getSignaturesForAddress", [
@@ -368,7 +369,12 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       }
       // End of history — an EMPTY page only: a "short" page at endpoints
       // with soft caps / a lagging indexer does not mean "nothing beyond".
-      if (batch.length === 0) break;
+      // An empty page AFTER a suspect one does not launder it: the source already
+      // lied once (a mirror, an unparseable page, a rewind), the tail is unverifiable.
+      if (batch.length === 0) {
+        if (suspectPages > 0) truncated = true;
+        break;
+      }
       let added = 0;
       let lastValid = null;
       for (const s of batch) {
@@ -388,22 +394,19 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
         lastValid = s.signature;
       }
       if (srcTruncated) break;
-      if (batch.length === 0 && suspectPages > 0) {
-        // an empty page AFTER a suspect one does not launders it: the source already
-        // lied once (a mirror or an unparseable page), the tail is unverifiable
-        truncated = true;
-        break;
-      }
-      if (added === 0 || lastValid === null || lastValid === before) {
-        // A page that adds nothing but MOVES the cursor is cross-source overlap draining
-        // toward an honest empty page — not a hole. A page that leaves the cursor in
-        // place (a stuck mirror), or a non-empty page with no parseable element at all,
-        // is suspect: the tail beyond it is unknown, and the window must say so.
-        const suspect = batch.length > 0 && (lastValid === null || lastValid === before);
+      // A page that adds nothing but MOVES the cursor to fresh ground is cross-source
+      // overlap draining toward an honest empty page — not a hole. Suspect pages: a
+      // non-empty page with no parseable element at all, one whose cursor cannot advance
+      // (a mirror), or one that rewinds the cursor onto already-queried ground (a
+      // reshuffle) — the tail beyond any of them is unknown, and the window must say so.
+      const rewinds = lastValid !== null && queriedFrom.has(lastValid);
+      if (lastValid !== null && !rewinds) queriedFrom.add(lastValid);
+      if (added === 0 || lastValid === null || lastValid === before || rewinds) {
+        const suspect = lastValid === null || lastValid === before || rewinds;
         if (suspect) {
           if (++suspectPages >= 2) { truncated = true; break; }
+          zeroProgressPages = 0;
         } else if (++zeroProgressPages >= 2) break;
-        if (suspect) zeroProgressPages = 0;
       } else {
         zeroProgressPages = 0;
         suspectPages = 0;

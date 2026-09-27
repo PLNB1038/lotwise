@@ -117,8 +117,8 @@ export function loadDeclarationsFile(path, registry) {
   for (const [sym, arr] of bySymbolDay) {
     arr.sort((a, b) => a.ms - b.ms);
     for (let i = 1; i < arr.length; i++) {
-      if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 3 * 86_400_000) {
-        console.warn(`[declarations] ${sym}: two declarations within 3 days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
+      if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 1 * 86_400_000) {
+        console.warn(`[declarations] ${sym}: two declarations on adjacent days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
       }
     }
   }

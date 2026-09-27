@@ -222,23 +222,34 @@ function routeClient(routeOf) {
 const sg = (n) => ({ signature: "W39sig" + String(n).padStart(2, "0") + "x".repeat(30), slot: n, blockTime: 1_700_000_000 + n, err: null });
 
 test("scan: a stuck mirror followed by an empty page still flags truncated — the source already lied once", async () => {
+  let mirrored = false;
   const { client } = routeClient((before) => {
     if (before === undefined) return [sg(1), sg(2)];
-    if (before.endsWith("x")) return [sg(1), sg(2)]; // the mirror: the cursor is ignored
+    if (before === sg(2).signature && !mirrored) { mirrored = true; return [sg(1), sg(2)]; } // ONE mirror, then honesty
     return [];
   });
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
+  assert.ok(mirrored, "the mock must actually exercise the mirror branch");
   assert.equal(scan.truncated, true, "an empty page after a mirror does not launder it");
 }, { timeout: 5000 });
 
-test("scan: a mirror interleaved with a reshuffled overlap page still flags truncated", async () => {
+test("scan: an ALTERNATING reshuffler (cursor ping-pongs between two pages) is caught by the rewind", async () => {
   const { client } = routeClient((before) => {
     if (before === undefined) return [sg(1), sg(2)];
-    if (before.endsWith("2x")) return [sg(2), sg(1)]; // reshuffle: cursor cannot advance
-    return [sg(3), sg(1)]; // overlap-shaped, but the mirror already happened
+    if (before === sg(2).signature) return [sg(2), sg(1)]; // cursor -> sg1
+    return [sg(1), sg(2)]; // and back -> sg2: ground already queried
   });
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
-  assert.equal(scan.truncated, true, "the interleave must not exit through the silent overlap branch");
+  assert.equal(scan.truncated, true, "the ping-pong must flag the window, not drain silently");
+}, { timeout: 5000 });
+
+test("scan: a page that REWINDS the cursor onto queried ground is a lie — truncated", async () => {
+  // the reshuffler answers [sg2, sg1] for every cursor: page 2 moves the cursor to sg1
+  // (fresh), page 3 rewinds it back to sg2 — already queried from. The walk terminates
+  // and the window must be flagged, not certified complete over unverifiable tail
+  const { client } = routeClient((before) => (before === undefined ? [sg(1), sg(2)] : [sg(2), sg(1)]));
+  const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
+  assert.equal(scan.truncated, true, "rewinding onto queried ground must flag the window");
 }, { timeout: 5000 });
 
 test("scan: two fully unparseable pages flag truncated — the tail is unknown", async () => {
@@ -255,7 +266,22 @@ test("accruals: a FAILED tx in skipped does not flag the base — it has no delt
   }, {
     events: [divEvent("2026-02-01", 2)],
     txs: [aTx("b1", 10n, "2026-01-05"), aTx("s-late", -5n, "2026-02-20")],
-    skipped: [{ signature: "f1", reason: "tx failed on-chain" }],
+    skipped: [
+      { signature: "f1", reason: "tx failed on-chain" },
+      { signature: "f2", reason: "failed-tx" },
+    ],
+  });
+});
+
+test("accruals: an UNREADABLE tx whose error text contains \"fail\" still flags — no substring sniffing", async () => {
+  await withAccruals(async (base) => {
+    const r = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
+    const [row] = await r.json();
+    assert.equal(row.baseIncomplete, true, "undici's canonical \"fetch failed\" text must not exempt an unreadable tx");
+  }, {
+    events: [divEvent("2026-02-01", 2)],
+    txs: [aTx("b1", 10n, "2026-01-05"), aTx("s-late", -5n, "2026-02-20")],
+    skipped: [{ signature: "f3", reason: "tx unreadable: TypeError: fetch failed" }],
   });
 });
 

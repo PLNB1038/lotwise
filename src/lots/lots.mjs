@@ -85,7 +85,7 @@ export function applyEvents(lots, events) {
   for (const e of events) {
     if (e.type !== "DIVIDEND_ACCRUAL") continue;
     const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
-    const rank = `${e.decimals ?? ""}|${Array.isArray(e.sources) ? e.sources.join("") : ""}|${e.status ?? ""}`;
+    const rank = `${e.decimals ?? ""}|${JSON.stringify(Array.isArray(e.sources) ? e.sources : null)}|${e.status ?? ""}`;
     const cur = divSurvivor.get(key);
     if (cur === undefined || rank < cur.rank) divSurvivor.set(key, { rank, e });
   }
