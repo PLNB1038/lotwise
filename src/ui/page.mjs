@@ -12,7 +12,10 @@ const FAVICON_SVG =
   '<circle cx="6.5" cy="13" r="2.3" fill="#58a6ff"/></svg>';
 const FAVICON_HREF = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`;
 
-export function renderPage() {
+// demo: the --demo boot serves the static demonstration set (src/events/demo-snapshot.mjs).
+// The banner must be unmistakable — a screenshot of the demo page must never pass for the
+// live feed; the default render stays byte-identical (the flag adds exactly one block).
+export function renderPage({ demo = false } = {}) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -36,6 +39,8 @@ export function renderPage() {
   .brand-mark { flex: none; color: var(--text); }
   .brand-mark .accent { fill: var(--accent); }
   .tagline { color: var(--muted); margin: 0 0 18px; max-width: 720px; }
+  .demo-banner { background: var(--card); border: 1px solid var(--warn); border-radius: 8px; padding: 10px 16px; margin: 0 0 18px; }
+  .demo-banner strong { color: var(--warn); }
   .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
   .stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; }
   .stat b { font-family: var(--mono); font-size: 20px; display: block; }
@@ -104,6 +109,10 @@ export function renderPage() {
     </svg>
     <h1><span>Lotwise</span> — corporate actions engine for tokenized equities</h1>
   </header>
+  ${demo ? `<div class="demo-banner"><strong>DEMO MODE</strong> — this instance serves a static demonstration
+    set (symbols <code>DEMOx</code>, <code>DEMO2x</code>): all six event types, every source marked
+    <code>lotwise-demo-snapshot</code>. Nothing here is a live issuer or on-chain claim; start the server
+    without <code>--demo</code> for the live feed.</div>` : ""}
   <p class="tagline">Tokenized stocks split and pay dividends while the raw on-chain balance stays
     frozen — the economics move under a number that does not, so any report computed from raw
     transfers quietly drifts from reality. Lotwise normalizes issuer APIs (xStocks, PreStocks,

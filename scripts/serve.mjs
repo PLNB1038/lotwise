@@ -1,7 +1,11 @@
 // Run the Lotwise API on live data: registry + xStocks multiplier history + on-chain plan.
-// Usage: node scripts/serve.mjs [--port 8787] [--host 127.0.0.1] [--rpc URL] [--max-txs 300]
+// Usage: node scripts/serve.mjs [--port 8787] [--host 127.0.0.1] [--rpc URL] [--max-txs 300] [--demo]
+// --demo (src/events/demo-snapshot.mjs): boot the static demonstration set instead — all six
+// event types on fictional tokens, zero network, zero live claims; /health and the vitrine
+// banner mark the mode. Without the flag the boot is bit-for-bit the live one.
 import { loadRegistrySafe, assertBootableRegistrySize } from "../src/registry/registry.mjs";
 import { loadDeclarationsFile } from "../src/events/declarations-file.mjs";
+import { buildDemoSnapshot } from "../src/events/demo-snapshot.mjs";
 import { fetchMultiplierHistory } from "../src/issuer/xstocks.mjs";
 import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
 import { createApiServer } from "../src/api/server.mjs";
@@ -32,7 +36,7 @@ try {
   }
   throw err;
 }
-const { port, host, maxTxs } = args;
+const { port, host, maxTxs, demo } = args;
 // RPC: --rpc flag (dev quotas) → env LOTWISE_RPC_URL (prod: the key must NOT
 // stick out in the process cmdline — it is visible in ps to the whole container — nor in the log banner).
 const rpcUrl = args.rpcUrl;
@@ -69,13 +73,52 @@ try {
   throw err;
 }
 
+// ---- boot state shared by the two paths ----
+// The demo branch fills its own; the live branch assigns below. The readers stay null in
+// demo mode: the routes answer the honest 503 "not configured" (a demo has no RPC, no
+// scanner, no price provider — and must not pretend otherwise).
+let registry;
+let events = [];
+let journalStats = null;
+let registryStats = null;
+let declarationsStats = null;
+let onchainReader = null;
+let walletScanner = null;
+let priceProvider = null;
+
+// Rate limits for expensive endpoints per client IP (see src/api/ratelimit.mjs):
+// the demo is public through the funnel, RPC quota is finite; XFF is trusted — the only
+// public path to the port is the funnel, direct connections only come from the tailnet.
+// Both boots share them: a demo instance behind the same funnel needs the same guard.
+const envPositiveInt = envPositiveIntShared; // loud fallback, moved to src/cli/flags.mjs
+const rateLimits = {
+  scan: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12) }, // /lots, /accruals
+  rpc: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_RPC_PER_MIN", 60) }, // /onchain, /crosscheck
+};
+
+if (demo) {
+  // DEMO MODE — the judge-facing boot (docs/review/ROUND25_JUDGE.md, top-3 #3): a live feed
+  // shows a single event type, and a judge without RPC waits ~2 minutes for a degraded boot.
+  // Here: the validated static set, no network at all, listening in milliseconds. The live
+  // registry file is not even read — a demo instance must not mix fictional tokens with
+  // tracked ones. buildDemoSnapshot validates first: a broken set refuses the boot loudly
+  // (fail-closed, the same discipline as the flag guards above), it cannot come up serving
+  // schema-invalid events.
+  const snapshot = buildDemoSnapshot();
+  registry = snapshot.registry;
+  events = snapshot.events;
+  console.log(`[serve] DEMO MODE (--demo): static demonstration set — ${registry.length} token(s), ${events.length} event(s), all six canonical types`);
+  console.log(`[serve] demo: every source is the literal marker "lotwise-demo-snapshot" — no live issuer, on-chain or price claims; /health carries demo:true`);
+  await startServer({ demo: true, registry, events, rateLimits });
+} else {
+
 // Registry: a truncated data/tokens.json (write interrupted mid-enrich window)
 // used to kill the whole process — RegistryError at top level without catch → unhandled
 // rejection, no degraded mode, no "corrupted"-class diagnostics,
 // LW2_tokens_json_write_non_atomic). Journal pattern: corruption is an explicit state,
 // the evidence is kept nearby, boot continues on an empty registry; the flag goes into /health.
 const loadedRegistry = await loadRegistrySafe(path.join(ROOT, "data", "tokens.json"));
-const registry = loadedRegistry.registry;
+registry = loadedRegistry.registry;
 // a runaway (glued/merged) registry would boot for hours before
 // listening — a loud refusal up front, before any RPC quota is spent.
 assertBootableRegistrySize(registry);
@@ -87,9 +130,7 @@ if (!loadedRegistry.ok) {
     (loadedRegistry.backup ? ` Corrupted file kept nearby: ${loadedRegistry.backup}` : ""),
   );
 }
-const registryStats = { corrupted: loadedRegistry.corrupted ? 1 : 0 };
-
-const events = [];
+registryStats = { corrupted: loadedRegistry.corrupted ? 1 : 0 };
 
 // operator-supplied dividend declarations — the only channel that feeds
 // DIVIDEND_ACCRUAL into the live store (xStocks publishes no per-unit amounts). Read-only
@@ -97,7 +138,7 @@ const events = [];
 const loadedDeclarations = loadDeclarationsFile(path.join(ROOT, "data", "declarations.json"), registry);
 // superseded — corrections applied at load (the `supersedes` field): visible in /health,
 // so a feed silently re-declaring dividends cannot hide behind a bare "loaded" count
-const declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0, superseded: loadedDeclarations.superseded };
+declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0, superseded: loadedDeclarations.superseded };
 if (!loadedDeclarations.ok) {
   console.error(`[serve] DECLARATIONS NOT LOADED (${loadedDeclarations.reason}). Booting without dividend accruals — fix data/declarations.json and restart.`);
 } else if (loadedDeclarations.loaded > 0) {
@@ -286,7 +327,7 @@ const cached = (label) => {
 const rpc = new RpcClient({ endpoint: rpcUrl });
 const onchainCached = cached("onchain");
 
-const onchainReader = (mint) =>
+onchainReader = (mint) =>
   onchainCached(mint, () =>
     rpc
       // the vitrine's point read, high lane: this exact call used to stand in the
@@ -298,7 +339,7 @@ const onchainReader = (mint) =>
 // Wallet scan: expensive (a getTransaction per transaction, ~350ms on public RPC)
 const walletCached = cached("wallet");
 
-const walletScanner = (address, { signal } = {}) =>
+walletScanner = (address, { signal } = {}) =>
   walletCached(address, () => {
     console.log(`[serve] wallet scan ${address} (cap ${maxTxs} signatures)`);
     return scanWallet(rpc, address, registry, {
@@ -318,36 +359,42 @@ const gt = new GeckoTerminalClient();
 const poolCached = cached("pool");
 const candlesCached = cached("candles");
 
-const priceProvider = {
+priceProvider = {
   pool: (mint) => poolCached(mint, () => gt.bestBasePool(mint)),
   candles: (poolAddress) => candlesCached(poolAddress, () => gt.dailyCandles(poolAddress)),
 };
 
-// Rate limits for expensive endpoints per client IP (see src/api/ratelimit.mjs):
-// the demo is public through the funnel, RPC quota is finite; XFF is trusted — the only
-// public path to the port is the funnel, direct connections only come from the tailnet
-const envPositiveInt = envPositiveIntShared; // loud fallback, moved to src/cli/flags.mjs
-const rateLimits = {
-  scan: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_SCAN_PER_MIN", 12) }, // /lots, /accruals
-  rpc: { windowMs: 60_000, max: envPositiveInt("RATE_LIMIT_RPC_PER_MIN", 60) }, // /onchain, /crosscheck
+// The journal stats of THIS boot, /health contract: journal.{replayed,unavailable,corrupted,
+// preserveFailed,saveFailed}. Assembled here (after the persist decision) and handed to the
+// shared tail; the demo boot passes journalStats: null — those sources were not part of it.
+journalStats = {
+  replayed: journalReplayed,
+  unavailable: journalUnavailable,
+  corrupted: journalCorrupted ? 1 : 0,
+  preserveFailed: journalReadOnly ? 1 : 0, // read-only boot: no final journal write happened
+  // a failed write (disk full/EBUSY) — boot events live only in memory,
+  // /health must show it, monitoring must not treat the journal as healthy
+  saveFailed: !journalSaved.written && !journalSaved.readonly ? 1 : 0,
 };
 
+await startServer({ demo: false, registry, events, journalStats, registryStats, declarationsStats, onchainReader, walletScanner, priceProvider, rateLimits });
+
+} // end of the live boot
+
+// The shared serve tail: create the API server, print the banner, hand the process to the
+// graceful shutdown. The live boot and the --demo boot BOTH end here on purpose — the
+// shutdown-drain semantics (the delayed exit, the repeated-signal escape) exist once and
+// cannot drift between the modes. `demo` only reshapes the banner and the /health mark.
+async function startServer({ demo = false, registry, events, journalStats = null, registryStats = null, declarationsStats = null, onchainReader = null, walletScanner = null, priceProvider = null, rateLimits }) {
 let server;
 try {
   server = await createApiServer({
     registry, events, port, host, onchainReader, walletScanner, priceProvider, rateLimits, trustProxy: true,
     accessLog: true, // one "[http] ip method path status ms ua" line per finished response — see who visits the demo
-    journalStats: {
-      replayed: journalReplayed,
-      unavailable: journalUnavailable,
-      corrupted: journalCorrupted ? 1 : 0,
-      preserveFailed: journalReadOnly ? 1 : 0, // read-only boot: no final journal write happened
-      // a failed write (disk full/EBUSY) — boot events live only in memory,
-      // /health must show it, monitoring must not treat the journal as healthy
-      saveFailed: !journalSaved.written && !journalSaved.readonly ? 1 : 0,
-    },
+    journalStats, // null on a demo boot: /health shows nulls, the readers were not part of it
     registryStats, // { corrupted: 0|1 } — /health contract: registry.corrupted (see the report)
     declarationsStats,
+    demo, // /health.demo:true and the vitrine banner — a demo instance must not pass for the live feed
   });
 } catch (err) {
   console.error(`[serve] failed to come up on port ${port}: ${err.code ?? err.message}`);
@@ -360,9 +407,16 @@ const bound = server.address();
 const boundHost = bound.family === "IPv6" ? `[${bound.address}]` : bound.address;
 console.log(`\n[serve] Lotwise API: http://${boundHost}:${bound.port}`);
 console.log(`[serve] vitrine: http://${boundHost}:${bound.port}/`);
-console.log(`[serve] tokens: ${registry.length}, events: ${events.length}, on-chain RPC: ${rpcDisplay}`);
+if (demo) {
+  // no "on-chain RPC:" line in the demo banner — printing an RPC origin the server never
+  // touches would advertise a source the mode does not have
+  console.log(`[serve] tokens: ${registry.length}, events: ${events.length} (static demo set — not the live registry)`);
+  console.log(`[serve] try: / | /health | /summary | /events?symbol=DEMOx | /events?symbol=DEMO2x | /multiplier?symbol=DEMOx&date=2026-09-01`);
+} else {
+  console.log(`[serve] tokens: ${registry.length}, events: ${events.length}, on-chain RPC: ${rpcDisplay}`);
+  console.log(`[serve] try: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);
+}
 console.log(`[serve] rate limits (per IP): ${rateLimits.scan.max}/min wallet scans, ${rateLimits.rpc.max}/min on-chain/prices (env: RATE_LIMIT_SCAN_PER_MIN, RATE_LIMIT_RPC_PER_MIN)`);
-console.log(`[serve] try: / | /health | /events?symbol=SPYx | /multiplier?symbol=SPYx&date=2026-07-01 | /onchain?symbol=SPYx | /lots?address=<wallet> | /crosscheck?symbol=SPYx`);
 
 // SIGTERM (the systemd restart timer) and SIGINT used to kill the process outright:
 // a wallet scan in flight died mid-RPC — minutes of pacing quota burned for nothing,
@@ -392,3 +446,4 @@ const stop = () => {
 };
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
+}

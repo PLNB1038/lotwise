@@ -16,6 +16,32 @@ export class ServeArgsError extends Error {
 
 const DEFAULT_RPC = "https://api.mainnet-beta.solana.com";
 
+// A boolean flag reader (--demo). Unlike readFlag, the BARE form is legal and means true —
+// "--demo" as the last argument is the point of a switch, and readFlag's "requires a value"
+// refusal would break it. Explicit spellings: --demo=true / --demo=false (equals form) and
+// --demo true / --demo false (space form — an operator's natural "disable it" must work;
+// silently ignoring a stray "false" would boot the opposite of what was asked). Any other
+// value is refused BEFORE I/O, the parser discipline.
+function readBoolFlag(argv, name) {
+  const eq = `--${name}=`;
+  const eqIdx = argv.findIndex((a) => a.startsWith(eq));
+  if (eqIdx !== -1) {
+    const value = argv[eqIdx].slice(eq.length);
+    if (value !== "true" && value !== "false") {
+      throw new ServeArgsError(`--${name} must be "true" or "false", got ${JSON.stringify(value)}`, `--${name}`);
+    }
+    return value === "true";
+  }
+  const i = argv.indexOf(`--${name}`);
+  if (i === -1) return false;
+  const next = argv[i + 1];
+  if (next === undefined || next.startsWith("--")) return true; // the bare form IS the true value
+  if (next !== "true" && next !== "false") {
+    throw new ServeArgsError(`--${name} must be "true" or "false", got ${JSON.stringify(next)}`, `--${name}`);
+  }
+  return next === "true";
+}
+
 function readFlag(argv, name) {
   const eq = `--${name}=`;
   const eqIdx = argv.findIndex((a) => a.startsWith(eq));
@@ -40,8 +66,11 @@ function readFlag(argv, name) {
 
 /**
  * @param {string[]} argv — process.argv.slice(2)
- * @returns {{port: number, host: string, rpcUrl: string, maxTxs: number}}
- * @throws {ServeArgsError} — a flag without a value; port/maxTxs — not an integer/not positive
+ * @returns {{port: number, host: string, rpcUrl: string, maxTxs: number, demo: boolean}}
+ *   demo — the --demo switch (src/events/demo-snapshot.mjs): a static demonstration set
+ *   instead of the live boot; default false, the live boot is untouched.
+ * @throws {ServeArgsError} — a flag without a value; port/maxTxs — not an integer/not positive;
+ *   --demo with a value other than true/false
  */
 export function parseServeArgs(argv, env = process.env) {
   if (!Array.isArray(argv)) throw new ServeArgsError("argv must be an array");
@@ -87,7 +116,9 @@ export function parseServeArgs(argv, env = process.env) {
     }
   }
 
-  return { port, host, rpcUrl, maxTxs };
+  const demo = readBoolFlag(argv, "demo");
+
+  return { port, host, rpcUrl, maxTxs, demo };
 }
 
 // DNS-resolve --host BEFORE boot : the parser is synchronous and sees only

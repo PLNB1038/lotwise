@@ -404,7 +404,13 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       if (added === 0 || lastValid === null || lastValid === before || rewinds) {
         const suspect = lastValid === null || lastValid === before || rewinds;
         if (suspect) {
-          if (++suspectPages >= 2) { truncated = true; break; }
+          if (++suspectPages >= 2) {
+            // attribution: the flag is global, the lie is local — name the source so the
+            // operator can tell one broken endpoint from a broken window
+            console.error(`[wallet-scan] ${source}: lying pagination (${lastValid === null ? "unparseable page" : rewinds ? "cursor rewound onto queried ground" : "stuck mirror"}) — the window is flagged truncated`);
+            truncated = true;
+            break;
+          }
           zeroProgressPages = 0;
         } else if (++zeroProgressPages >= 2) break;
       } else {

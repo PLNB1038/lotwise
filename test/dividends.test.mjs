@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dividendsFromDeclarations, DeclarationError } from "../src/events/dividends.mjs";
+import { dividendsFromDeclarations, buildDeclarationEvents, DeclarationError } from "../src/events/dividends.mjs";
 import * as dividendsModule from "../src/events/dividends.mjs";
 import { bindMintAndValidate, NormalizeError } from "../src/events/normalize-xstocks.mjs";
 import { validateEvent, EventValidationError } from "../src/schema/events.mjs";
@@ -204,6 +204,64 @@ test("an exact duplicate declaration collapses (a repeated feed does not double 
   // the declaration a "repeat" cannot be told from a "second declaration" (the module's trade-off)
   const near = [decl(), decl({ sourceUrl: "https://issuer.example/ko-dividend-q3-mirror" })];
   assert.equal(dividendsFromDeclarations(near, { symbol: "KOx" }).length, 2);
+});
+
+// ---- one ex-day, one declared amount ----
+
+// An issuer declares ONE amount per ex-day. Two plain declarations of one symbol on one
+// canonical ex-day with different amounts are not two dividends — they are a correction
+// that bypassed `supersedes`, and the engine (whose dividend identity is mint + ex-day +
+// amount) would accrue BOTH: the income doubles silently. The whole feed refuses — zero
+// accruals is the honest direction, not doubled ones.
+test("one ex-day — one declared amount: two plain declarations on one ex-day with different amounts refuse the feed (both sums named)", () => {
+  assert.throws(
+    () => dividendsFromDeclarations([
+      decl({ exDate: "2026-06-19", amountPerUnitRaw: "2000000", sourceUrl: "https://issuer.example/ko-v1" }),
+      decl({ exDate: "2026-06-19", amountPerUnitRaw: "4000000", sourceUrl: "https://issuer.example/ko-v2" }),
+    ], { symbol: "KOx" }),
+    (e) => e instanceof DeclarationError
+      && /2026-06-19/.test(e.message)
+      && /2000000/.test(e.message)
+      && /4000000/.test(e.message)
+      && /supersedes/.test(e.message),
+  );
+});
+
+test("the ex-day conflict keys on the canonical day: a datetime twin of the day carries the same one-amount rule", () => {
+  assert.throws(
+    () => dividendsFromDeclarations([
+      decl({ exDate: "2026-06-19", amountPerUnitRaw: "2000000", sourceUrl: "https://issuer.example/ko-v1" }),
+      decl({ exDate: "2026-06-19T14:00:00Z", amountPerUnitRaw: "4000000", sourceUrl: "https://issuer.example/ko-v2" }),
+    ], { symbol: "KOx" }),
+    (e) => e instanceof DeclarationError && /2026-06-19/.test(e.message),
+  );
+});
+
+test("same ex-day, same amount, two sourceUrls — two sightings, not a conflict (the engine collapses them)", () => {
+  const events = dividendsFromDeclarations([
+    decl({ exDate: "2026-06-19", amountPerUnitRaw: "2000000", sourceUrl: "https://issuer.example/ko-v1" }),
+    decl({ exDate: "2026-06-19", amountPerUnitRaw: "2000000", sourceUrl: "https://issuer.example/ko-v2" }),
+  ], { symbol: "KOx" });
+  assert.equal(events.length, 2, "one declared amount on the day — the day-key dedup downstream collapses the sightings");
+});
+
+test("same-day two amounts, one naming the other in `supersedes` — a replacement loads (one amount accrues)", () => {
+  const { events, superseded } = buildDeclarationEvents([
+    decl({ exDate: "2026-06-19", amountPerUnitRaw: "4000000", sourceUrl: "https://issuer.example/ko-v1" }),
+    decl({ exDate: "2026-06-19", amountPerUnitRaw: "2000000", sourceUrl: "https://issuer.example/ko-v2",
+      supersedes: { exDate: "2026-06-19", amountPerUnitRaw: "4000000" } }),
+  ], { symbol: "KOx" });
+  assert.equal(events.length, 1, "the correction replaced the stale declaration");
+  assert.equal(events[0].amountPerUnitRaw, 2000000, "the corrected amount accrues alone");
+  assert.equal(superseded, 1);
+});
+
+test("a DIFFERENT ex-day with a changed amount is not a conflict — special dividends sit next to regular ones (the loader warn stays advisory)", () => {
+  const events = dividendsFromDeclarations([
+    decl({ exDate: "2026-06-18", amountPerUnitRaw: "2000000", sourceUrl: "https://issuer.example/ko-v1" }),
+    decl({ exDate: "2026-06-19", amountPerUnitRaw: "4000000", sourceUrl: "https://issuer.example/ko-v2" }),
+  ], { symbol: "KOx" });
+  assert.equal(events.length, 2, "different days are two dividends to the producer; only the same day refuses");
 });
 
 // ---- honesty pins: the real API contains no amount → the event is NOT synthesized ----

@@ -181,6 +181,14 @@ The declarations channel is append-only: a corrected re-declaration would
 double the income until resolved — the loader warns about same-amount
 declarations within three days.
 
+One ex-day carries one declared amount: two plain declarations of one symbol
+on the same canonical ex-day with different `amountPerUnitRaw` refuse the
+whole file — that is a correction without `supersedes`, and feeding it as two
+dividends would double the income. A changed sum on a different day stays a
+warning. The token's `decimals` in a declaration is display metadata; the
+registry (`data/tokens.json`) is authoritative, and a disagreement is warned
+at load. The raw amount is per raw unit and is never rescaled.
+
 ### Corrections: `supersedes`
 
 To express a correction, do not re-declare — supersede: append a new line for
@@ -202,7 +210,10 @@ correction of a correction, a self-reference, or two corrections on one target
 refuse the whole file at load (`declarations.ok: 0`, the reason in the boot
 log) — a half-applied correction would leave the stale amount accruing, which
 is the doubling this field exists to prevent. Lines without the field accrue
-exactly as before.
+exactly as before. The refusal names every broken symbol at once; fix or
+delete the offending lines and restart. Until then the channel is down
+(`declarations.ok: 0`, `X-Declarations-Unavailable: 1`) and accruals are zero
+— the fail-closed direction: no accruals instead of doubled ones.
 
 ### When the channel is down
 

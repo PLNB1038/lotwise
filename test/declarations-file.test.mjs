@@ -148,3 +148,79 @@ test("declarations: a chain of neighbors (01/03/05, each pair ≤ 3 days) warns 
   assert.match(warns[0], /2026-01-03/);
   assert.match(warns[0], /2026-01-05/, "the chain's tail is named — the anchor window dropped it");
 });
+
+// One ex-day carries one declared amount: two plain declarations of one symbol on one
+// ex-day with different amounts are a correction that bypassed `supersedes`. The engine
+// keys dividends on mint + ex-day + amount, so both identities would accrue — the income
+// doubles silently. The file refuses WHOLE (the all-or-nothing channel contract): zero
+// accruals instead of doubled ones; `supersedes` stays the legal replacement path.
+test("declarations: two plain same-day amounts refuse the file — the healthy symbol goes down with it (all-or-nothing)", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "KOx", exDate: "2026-06-19", amountPerUnitRaw: "2000000", decimals: 6, sourceUrl: "https://issuer.example/ko-v1" },
+    { symbol: "KOx", exDate: "2026-06-19", amountPerUnitRaw: "4000000", decimals: 6, sourceUrl: "https://issuer.example/ko-v2" },
+    { symbol: "SPYx", exDate: "2026-05-14", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/spy/q1" }, // healthy
+  ]));
+  const r = loadDeclarationsFile(p, REG);
+  assert.equal(r.ok, false, "a same-day amount conflict is a refusal, not a warning");
+  assert.equal(r.loaded, 0, "nothing accrues from a conflicted file");
+  assert.deepEqual(r.events, []);
+  assert.match(r.reason, /KOx: \(/, "the reason names the symbol");
+  assert.match(r.reason, /2026-06-19/, "the conflicted ex-day is named");
+  assert.match(r.reason, /2000000/, "the first sum is named");
+  assert.match(r.reason, /4000000/, "the second sum is named");
+  assert.match(r.reason, /supersedes/, "the reason teaches the fix");
+});
+
+// The refusal is bound to the SAME day: special dividends legitimately sit next to
+// regular ones, so a changed sum on a different (adjacent) day keeps loading — with the
+// advisory proximity warning only.
+test("declarations: a changed sum on a DIFFERENT day still loads — the proximity warning stays advisory", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v1" },
+    { symbol: "SPYx", exDate: "2026-06-19", amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v2" },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  let r;
+  try {
+    r = loadDeclarationsFile(p, REG);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(r.ok, true, "different days are two dividends as far as the refusal goes");
+  assert.equal(r.loaded, 2);
+  assert.equal(warns.length, 1, "the advisory warn remains — diagnostics for different days");
+  assert.match(warns[0], /adjacent days/);
+});
+
+// The registry is the authority on a token's decimals: a declaration's `decimals` is
+// display metadata (amountPerUnitRaw is per raw unit and is never rescaled), but a drift
+// from tokens.json lies about the human-readable amount by orders of magnitude — named
+// loudly at load, without refusing the file: the raw economics is unaffected.
+test("declarations: a declaration decimals disagreeing with the registry warns — the load stands, the metadata is not rewritten", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "KOx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/ko-q2" }, // registry KOx is 6
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/spy-q2" }, // matches
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  let r;
+  try {
+    r = loadDeclarationsFile(p, REG);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(r.ok, true, "a decimals drift does not refuse the file — the raw amount is per raw unit");
+  assert.equal(r.loaded, 2);
+  assert.equal(warns.length, 1, "one warning for the drifting symbol; the matching one is silent");
+  assert.match(warns[0], /KOX/, "the symbol is named, uppercased like every loader warning");
+  assert.match(warns[0], /declaration decimals 8 ≠ registry decimals 6/);
+  assert.match(warns[0], /tokens\.json/);
+  const ko = r.events.find((e) => e.mint === KOX);
+  assert.equal(ko.decimals, 8, "the file is the operator's — we warn, we do not silently rewrite the metadata");
+});

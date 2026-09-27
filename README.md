@@ -43,6 +43,12 @@ On startup the server loads the registry, reads mint state for every non-xStocks
 
 Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota.
 
+`--demo` boots offline in milliseconds: a static demonstration set (fictional `DEMOx`/`DEMO2x` tokens, sources marked `lotwise-demo-snapshot`) serves **all six event types** — see the whole schema without waiting for live issuers. `/health` marks the mode with `demo: true`; without the flag the live boot is unchanged.
+
+```sh
+node scripts/serve.mjs --demo   # then: curl "http://127.0.0.1:8787/events?symbol=DEMOx"
+```
+
 ## 30-second tour
 
 The demo runs on live mainnet — read-only, no wallet scans, safe to curl:
@@ -200,7 +206,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-873 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+900 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

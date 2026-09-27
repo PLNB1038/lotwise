@@ -11,7 +11,7 @@ import { EVENT_TYPES } from "../schema/events.mjs";
 import { renderPage } from "../ui/page.mjs";
 import { createRateLimiter } from "./ratelimit.mjs";
 
-export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, declarationsStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false, accessLog = false }) {
+export function createApiServer({ registry, events = [], port = 0, host = "127.0.0.1", onchainReader = null, walletScanner = null, priceProvider = null, journalStats = null, registryStats = null, declarationsStats = null, rateLimits = { scan: { windowMs: 60_000, max: 12 }, rpc: { windowMs: 60_000, max: 60 } }, trustProxy = false, accessLog = false, demo = false }) {
   // indexes are built once; when the data changes the server is recreated (MVP)
   const byMint = new Map(registry.map((t) => [t.mint, t]));
   const bySymbol = new Map(registry.map((t) => [t.symbol, t]));
@@ -213,7 +213,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const q = url.searchParams;
 
     if (url.pathname === "/") {
-      pageHtml ??= renderPage();
+      pageHtml ??= renderPage({ demo });
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Length": Buffer.byteLength(pageHtml), "X-Content-Type-Options": "nosniff" });
       return res.end(pageHtml);
     }
@@ -501,8 +501,13 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // was down at startup".
       // excluded: tokens whose timeline is broken and which are excluded from the showcase —
       // their "1" is a default, not a computation; the showcase and API consumers must see it.
+      // demo: the boot serves the static demonstration set (src/events/demo-snapshot.mjs) —
+      // without the mark, a judge's screenshot of the demo would be indistinguishable from
+      // the live feed; the field is ABSENT (not false) on a normal boot, so the live /health
+      // shape stays byte-identical to the pre-demo contract.
       return json(res, 200, {
         ok: true,
+        ...(demo ? { demo: true } : {}),
         tokens: registry.length,
         events: events.length,
         journal: journalStats,

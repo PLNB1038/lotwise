@@ -4,6 +4,25 @@
 // throws BEFORE state changes — application is atomic.
 // Date semantics: an event affects only lots bought STRICTLY BEFORE its
 // effectiveDate (one bought on the event day already follows post-event rules).
+// Canonical order (FIX-1): events apply in a canonical order — chronologically by
+// calendar day, and within a day SPLIT, then DIVIDEND_ACCRUAL, then MERGER, then REDEEM —
+// so the same facts in any feed order produce the same report. Each pairing is a semantic
+// decision, not a taste:
+//   SPLIT → DIV: the dividend is computed on the post-split position — already pinned by
+//     test/lots.test.mjs ("the dividend on the NEW qty") and the US convention (a split is
+//     effective before the open); canonicalization makes both feed orders equal to that
+//     answer, the pin stays green untouched.
+//   DIV → MERGER: the dividend accrues on the OLD units before the exchange — the base
+//     "the position held at the start of the ex-date" (API_SEMANTICS) existed as the old mint.
+//   DIV → REDEEM: lots held at the ex-day midnight both accrue and realize — the hold
+//     condition (< midnight) is the same for both; shrinking the base after the buyback
+//     would be a lie.
+//   Between days: ascending chronology — an out-of-order feed becomes deterministic.
+// Inside one class the order is a TOTAL order: mint, then the type's ratio/amount/symbol
+// fields, then the whole-event JSON as the last tiebreak — two same-slot events of one
+// class (two dividends of one day, two ticker changes) report in a feed-independent order,
+// and the dedup survivor below stops depending on the array order at all. Only
+// byte-identical events may tie, and ties are indistinguishable in the output.
 // The /lots report may contain lots with acquiredDate:null (a tx without blockTime) — see
 // the header of ../wallet/report.mjs: applyEvents throws LotError on such a lot.
 import { validateEvent } from "../schema/events.mjs";
@@ -66,6 +85,49 @@ export function applyEvents(lots, events) {
     }
   }
 
+  // Canonical application order (FIX-1, the rationale lives in the header). The caller's
+  // array is not touched — the sort decorates a copy.
+  const CLASS_RANK = {
+    SPLIT: 0,
+    DIVIDEND_ACCRUAL: 1,
+    MERGER: 2,
+    REDEEM: 3,
+    // lot-independent bookkeeping: nothing to order semantically, grouped last
+    TICKER_CHANGE: 4,
+    MULTIPLIER_CHANGE: 4,
+  };
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  // a per-event key tuple: (day, rank, mint, type fields, whole-event JSON). The day key is
+  // the CALENDAR DAY of effectiveDate, not the instant — the same declared day the accrual
+  // route and the dedup key use; phase 1 validated the date, the parse cannot fail here.
+  const orderKeys = (e) => {
+    const keys = [
+      parseIsoDateMs(String(e.effectiveDate).slice(0, 10)),
+      CLASS_RANK[e.type],
+      e.mint,
+    ];
+    if (e.type === "SPLIT") keys.push(e.ratioNumerator, e.ratioDenominator);
+    if (e.type === "DIVIDEND_ACCRUAL") keys.push(e.amountPerUnitRaw, e.decimals);
+    if (e.type === "MERGER") keys.push(e.exchangeNumerator ?? 0, e.exchangeDenominator ?? 0, e.newMint);
+    if (e.type === "TICKER_CHANGE") keys.push(e.oldSymbol, e.newSymbol);
+    if (e.type === "MULTIPLIER_CHANGE") keys.push(e.multiplierFrom, e.multiplierTo);
+    keys.push(JSON.stringify(e)); // the final tiebreak: a total order over distinct facts
+    return keys;
+  };
+  const ordered = events
+    .map((e) => ({ e, k: orderKeys(e) }))
+    // Array.prototype.sort is stable (Node ≥ 11), but no input-order tie survives to it:
+    // cross-type comparisons return at the rank, same-type tuples share the shape, and the
+    // JSON tail separates everything but byte-identical events
+    .sort((a, b) => {
+      for (let i = 0; i < a.k.length; i++) {
+        const c = cmp(a.k[i], b.k[i]);
+        if (c !== 0) return c;
+      }
+      return 0;
+    })
+    .map((p) => p.e);
+
   const out = cloneLots(lots);
   const accruals = [];
   const realized = [];
@@ -82,14 +144,14 @@ export function applyEvents(lots, events) {
   // feed order. The lexicographically smallest (decimals, first source) wins, so any
   // permutation of the same events yields the same accrual.
   const divSurvivor = new Map();
-  for (const e of events) {
+  for (const e of ordered) {
     if (e.type !== "DIVIDEND_ACCRUAL") continue;
     const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
     const rank = `${e.decimals ?? ""}|${JSON.stringify(Array.isArray(e.sources) ? e.sources : null)}|${e.status ?? ""}`;
     const cur = divSurvivor.get(key);
     if (cur === undefined || rank < cur.rank) divSurvivor.set(key, { rank, e });
   }
-  for (const e of events) {
+  for (const e of ordered) {
     if (e.type === "DIVIDEND_ACCRUAL") {
       // the route's identity: mint + CALENDAR EX-DAY + amount — the schema canonicalizes
       // datetime forms to the day at the gate, so this is a true identity. "Same day OR

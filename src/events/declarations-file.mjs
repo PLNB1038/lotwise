@@ -10,6 +10,9 @@
 //     "supersedes": { "exDate": "2026-06-18", "amountPerUnitRaw": "4000000" } }
 // The replacement removes the target's accrual (the corrected amount accrues alone);
 // a dangling, chained or doubled reference refuses the whole file — see dividends.mjs.
+// One ex-day carries one declared amount: two plain same-day declarations of one symbol
+// with different amounts refuse the whole file too — that is a correction without
+// `supersedes`, and feeding it as two dividends would double the income.
 // The file is READ-ONLY to the product (nothing ever writes it), so a broken file needs
 // no evidence copy: warn + a /health flag, the boot continues without declarations —
 // the same degradation shape as a corrupt registry, minus the quarantine.
@@ -85,6 +88,27 @@ export function loadDeclarationsFile(path, registry) {
   }
   if (foreign.size > 0) {
     console.warn(`[declarations] symbols not in the registry were skipped: ${[...foreign].join(", ")} — no token binds them`);
+  }
+  // The registry is the authority on a token's decimals: a declaration's `decimals` is
+  // display metadata only (amountPerUnitRaw is per raw unit and is never rescaled), so a
+  // drift does not refuse the file — but it lies about the human-readable amount by
+  // orders of magnitude and rides into the accrual rows as metadata, so it is named
+  // loudly at load. One line per (symbol, declared value): a big feed must not print one
+  // warning per declaration. Reached only past the rejections gate above, so every
+  // same-symbol line here has producer-valid decimals — the guards below skip the rest.
+  const registryDecimals = new Map(registry.map((t) => [t.symbol.toUpperCase(), t.decimals]));
+  const decimalsWarned = new Set();
+  for (const decl of list) {
+    if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
+    const key = decl.symbol.toUpperCase();
+    const regRaw = registryDecimals.get(key);
+    const reg = typeof regRaw === "string" && /^\d+$/.test(regRaw) ? Number(regRaw) : regRaw;
+    if (typeof reg !== "number" || !Number.isInteger(reg)) continue; // no authority to compare against
+    const declaredRaw = typeof decl.decimals === "string" && /^\d+$/.test(decl.decimals) ? Number(decl.decimals) : decl.decimals;
+    if (typeof declaredRaw !== "number" || !Number.isInteger(declaredRaw)) continue; // malformed → the producer refused the file above
+    if (declaredRaw === reg || decimalsWarned.has(`${key}|${declaredRaw}`)) continue;
+    decimalsWarned.add(`${key}|${declaredRaw}`);
+    console.warn(`[declarations] ${key}: declaration decimals ${declaredRaw} ≠ registry decimals ${reg} — the raw amount is per raw unit and unaffected, but display metadata disagrees with tokens.json`);
   }
   // A corrected re-declaration WITH the supersedes field never reaches this scan: the
   // producer resolved the replacement above, the target event is gone. The warning is

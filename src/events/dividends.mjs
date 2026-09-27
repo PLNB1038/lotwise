@@ -129,7 +129,10 @@ function toSupersedesTarget(v, decl) {
  *   Replacement, not addition: the target's event is removed and the correction accrues
  *   alone. Validated all-or-nothing (DeclarationError refuses the whole feed):
  *   the target must exist, must be a plain line (a chain/self-reference is forbidden —
- *   the scheme is one level deep) and must not be superseded twice. A VERBATIM repeat of
+ *   the scheme is one level deep) and must not be superseded twice. Two plain
+ *   declarations of one symbol on one canonical ex-day with different amounts refuse the
+ *   feed as well — one ex-day carries one declared amount; a correction goes through
+ *   `supersedes`. A VERBATIM repeat of
  *   a correction line collapses in the exact-duplicate dedup first — re-submitting the
  *   feed is not a double supersede.
  * @param {{symbol: string}} ctx
@@ -266,6 +269,41 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
       const targetId = `${supersedesTarget.day}|${supersedesTarget.amount}`;
       supersedeTargets.set(targetId, (supersedeTargets.get(targetId) ?? 0) + 1);
     }
+  }
+
+  // ONE EX-DAY CARRIES ONE DECLARED AMOUNT: two plain declarations of the same symbol on
+  // the same canonical ex-day with different amounts are not two dividends — an issuer's
+  // one ex-date carries one declared sum, so this is a correction that bypassed
+  // `supersedes`, and the engine (whose dividend identity is mint + ex-day + amount)
+  // would accrue BOTH — the income doubles silently while the file looks loaded. The
+  // whole feed refuses instead: zero accruals is the honest direction, not doubled ones.
+  // The grouping rides the plainIdentities set (corrections are excluded — a superseded
+  // replacement is the legal way to change a same-day amount), and keys on the canonical
+  // ex-day, so a datetime twin of the day is the same ex-day here too. A changed sum on a
+  // DIFFERENT day stays advisory: special dividends legitimately sit next to regular
+  // ones, and the loader's proximity warning covers that case.
+  const byDayAmounts = new Map(); // canonical ex-day → the distinct plain amounts on it
+  for (const id of plainIdentities) {
+    const cut = id.indexOf("|");
+    if (!byDayAmounts.has(id.slice(0, cut))) byDayAmounts.set(id.slice(0, cut), new Set());
+    byDayAmounts.get(id.slice(0, cut)).add(id.slice(cut + 1));
+  }
+  const amountConflicts = [];
+  for (const day of [...byDayAmounts.keys()].sort()) {
+    const amounts = [...byDayAmounts.get(day)].sort((a, b) => Number(a) - Number(b));
+    if (amounts.length < 2) continue;
+    const listed = amounts.length === 2
+      ? `${amounts[0]} and ${amounts[1]}`
+      : `${amounts.slice(0, -1).join(", ")} and ${amounts[amounts.length - 1]}`;
+    const label = amounts.length === 2 ? "two declarations" : `${amounts.length} declarations`;
+    amountConflicts.push(`${label} for one ex-day (${day}, amountPerUnitRaw ${listed}) — one ex-day carries one declared amount; a correction must use supersedes`);
+  }
+  if (amountConflicts.length > 0) {
+    // the same reason discipline as the broken references below: the first ten teach
+    // the fix, the rest are counted
+    const listed = amountConflicts.slice(0, 10);
+    if (amountConflicts.length > 10) listed.push(`…and ${amountConflicts.length - 10} more conflicted ex-days`);
+    throw new DeclarationError(listed.join("; "));
   }
 
   // Every surviving correction must name exactly one existing plain target. A dangling
