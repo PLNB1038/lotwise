@@ -17,7 +17,7 @@ Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy.
   loop only exhausts it faster; back off in both cases.
 - `network` — the transport failed.
 - `scan-busy` — one wallet scan runs server-wide at a time; a concurrent scan request
-  answers `503` with this kind and `Retry-After: 30`. Retry, do not parallelize.
+  answers `503` with this kind and `Retry-After` (at least 30s; grows with the previous scan's wall time). Retry, do not parallelize.
 - `aborted` — the caller's own connection went away (the scan is stopped for them);
   nothing to retry, the client is gone.
 

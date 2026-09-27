@@ -258,7 +258,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       signatures: scan.signatures,
       fetched: scan.fetched,
       relevantTxs: scan.txs.length,
-      skipped: scan.skipped.length,
+      skipped: (scan.skipped?.length ?? 0),
     },
     truncated: Boolean(scan.truncated), // the scan window was cut by the cap — lots may not be fully covered
     ...(scan.ambiguousSlotPairs

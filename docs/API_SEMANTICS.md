@@ -7,7 +7,7 @@ is a contract pinned by the test suite; nothing in this file introduces new
 behavior. The general response and error contract (string decimals, `kind` as
 the retry policy, rate limits) lives in the README and applies here too.
 
-Both endpoints are synchronous: wallet scans walk full transaction history, and
+`/health` exposes `scans.active` — true while the one scan slot is held (a second visitor gets `503 scan-busy`). Both endpoints are synchronous: wallet scans walk full transaction history, and
 an active wallet can take minutes.
 
 ## For the integrator (limits stated up front)
@@ -54,7 +54,7 @@ strings, unknown ones are `null` — never an invented number):
       ],
       "realized": [
         {"date": "…", "qtyRaw": "50000000", "basisRaw": "256150000", "basisKnown": true,
-         "proceedsRaw": "260000000", "proceedsKnown": true, "pnlRaw": "3850000"}
+         "proceedsRaw": "260000000", "proceedsKnown": true, "pnlRaw": "3850000", "acquiredDate": "2026-01-05T00:00:00.000Z"}
       ],
       "gaps": []
     }
@@ -148,7 +148,9 @@ Rows flag `baseIncomplete` when:
 1. a transaction cannot be ordered against the ex-date;
 2. the scan has gaps;
 3. the window was truncated;
-4. the scan's net delta did not reconcile with the live chain.
+4. the scan's net delta did not reconcile with the live chain;
+5. a window transaction was unreadable (`skipped`) — it may carry mint deltas (on-chain
+   FAILED transactions are exempt: they have no deltas by definition).
 
 A window that saw only disposals answers `totalRaw: null` — never a negative
 number an integrator would subtract — and is flagged `baseIncomplete` too.

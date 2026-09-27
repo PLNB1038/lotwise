@@ -20,7 +20,7 @@ import { createApiServer } from "../src/api/server.mjs";
 import { bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
 
 const OWNER = "Ho5371Kc1Kxy7ze85UYzZ4BUfSkLg39Xp3B424RuYrbC"; // real-shaped: decodes to 32 bytes
-const REGISTRY = [{ mint: "GuardMint" + "1".repeat(33), symbol: "GRDx", name: "Guard Token", decimals: 6, issuer: "test" }];
+const REGISTRY = [{ mint: "XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C", symbol: "GRDx", name: "Guard Token", decimals: 6, issuer: "test" }];
 const MINT = REGISTRY[0].mint;
 
 // ---- 1) a stuck page terminates the walk AND marks the window truncated ----
@@ -47,7 +47,7 @@ test("scan: a stuck endpoint breaks with truncated:true — the tail is unknown,
 }, { timeout: 5000 });
 
 // ---- 2) skipped txs flip baseIncomplete in /accruals ----
-const A_MINT = "GuardAccr" + "1".repeat(33);
+const A_MINT = "XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C";
 const A_ADDR = "ExDateAddr" + "1".repeat(34);
 const A_SYMBOL = "GACx";
 const aRegistry = [{ mint: A_MINT, symbol: A_SYMBOL, name: "Accrual Guard", decimals: 6, issuer: "test" }];
@@ -64,7 +64,8 @@ const aTx = (signature, deltaRaw, isoDate, slot = 1) => ({
   deltas: [{ owner: A_ADDR, mint: A_MINT, preRaw: 0n, postRaw: 0n, deltaRaw }],
 });
 const aScan = (txs, skipped = []) => ({
-  owner: A_ADDR, signatures: txs.length + skipped.length, fetched: txs.length, txs, skipped, truncated: false, accounts: {},
+  owner: A_ADDR, signatures: txs.length + skipped.length, fetched: txs.length, txs, skipped, truncated: false,
+  accounts: { [A_MINT]: { currentRaw: "5" } }, // buy 10 − sell 5: reconciles, no gaps — the flag is pinned to skipped alone
 });
 
 async function withAccruals(fn, { events, txs, skipped }) {
@@ -88,9 +89,9 @@ test("accruals: an unreadable (skipped) tx makes the ex-date base incomplete, no
     assert.ok(row.baseIncomplete === true, "the pre-ex-date buy is inside a skipped tx — the base is a guess");
   }, {
     events: [divEvent("2026-02-01", 2)],
-    // a benign post-ex-date tx keeps the token present in the report; the pre-ex-date
-    // buy lives in the skipped list only
-    txs: [aTx("s-late", -5n, "2026-02-20")],
+    // a seamless window (buy 10 pre-ex, sell 5 post-ex): no gaps, reconciles — the ONLY
+    // incomplete trigger left is the skipped pre-ex-date buy
+    txs: [aTx("b1", 10n, "2026-01-05"), aTx("s-late", -5n, "2026-02-20")],
     skipped: [{ signature: "sk1", reason: "tx unreadable" }],
   });
 });
@@ -200,4 +201,106 @@ test("declarations: a symbol outside the registry is skipped with a loud warn", 
     console.warn = origWarn;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- wave-39 hardening: the stuck family and the echo caps ----
+function routeClient(routeOf) {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    client: {
+      async call(method, params) {
+        if (method === "getTokenAccountsByOwner") return { value: [] };
+        if (method === "getTransaction") return null;
+        calls++;
+        if (calls > 60) return [];
+        return routeOf(params[1]?.before);
+      },
+    },
+  };
+}
+const sg = (n) => ({ signature: "W39sig" + String(n).padStart(2, "0") + "x".repeat(30), slot: n, blockTime: 1_700_000_000 + n, err: null });
+
+test("scan: a stuck mirror followed by an empty page still flags truncated — the source already lied once", async () => {
+  const { client } = routeClient((before) => {
+    if (before === undefined) return [sg(1), sg(2)];
+    if (before.endsWith("x")) return [sg(1), sg(2)]; // the mirror: the cursor is ignored
+    return [];
+  });
+  const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
+  assert.equal(scan.truncated, true, "an empty page after a mirror does not launder it");
+}, { timeout: 5000 });
+
+test("scan: a mirror interleaved with a reshuffled overlap page still flags truncated", async () => {
+  const { client } = routeClient((before) => {
+    if (before === undefined) return [sg(1), sg(2)];
+    if (before.endsWith("2x")) return [sg(2), sg(1)]; // reshuffle: cursor cannot advance
+    return [sg(3), sg(1)]; // overlap-shaped, but the mirror already happened
+  });
+  const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
+  assert.equal(scan.truncated, true, "the interleave must not exit through the silent overlap branch");
+}, { timeout: 5000 });
+
+test("scan: two fully unparseable pages flag truncated — the tail is unknown", async () => {
+  const { client } = routeClient(() => [{ slot: 1 }, null, { garbage: true }]);
+  const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
+  assert.equal(scan.truncated, true);
+}, { timeout: 5000 });
+
+test("accruals: a FAILED tx in skipped does not flag the base — it has no deltas by definition", async () => {
+  await withAccruals(async (base) => {
+    const r = await fetch(`${base}/accruals?symbol=${A_SYMBOL}&address=${A_ADDR}`);
+    const [row] = await r.json();
+    assert.equal(row.baseIncomplete, undefined, "an on-chain failed tx cannot change the ex-date base");
+  }, {
+    events: [divEvent("2026-02-01", 2)],
+    txs: [aTx("b1", 10n, "2026-01-05"), aTx("s-late", -5n, "2026-02-20")],
+    skipped: [{ signature: "f1", reason: "tx failed on-chain" }],
+  });
+});
+
+test("schema: the reason cap applies to every event type, not only multiplier changes", () => {
+  assert.throws(() => validateEvent({
+    type: "SPLIT", effectiveDate: "2026-01-01", status: "confirmed", mint: MINT,
+    sources: ["https://i.example/s"], ratioNumerator: 3, ratioDenominator: 2,
+    reason: "r".repeat(2049),
+  }), /reason exceeds 2048/);
+});
+
+test("engine: rank ties (same decimals and first source, different status) stay order-independent", () => {
+  const lot = () => [{ id: `${MINT}-1`, mint: MINT, owner: OWNER, qtyRaw: 10n, acquiredDate: "2026-01-01", basisRaw: 0n }];
+  const a = divSighting(6, "https://same.example/feed");
+  const b = { ...a, status: "unverified" };
+  assert.equal(applyEvents(lot(), [a, b]).accruals[0].status,
+               applyEvents(lot(), [b, a]).accruals[0].status);
+});
+
+test("declarations: a corrected re-declaration with a CHANGED amount within 3 days warns", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lw-guard2-"));
+  const file = join(dir, "declarations.json");
+  writeFileSync(file, JSON.stringify([
+    { symbol: "GRDx", exDate: "2026-06-18", amountPerUnitRaw: 2000000, decimals: 6, sourceUrl: "https://i.example/v1" },
+    { symbol: "GRDx", exDate: "2026-06-19", amountPerUnitRaw: 4000000, decimals: 6, sourceUrl: "https://i.example/v2" },
+  ]));
+  const warned = [];
+  const origWarn = console.warn;
+  console.warn = (msg) => warned.push(String(msg));
+  try {
+    loadDeclarationsFile(file, REGISTRY);
+    assert.ok(warned.some((w) => w.includes("changed sum") || (w.includes("GRDx") && w.includes("3 days"))), "the classic issuer fix flow is named loudly");
+  } finally {
+    console.warn = origWarn;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("report: a scan without a skipped list builds instead of 500", () => {
+  const gTx = (signature, deltaRaw, isoDate, slot) => ({
+    signature, slot, err: null, moneyDeltas: [],
+    blockTime: Math.floor(Date.parse(isoDate) / 1000),
+    deltas: [{ owner: OWNER, mint: MINT, preRaw: 0n, postRaw: 0n, deltaRaw }],
+  });
+  const scan = { owner: OWNER, signatures: 1, fetched: 1, truncated: false, accounts: {}, txs: [gTx("gb1", 10n, "2025-06-01", 1)] };
+  const rep = buildWalletReport(scan, { registry: REGISTRY, timelines: new Map() });
+  assert.equal(rep.counts.skipped, 0);
 });

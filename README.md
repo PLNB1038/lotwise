@@ -122,11 +122,11 @@ Response shape (a real `/events` row, truncated):
 ```json
 {"type":"MULTIPLIER_CHANGE","effectiveDate":"2026-02-02T21:47:00.000Z","status":"confirmed",
  "sources":["https://api.xstocks.fi/api/v2/public/assets/JPMx/multiplier/history?network=Ethereum#node:…"],
- "multiplierFrom":"1.0040015369331659","multiplierTo":"1.007154790830491","reason":"Dividend",
+ "multiplierFrom":"1.0040015369331659","multiplierTo":"1.0071547908304908","reason":"Dividend",
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
-Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit. Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap or a stuck page cut the walk short. Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
 
 Rate limits, per client IP: 12 wallet scans/min, 60 on-chain/price calls/min (see docs/ERRORS.md for buckets and env knobs). Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree` — the verdict compares the issuer plan (`api`, evaluated at the requested date) against `onChainEffective` (the mint's current `active` multiplier with an already-activated `pending` applied); the raw `active` value may legitimately differ from `api` when a pending rebase sits in between. `/crosscheck` verdicts are the five values listed above.
 
@@ -139,24 +139,24 @@ The API is read-only; deliveries are initiated by an operator or cron through th
 ```mermaid
 flowchart LR
     subgraph S ["Sources"]
-        I ["xStocks issuer API"]
-        C ["Solana JSON-RPC"]
-        P ["GeckoTerminal candles"]
-        D ["operator declarations"]
+        I["xStocks issuer API"]
+        C["Solana JSON-RPC"]
+        P["GeckoTerminal candles"]
+        D["operator declarations"]
     end
     subgraph E ["Engine"]
-        SC ["schema — validation, strict dates"]
-        J ["on-chain journal — append-only, replayed on boot"]
-        RC ["reconcile — issuer plan vs chain"]
-        XC ["price cross-check"]
-        ML ["multiplier timeline — exact rationals"]
-        WS ["wallet scan — signatures, tx deltas"]
-        LE ["lot engine — FIFO, refuses to guess"]
+        SC["schema — validation, strict dates"]
+        J["on-chain journal — append-only, replayed on boot"]
+        RC["reconcile — issuer plan vs chain"]
+        XC["price cross-check"]
+        ML["multiplier timeline — exact rationals"]
+        WS["wallet scan — signatures, tx deltas"]
+        LE["lot engine — FIFO, refuses to guess"]
     end
     subgraph O ["Consumers"]
-        A ["REST API"]
-        W ["webhooks — HMAC-signed"]
-        U ["report page"]
+        A["REST API"]
+        W["webhooks — HMAC-signed"]
+        U["report page"]
     end
     I --> SC
     D --> SC
@@ -172,7 +172,7 @@ flowchart LR
     XC --> A
     LE --> A
     A --> U
-    A --> W
+    J --> W
 ```
 
 `scripts/serve.mjs` wires everything together: registry, then events from both source families, then the API server. Modules under `src/`:
@@ -200,7 +200,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-863 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+871 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

@@ -426,7 +426,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           // a skipped tx is the same class of unknown: it may carry mint deltas of this
           // window, and a base built without it is a guess presented as a confident zero
           let incomplete = token.gaps.length > 0 || Boolean(scan.truncated)
-            || (Array.isArray(scan.skipped) && scan.skipped.length > 0);
+            || (Array.isArray(scan.skipped) && scan.skipped.some((sk) => !/fail/i.test(String(sk?.reason ?? ""))));
           // a position older than the window: the deltas cannot reach the pre-ex-date
           // buys and the live balance disagrees with the window — `reconciles` measures
           // exactly this and the route must listen to it like it listens to gaps: a

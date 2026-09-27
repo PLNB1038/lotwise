@@ -86,7 +86,11 @@ export function validateSubscription(sub) {
   // ["*"] is the wildcard written list-style; without this normalization it passed
   // validation and then matched nothing (no real symbol is a literal "*")
   if (Array.isArray(sub.symbols) && sub.symbols.length === 1 && sub.symbols[0] === "*") {
-    sub.symbols = "*";
+    try {
+      sub.symbols = "*";
+    } catch {
+      throw new SubscriptionError('symbols ["*"] cannot be normalized on a frozen/shared subscription object', "symbols");
+    }
   }
   if (sub.symbols !== "*") {
     if (!Array.isArray(sub.symbols) || sub.symbols.length === 0) {

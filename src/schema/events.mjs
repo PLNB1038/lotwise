@@ -73,6 +73,16 @@ function requireFields(e, fields) {
 // date-only form here — the single gate every entry path crosses, so the dividend's
 // identity (mint + calendar ex-day + amount) is one thing everywhere downstream.
 export function validateEvent(e) {
+  // the reason line is an echo surface on EVERY event type (it often carries a source
+  // URL) — capping it inside one type's case left the other types' reason uncapped
+  if (e !== null && typeof e === "object" && e.reason !== undefined) {
+    if (typeof e.reason !== "string") {
+      throw new EventValidationError("reason must be a string (e.g. Dividend, Stock Split, Reverse Split)", "reason");
+    }
+    if (e.reason.length > MAX_REASON_LENGTH) {
+      throw new EventValidationError(`reason exceeds ${MAX_REASON_LENGTH} characters`, "reason");
+    }
+  }
   if (!e || typeof e !== "object") throw new EventValidationError("event must be an object");
   requireFields(e, ["type", "mint", "effectiveDate", "status", "sources"]);
 
@@ -197,12 +207,7 @@ export function validateEvent(e) {
       if (e.multiplierFrom === e.multiplierTo) {
         throw new EventValidationError("multiplier change must alter the multiplier", "multiplierTo");
       }
-      if (e.reason !== undefined && typeof e.reason !== "string") {
-        throw new EventValidationError("reason must be a string (e.g. Dividend, Stock Split, Reverse Split)", "reason");
-      }
-      if (e.reason !== undefined && e.reason.length > MAX_REASON_LENGTH) {
-        throw new EventValidationError(`reason exceeds ${MAX_REASON_LENGTH} characters (it often carries a source URL — cap it like sources)`, "reason");
-      }
+
       break;
   }
 

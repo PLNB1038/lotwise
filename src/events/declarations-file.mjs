@@ -100,6 +100,28 @@ export function loadDeclarationsFile(path, registry) {
   // NEIGHBOR distances, not the distance to the cluster's first day: a chain 01/03/05
   // (every neighbor ≤ 3 days) is one suspicious cluster in full — the anchor window
   // dropped its tail and the operator saw 2 of the 3 declarations.
+  // same-symbol proximity regardless of amount: a correction that changes the SUM is the
+  // classic issuer flow and used to slip past the same-amount cluster warning below while
+  // doubling the income in the engine (the engine's identity dedup requires the amount to match)
+  const bySymbolDay = new Map();
+  for (const decl of list) {
+    if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
+    const day = typeof decl.exDate === "string" ? decl.exDate.slice(0, 10) : null;
+    if (day === null) continue;
+    const ms = parseIsoDateMs(day);
+    if (ms === null) continue;
+    const key = decl.symbol.toUpperCase();
+    if (!bySymbolDay.has(key)) bySymbolDay.set(key, []);
+    bySymbolDay.get(key).push({ day, ms, amount: String(decl.amountPerUnitRaw ?? "") });
+  }
+  for (const [sym, arr] of bySymbolDay) {
+    arr.sort((a, b) => a.ms - b.ms);
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 3 * 86_400_000) {
+        console.warn(`[declarations] ${sym}: two declarations within 3 days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
+      }
+    }
+  }
   const divs = events
     .filter((e) => e.type === "DIVIDEND_ACCRUAL")
     .map((e) => ({ mint: e.mint, amount: e.amountPerUnitRaw, day: String(e.effectiveDate).slice(0, 10), ms: parseIsoDateMs(String(e.effectiveDate).slice(0, 10)) }))
