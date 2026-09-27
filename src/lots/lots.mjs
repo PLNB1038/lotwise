@@ -77,7 +77,18 @@ export function applyEvents(lots, events) {
   // sourceUrl, so the same dividend reaching the store from two sources (a press page and
   // an API node) survives as two events — and without this gate would accrue twice,
   // doubling the declared income. mint + ex-date + per-unit amount is the dividend's identity.
-  const seenDivIdentities = new Set();
+  // Deterministic survivor: two sightings of one identity may differ in metadata
+  // (decimals/sourceUrl) and "first of the array" made the survivor's metadata depend on
+  // feed order. The lexicographically smallest (decimals, first source) wins, so any
+  // permutation of the same events yields the same accrual.
+  const divSurvivor = new Map();
+  for (const e of events) {
+    if (e.type !== "DIVIDEND_ACCRUAL") continue;
+    const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
+    const rank = `${e.decimals ?? ""}|${Array.isArray(e.sources) ? e.sources[0] ?? "" : ""}`;
+    const cur = divSurvivor.get(key);
+    if (cur === undefined || rank < cur.rank) divSurvivor.set(key, { rank, e });
+  }
   for (const e of events) {
     if (e.type === "DIVIDEND_ACCRUAL") {
       // the route's identity: mint + CALENDAR EX-DAY + amount — the schema canonicalizes
@@ -85,8 +96,7 @@ export function applyEvents(lots, events) {
       // same instant" was not transitive: three events could dedup to 2 or 1 depending
       // on the store order, and a cross-midnight pair's survivor decided the base day.
       const key = `${e.mint}|${String(e.effectiveDate).slice(0, 10)}|${e.amountPerUnitRaw}`;
-      if (seenDivIdentities.has(key)) continue;
-      seenDivIdentities.add(key);
+      if (divSurvivor.get(key).e !== e) continue;
     }
     switch (e.type) {
       case "SPLIT": {

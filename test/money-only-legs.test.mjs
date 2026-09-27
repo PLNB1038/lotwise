@@ -33,7 +33,12 @@ function client({ sigPages = {}, txsById = {}, accounts = [] } = {}) {
       if (method === "getTokenAccountsByOwner") {
         return { value: params[1]?.programId === TOKEN_2022 ? accounts : [] };
       }
-      if (method === "getSignaturesForAddress") return params[0] === OWNER ? (sigPages[OWNER] ?? []) : (sigPages[params[0]] ?? []);
+      if (method === "getSignaturesForAddress") {
+        const page = params[0] === OWNER ? (sigPages[OWNER] ?? []) : (sigPages[params[0]] ?? []);
+        // a real endpoint answers an exhausted cursor with an empty page, not a repeat
+        const before = params[1]?.before;
+        return before !== undefined && page.length > 0 && page[page.length - 1].signature === before ? [] : page;
+      }
       if (method === "getTransaction") return txsById[params[0]];
       throw new Error("unexpected method " + method);
     },

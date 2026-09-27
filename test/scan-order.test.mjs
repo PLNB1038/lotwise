@@ -53,7 +53,12 @@ function fakeClient(page) {
   return {
     async call(method, params) {
       if (method === "getTokenAccountsByOwner") return { value: [] };
-      if (method === "getSignaturesForAddress") return params[0] === OWNER ? page : [];
+      if (method === "getSignaturesForAddress") {
+        if (params[0] !== OWNER) return [];
+        // a real endpoint answers an exhausted cursor with an empty page, not a repeat
+        const before = params[1]?.before;
+        return before !== undefined && page.length > 0 && page[page.length - 1].signature === before ? [] : page;
+      }
       if (method === "getTransaction") return TX_BY_SIG.get(params[0]) ?? null;
       throw new Error(`unexpected ${method}`);
     },

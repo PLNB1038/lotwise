@@ -72,6 +72,20 @@ export function loadDeclarationsFile(path, registry) {
     if (rejections.length > 10) listed.push(`…and ${rejections.length - 10} more symbols with broken declarations`);
     return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations rejected: ${listed.join("; ")}` };
   }
+  // a declaration for a symbol that is in NO registry token used to disappear silently —
+  // the per-symbol walk simply never looks for it. One loud line names the drift
+  // (a typo in the file, or a token that left the registry).
+  const known = new Set(registry.map((t) => t.symbol.toUpperCase()));
+  const foreign = new Set();
+  for (const decl of list) {
+    if (decl !== null && typeof decl === "object" && typeof decl.symbol === "string") {
+      const up = decl.symbol.toUpperCase();
+      if (!known.has(up)) foreign.add(up);
+    }
+  }
+  if (foreign.size > 0) {
+    console.warn(`[declarations] symbols not in the registry were skipped: ${[...foreign].join(", ")} — no token binds them`);
+  }
   // A corrected re-declaration WITH the supersedes field never reaches this scan: the
   // producer resolved the replacement above, the target event is gone. The warning is
   // for LEGACY files only — a corrected re-declaration without the field (the issuer

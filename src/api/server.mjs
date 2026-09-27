@@ -107,6 +107,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // the running scan is untouched. The semaphore covers only the RPC phase (the scanner
   // call): report building is local and instant.
   let scanActive = false;
+  // honest Retry-After: the header used to be a hardcoded "30" while a real scan holds
+  // the slot for minutes; the previous scan's wall time is the best estimate of when the
+  // current one ends (30 stays the floor for the first-ever scan)
+  let lastScanMs = 0;
+  let scanStartedAt = 0;
   // shutdown bookkeeping for the ONE slot: the AbortController of the scan in flight
   // (so a grace-window expiry can abort the scan point-blank, not just know THAT one
   // runs) and the waiters to release when the slot frees. The begin/end pair below
@@ -116,9 +121,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   let scanSettlers = [];
   const scanBegin = (abort) => {
     scanActive = true;
+    scanStartedAt = Date.now();
     activeScanAbort = abort;
   };
   const scanEnd = () => {
+    if (scanStartedAt > 0) lastScanMs = Date.now() - scanStartedAt;
     scanActive = false;
     activeScanAbort = null;
     // waiters fire AFTER the flags flip: a shutdown resolved before scanActive=false
@@ -127,7 +134,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
     scanSettlers = [];
     for (const settle of settlers) settle();
   };
-  const scanBusy = (res) => json(res, 503, { error: "another wallet scan is in progress, retry shortly", kind: "scan-busy" }, { "Retry-After": "30" });
+  const scanBusy = (res) => json(res, 503, { error: "another wallet scan is in progress, retry shortly", kind: "scan-busy" }, { "Retry-After": String(Math.max(30, Math.ceil(lastScanMs / 1000))) });
   // A broken declarations channel makes /accruals 200 [] indistinguishable from "no
   // dividends" — the separator lives in a header so the body contract stays an array
   // (the /health mirror is for operators, integrators do not poll /health). The gate is
@@ -416,7 +423,10 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           let base = 0n;
           let considered = 0;
           // F3: a truncated scan window silently understates the ex-date base too
-          let incomplete = token.gaps.length > 0 || Boolean(scan.truncated);
+          // a skipped tx is the same class of unknown: it may carry mint deltas of this
+          // window, and a base built without it is a guess presented as a confident zero
+          let incomplete = token.gaps.length > 0 || Boolean(scan.truncated)
+            || (Array.isArray(scan.skipped) && scan.skipped.length > 0);
           // a position older than the window: the deltas cannot reach the pre-ex-date
           // buys and the live balance disagrees with the window — `reconciles` measures
           // exactly this and the route must listen to it like it listens to gaps: a
@@ -498,6 +508,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         journal: journalStats,
         registry: registryStats,
         declarations: declarationsStats,
+        // one scan slot: while true, a second /lots visitor sees 503 scan-busy — an
+        // operator watching /health can tell "busy" from "down"
+        scans: { active: scanActive },
         excluded: [...excludedByMint].map(([mint, reason]) => ({
           mint,
           symbol: byMint.get(mint)?.symbol ?? null,

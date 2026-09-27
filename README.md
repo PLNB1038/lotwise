@@ -126,7 +126,7 @@ Response shape (a real `/events` row, truncated):
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
-Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit. Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis.
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap was hit. Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
 
 Rate limits, per client IP: 12 wallet scans/min, 60 on-chain/price calls/min (see docs/ERRORS.md for buckets and env knobs). Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree` — the verdict compares the issuer plan (`api`, evaluated at the requested date) against `onChainEffective` (the mint's current `active` multiplier with an already-activated `pending` applied); the raw `active` value may legitimately differ from `api` when a pending rebase sits in between. `/crosscheck` verdicts are the five values listed above.
 
@@ -200,7 +200,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-854 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+863 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

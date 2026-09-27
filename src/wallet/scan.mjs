@@ -388,7 +388,13 @@ export async function scanWallet(client, owner, registry, { maxTxs = 300, limit 
       }
       if (srcTruncated) break;
       if (added === 0 || lastValid === null || lastValid === before) {
-        if (++zeroProgressPages >= 2) break;
+        // A page that adds nothing but MOVES the cursor is cross-source overlap draining
+        // toward an honest empty page — not a hole. A page that leaves the cursor in
+        // place is a stuck mirror: the tail beyond it is unknown, and the window must
+        // say "truncated" instead of implying a complete history over a hole.
+        if (lastValid !== null && lastValid === before) {
+          if (++zeroProgressPages >= 2) { truncated = true; break; }
+        } else if (++zeroProgressPages >= 2) break;
       } else {
         zeroProgressPages = 0;
       }

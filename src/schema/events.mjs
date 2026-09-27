@@ -47,6 +47,10 @@ const ZERO_MULTIPLIER_RE = /^0+(\.0+)?$/;
 // Cap on multiplier fraction precision — a PAIR with timeline.mjs (decimalToRatio rejects >30).
 // The contract must match on both sides; change only together.
 const MAX_MULTIPLIER_FRACTION_DIGITS = 30;
+// symbols and the reason line: sources are capped at 2048 chars; these fields are the
+// remaining asymmetric echo holes for a hostile or corrupted source
+const MAX_SYMBOL_LENGTH = 64;
+const MAX_REASON_LENGTH = 2048;
 
 export class EventValidationError extends Error {
   constructor(msg, field) {
@@ -162,6 +166,13 @@ export function validateEvent(e) {
           e.oldSymbol === e.newSymbol) {
         throw new EventValidationError("ticker change must alter the symbol", "newSymbol");
       }
+      // a megabyte "symbol" echoed from a hostile source is not a ticker; sources are
+      // already length-capped and these two fields must not be the asymmetric hole
+      for (const f of ["oldSymbol", "newSymbol"]) {
+        if (e[f].length > MAX_SYMBOL_LENGTH) {
+          throw new EventValidationError(`${f} exceeds ${MAX_SYMBOL_LENGTH} characters`, f);
+        }
+      }
       break;
     case "REDEEM":
       // a redemption closes the token: an exchange for the underlying asset/stable, no extra fields required,
@@ -188,6 +199,9 @@ export function validateEvent(e) {
       }
       if (e.reason !== undefined && typeof e.reason !== "string") {
         throw new EventValidationError("reason must be a string (e.g. Dividend, Stock Split, Reverse Split)", "reason");
+      }
+      if (e.reason !== undefined && e.reason.length > MAX_REASON_LENGTH) {
+        throw new EventValidationError(`reason exceeds ${MAX_REASON_LENGTH} characters (it often carries a source URL — cap it like sources)`, "reason");
       }
       break;
   }

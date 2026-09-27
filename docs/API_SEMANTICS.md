@@ -90,6 +90,8 @@ economic result of the window as:
 > \+ Σ `proceedsRaw` of disposals with `proceedsKnown: true` and `basisKnown: false`
 > (a priced sale of an unbased lot: money received, basis unknown)
 > \+ Σ `gaps[].proceedsRaw` (the hole's own sale share — really received money)
+>
+> `proceedsRaw` on a piece is the tx's net USDC movement: a non-sale USDC outgoing in the same transaction lowers it. The full money picture of the window is the `moneyOnly` section plus the priced legs.
 
 ### One scan at a time
 

@@ -73,7 +73,8 @@ test("scan: an element without a signature on page >1 — does not break the cur
   const client = clientWithRoute((before) => {
     if (before === undefined) return [sig(1), sig(2)];
     if (before.endsWith("2")) return [{ slot: 99, blockTime: 1, err: null }, sig(3)]; // the broken element is LAST
-    return [sig(4)];
+    if (before.endsWith("3")) return [sig(4)];
+    return [];
   });
   const scan = await scanWallet(client, OWNER, REGISTRY, { limit: 2, maxTxs: 100 });
   assert.equal(scan.signatures, 4, "the cursor moves from the last VALID element, the tail arrives");

@@ -131,6 +131,9 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
           if (sellProceeds !== null) proceedsPiece = (sellProceeds * take) / due0;
           pieces.push({
             date,
+            // the lot's own date: a realized piece spans lot-date → sale-date, and a tax
+            // consumer needs both ends to classify the holding period
+            acquiredDate: lot.acquiredDate,
             qtyRaw: take,
             basis: basisPiece,
             basisKnown: basisPiece !== null,
@@ -216,6 +219,7 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       })),
       realized: s.realized.map((r) => ({
         date: r.date,
+        acquiredDate: r.acquiredDate ?? null, // the lot this piece was drawn from
         qtyRaw: String(r.qtyRaw),
         basisRaw: r.basis !== null ? String(r.basis) : null,
         basisKnown: r.basisKnown,

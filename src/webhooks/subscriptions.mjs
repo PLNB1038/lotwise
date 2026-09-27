@@ -83,6 +83,11 @@ export function validateSubscription(sub) {
   if (isPrivateDeliveryHost(parsed.hostname)) {
     throw new SubscriptionError("url host must be public (private, loopback, link-local and metadata addresses are not delivered to)", "url");
   }
+  // ["*"] is the wildcard written list-style; without this normalization it passed
+  // validation and then matched nothing (no real symbol is a literal "*")
+  if (Array.isArray(sub.symbols) && sub.symbols.length === 1 && sub.symbols[0] === "*") {
+    sub.symbols = "*";
+  }
   if (sub.symbols !== "*") {
     if (!Array.isArray(sub.symbols) || sub.symbols.length === 0) {
       throw new SubscriptionError('symbols must be "*" or a non-empty array of strings', "symbols");
@@ -471,6 +476,11 @@ export async function deliverToAll(events, subs, opts = {}) {
   // symbol fields of an operator's file and silently delivers nothing.
   const symbolWarnings = new Set();
   let effectiveSubs = subs;
+  // a wrong shape here used to silently disable the registry resolve and fall back to
+  // raw-symbol matching — the operator saw "delivered: 0" with no reason anywhere
+  if (symbolToMint !== null && symbolToMint !== undefined && !(symbolToMint instanceof Map)) {
+    throw new Error("symbolToMint must be a Map (symbol → mint) or null/undefined");
+  }
   if (symbolToMint instanceof Map && symbolToMint.size > 0) {
     // the map is keyed by symbols, but a mint identifier is a documented way
     // to subscribe too (README §Webhooks) and matches the canonical event as-is. Only

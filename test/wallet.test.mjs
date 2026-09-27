@@ -25,7 +25,12 @@ function fakeClient({ sigPages = {}, txs = {}, accountsByProgram = {} } = {}) {
     calls,
     async call(method, params) {
       calls.push({ method, key: params[0] });
-      if (method === "getSignaturesForAddress") return sigPages[params[0]] ?? [];
+      if (method === "getSignaturesForAddress") {
+        const page = sigPages[params[0]] ?? [];
+        // a real endpoint answers an exhausted cursor with an empty page, not a repeat
+        const before = params[1]?.before;
+        return before !== undefined && page.length > 0 && page[page.length - 1].signature === before ? [] : page;
+      }
       if (method === "getTokenAccountsByOwner") return accountsByProgram[params[1]?.programId] ?? { value: [] };
       if (method === "getTransaction") return txs[params[0]] ?? null;
       throw new Error(`unexpected method ${method}`);
