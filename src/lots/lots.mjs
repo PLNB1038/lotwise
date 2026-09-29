@@ -65,9 +65,12 @@ const heldBefore = (lot, effectiveTs, e) => {
  *   we do no type conversion on input)
  * @param {Array<object>} events — canonical schema events
  * @returns {{lots: Array, accruals: Array, realized: Array, symbolMap: object, applied: number, warnings: Array}}
- *   warnings — order-consequence notes ({kind:"dividend-shadowed-by-merger", mint, day,
- *   amountPerUnitRaw}): a dividend for a merger's new mint on the merger day accrues
- *   zero (the holders are still on the old mint when it applies) and the report says so.
+ *   warnings — order-consequence notes: {kind:"dividend-shadowed-by-merger", mint, day,
+ *   amountPerUnitRaw} when a dividend for a merger's new mint on the merger day accrued
+ *   ZERO (the holders were still on the old mint when it applies), and
+ *   {kind:"dividend-partially-shadowed-by-merger", …, shadowedQtyRaw} when it accrued
+ *   but a same-day exchange still moved pre-base units onto the mint after it — the
+ *   report names the slice that never accrued instead of a silent understatement.
  *
  * Date semantics (see the header): lot-touching events (SPLIT/DIVIDEND_ACCRUAL/
  * MERGER/REDEEM) apply only to lots with acquiredDate strictly earlier than
@@ -137,9 +140,11 @@ export function applyEvents(lots, events) {
   const symbolMap = {};
   // honesty bookkeeping for one canonical-order consequence: a DIVIDEND_ACCRUAL for a
   // merger's NEW mint ranks before the exchange, so on the merger day it applies while
-  // every holder is still on the old mint — the accrual is zero, and the report must say
-  // so instead of returning a silent zero indistinguishable from "nobody held the token"
+  // holders of the old mint are still there — units converted by the exchange never
+  // accrue (fully when nobody else held the new mint, partially otherwise), and the
+  // report must say so instead of a silent zero
   const zeroAccrualDivs = [];
+  const divHolderSets = new Map();
   const mergerConversions = [];
 
   const lotsOf = (mint) => out.filter((l) => l.mint === mint);
@@ -205,6 +210,7 @@ export function applyEvents(lots, events) {
           });
         }
         if (holders.size === 0) zeroAccrualDivs.push(e);
+        divHolderSets.set(e, holders);
         break;
       }
       case "MERGER": {
@@ -213,7 +219,9 @@ export function applyEvents(lots, events) {
         }
         const { exchangeNumerator: N, exchangeDenominator: D, newMint } = e; // N old for D new
         const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
+        const dayMidnight = Date.parse(`${String(e.effectiveDate).slice(0, 10)}T00:00:00.000Z`);
         let converted = 0;
+        let shadowQty = 0n; // converted units whose lots predate the day's midnight base
         for (const lot of lotsOf(e.mint)) {
           if (!heldBefore(lot, effTs, e)) continue; // a lot after the exchange is not converted
           if (lot.qtyRaw % BigInt(N) !== 0n) {
@@ -221,14 +229,19 @@ export function applyEvents(lots, events) {
               `merger ${N}:${D}: lot ${lot.id} qty ${lot.qtyRaw} not divisible by ${N}; refusing to round`, e,
             );
           }
-          lot.qtyRaw = (lot.qtyRaw / BigInt(N)) * BigInt(D);
+          const outQty = (lot.qtyRaw / BigInt(N)) * BigInt(D);
+          lot.qtyRaw = outQty;
           lot.mint = newMint;
           // basisRaw is preserved.
           converted++;
+          // heldBefore above already validated acquiredDate parses
+          if (parseIsoDateMs(String(lot.acquiredDate)) < dayMidnight) shadowQty += outQty;
         }
-        // materiality for the shadow bookkeeping above: only an exchange that actually
-        // moved lots could have supplied the holders the dividend applied without
-        mergerConversions.push({ newMint, day: String(e.effectiveDate).slice(0, 10), converted });
+        // materiality for the shadow bookkeeping above: only units an exchange moved onto
+        // this mint from lots that predate the day's base would have accrued had the
+        // dividend applied after it — that counterfactual is what makes a zero or a
+        // missing slice the order's doing rather than real economics
+        mergerConversions.push({ newMint, day: String(e.effectiveDate).slice(0, 10), converted, shadowQty });
         break;
       }
       case "TICKER_CHANGE": {
@@ -263,19 +276,41 @@ export function applyEvents(lots, events) {
         throw new LotError(`unhandled event type ${e.type}`, e);
     }
   }
-  // The shadow warning fires only when the zero accrual is the ORDER's doing: the
-  // dividend found no holders, and a same-day exchange moved real lots onto its mint
-  // right after it. Deterministic: both lists follow the canonical order, so any
-  // permutation of the same facts yields the same warnings.
+  // The FULL shadow fires when the zero accrual is the ORDER's doing: the dividend found
+  // no holders, a same-day exchange moved pre-base units onto its mint right after it —
+  // had the dividend applied after the exchange, those units would have accrued (the
+  // counterfactual that makes the zero an artifact). Deterministic: both lists follow
+  // the canonical order, so any permutation of the same facts yields the same warnings.
   const warnings = [];
   for (const e of zeroAccrualDivs) {
     const day = String(e.effectiveDate).slice(0, 10);
-    if (mergerConversions.some((m) => m.converted > 0 && m.newMint === e.mint && m.day === day)) {
+    if (mergerConversions.some((m) =>
+      m.converted > 0 && m.newMint === e.mint && m.day === day && m.shadowQty > 0n)) {
       warnings.push({
         kind: "dividend-shadowed-by-merger",
         mint: e.mint,
         day,
         amountPerUnitRaw: BigInt(e.amountPerUnitRaw),
+      });
+    }
+  }
+  // The PARTIAL shadow: the dividend found some holders and accrued, but a same-day
+  // exchange still moved pre-base units onto its mint after it — those units never
+  // accrued, a silent slice of the declared income. The warning names the missed
+  // quantity so the consumer can see the day's dividend is understated, not absent.
+  for (const [e, holders] of divHolderSets) {
+    if (holders.size === 0) continue; // full shadows warned above
+    const day = String(e.effectiveDate).slice(0, 10);
+    const shadowedQtyRaw = mergerConversions
+      .filter((m) => m.converted > 0 && m.newMint === e.mint && m.day === day)
+      .reduce((s, m) => s + m.shadowQty, 0n);
+    if (shadowedQtyRaw > 0n) {
+      warnings.push({
+        kind: "dividend-partially-shadowed-by-merger",
+        mint: e.mint,
+        day,
+        amountPerUnitRaw: BigInt(e.amountPerUnitRaw),
+        shadowedQtyRaw,
       });
     }
   }

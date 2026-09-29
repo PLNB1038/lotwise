@@ -8,7 +8,7 @@
 //      validateEvent, every source is the literal "lotwise-demo-snapshot" marker (never a
 //      fabricated issuer URL), every status is "unverified", every reason names the demo.
 //   3. the boot surface: all six types visible through /events, the timeline computes from the
-//      demo MULTIPLIER_CHANGE chain, /health carries demo:true — and a boot WITHOUT the option
+//      demo MULTIPLIER_CHANGE chain, /health carries the demo mark — and a boot WITHOUT the option
 //      has NO demo mark anywhere (the live /health shape stays byte-identical).
 //   4. the real script: `node scripts/serve.mjs --demo` boots offline in milliseconds and
 //      serves the whole set (the graceful-shutdown glue is the shared tail, not re-tested here).
@@ -94,13 +94,14 @@ test("demo snapshot: the DEMOx multiplier chain builds a real timeline (starts a
 
 // ---- 3: the surface through the API ----
 
-test("demo boot: /events serves all six types across the two tokens, /health marks demo:true", async () => {
+test("demo boot: /events serves all six types across the two tokens, /health marks the demo", async () => {
   const server = await createApiServer({ registry: snapshot.registry, events: snapshot.events, demo: true });
   const { port } = server.address();
   try {
     const base = `http://127.0.0.1:${port}`;
     const health = await (await fetch(`${base}/health`)).json();
-    assert.equal(health.demo, true, "the judge must not mistake the demo for the live feed");
+    assert.ok(health.demo, "the judge must not mistake the demo for the live feed");
+    assert.ok(health.demo.snapshotAsOf, "the mark carries the freeze point of the static set (see test/demo-snapshot-age.test.mjs)");
     assert.equal(health.tokens, 2);
     assert.equal(health.events, snapshot.events.length);
     assert.equal(health.journal, null, "the journal was not part of a demo boot");
@@ -183,7 +184,7 @@ test("serve.mjs --demo: boots offline in seconds, /health and all six types thro
       } catch { /* not listening yet */ }
     }
     assert.ok(health, "the demo boot must come up without any network");
-    assert.equal(health.demo, true);
+    assert.ok(health.demo, "the mode mark is on the wire (the freeze point/age shape: test/demo-snapshot-age.test.mjs)");
     assert.equal(health.tokens, 2);
 
     const seen = new Set();

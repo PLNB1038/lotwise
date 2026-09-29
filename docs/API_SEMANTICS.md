@@ -153,13 +153,20 @@ Two same-day consequences of that order are stated, not hidden:
 
 - A `SPLIT` before its same-day `REDEEM` means the redemption realizes the post-split
   quantity. If the issuer announced the redemption in pre-split units, the two facts
-  disagree — resolve the declarations instead of trusting either number.
-- A `DIVIDEND_ACCRUAL` for a merger's NEW mint on the merger day accrues nothing: the
-  dividend applies while every holder is still on the old mint. The report carries this
-  as an explicit `warnings` entry (`{kind: "dividend-shadowed-by-merger", mint, day,
-  amountPerUnitRaw}`) instead of a silent zero indistinguishable from "nobody held it".
-  An exchange on a different day, into a different mint, or one that converted no lots
-  is real economics, not a shadow, and produces no warning.
+  disagree — resolve the declarations instead of trusting either number. Two `SPLIT`s
+  of one day apply in the canonical ratio order and refuse (`LotError`) where a step
+  does not divide evenly — divisibility can depend on the order even though the
+  composition does not, and the engine never rounds.
+- A `DIVIDEND_ACCRUAL` for a merger's NEW mint on the merger day applies while the old
+  mint's holders are still on the old mint. If nobody else held the new mint the
+  accrual is zero and the report carries
+  `{kind: "dividend-shadowed-by-merger", mint, day, amountPerUnitRaw}` instead of a
+  silent zero; if someone did, the day's accrual is understated by the converted units
+  and the report carries
+  `{kind: "dividend-partially-shadowed-by-merger", mint, day, amountPerUnitRaw, shadowedQtyRaw}`.
+  Only units an exchange moved from lots that predate the ex-day base count as shadowed
+  — an exchange on a different day, into a different mint, or of intraday lots is real
+  economics and produces no warning.
 
 ### `baseIncomplete` and `totalRaw: null`
 
@@ -204,13 +211,19 @@ declarations within three days.
 One ex-day carries one declared amount: two plain declarations of one symbol
 on the same canonical ex-day with different `amountPerUnitRaw` refuse the
 whole file — that is a correction without `supersedes`, and feeding it as two
-dividends would double the income. A changed sum on the immediately adjacent day stays
-a warning; beyond that one-day window the loader cannot tell a correction from two real
+dividends would double the income. A changed sum within three days — the same window
+the same-amount cluster uses — stays a warning; beyond that window the loader cannot
+tell a correction from two real
 dividends — resolve the file by hand. A correction declared WITH `supersedes` does not
-trip the warning at all: the replaced line no longer accrues. The token's `decimals` in
+trip the changed-sum warning — neither its replaced target nor the correction itself
+is a suspicion: neither line is an uncorrected declaration. The token's `decimals` in
 a declaration is display metadata; the
 registry (`data/tokens.json`) is authoritative, and a disagreement is warned
-at load. The raw amount is per raw unit and is never rescaled.
+at load and carried into `/health` as `declarations.decimalsDrift` — one
+`{ symbol, declared, registry }` entry per drifted pair, capped at 10; an empty array
+means no drift. A drift is not a channel failure: the file loads and accrues
+(`declarations.ok: 1`), and `X-Declarations-Unavailable` stays silent. The raw amount is
+per raw unit and is never rescaled.
 
 ### Corrections: `supersedes`
 

@@ -66,14 +66,26 @@ function readFlag(argv, name) {
 
 /**
  * @param {string[]} argv — process.argv.slice(2)
- * @returns {{port: number, host: string, rpcUrl: string, maxTxs: number, demo: boolean}}
+ * @returns {{port: number, host: string, rpcUrl: string, maxTxs: number, demo: boolean, help: boolean}}
  *   demo — the --demo switch (src/events/demo-snapshot.mjs): a static demonstration set
  *   instead of the live boot; default false, the live boot is untouched.
+ *   help — a -h/--help request; the other fields come back as the defaults, never validated
+ *   (help beats validation) and never used — serve.mjs prints the usage and exits 0.
  * @throws {ServeArgsError} — a flag without a value; port/maxTxs — not an integer/not positive;
- *   --demo with a value other than true/false
+ *   --demo with a value other than true/false; --demo together with --rpc (the demo boot is
+ *   the zero-network boot, an explicit --rpc on the same line is a contradiction it cannot
+ *   honor — silently dropping the flag would boot the opposite of what the operator wrote)
  */
 export function parseServeArgs(argv, env = process.env) {
   if (!Array.isArray(argv)) throw new ServeArgsError("argv must be an array");
+
+  // -h/--help beats validation: a lost operator asking for help must get the usage text,
+  // not a refusal about a --port they never meant to send. Nothing else is validated on
+  // this path (even a garbage RPC URL in the env stays unpunished) — the caller prints
+  // and exits.
+  if (argv.includes("-h") || argv.includes("--help")) {
+    return { help: true, port: 8787, host: "127.0.0.1", rpcUrl: env.LOTWISE_RPC_URL ?? DEFAULT_RPC, maxTxs: 300, demo: false };
+  }
 
   let port = 8787;
   const portRaw = readFlag(argv, "port");
@@ -96,7 +108,8 @@ export function parseServeArgs(argv, env = process.env) {
     throw new ServeArgsError(`--host must not contain whitespace, got ${JSON.stringify(host)}`, "--host");
   }
   // flag > env > public RPC; an env key must not leak into the cmdline (see serve.mjs)
-  const rpcUrl = readFlag(argv, "rpc") ?? env.LOTWISE_RPC_URL ?? DEFAULT_RPC;
+  const rpcFlag = readFlag(argv, "rpc");
+  const rpcUrl = rpcFlag ?? env.LOTWISE_RPC_URL ?? DEFAULT_RPC;
   try {
     const u = new URL(rpcUrl);
     if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("not http(s)");
@@ -118,7 +131,17 @@ export function parseServeArgs(argv, env = process.env) {
 
   const demo = readBoolFlag(argv, "demo");
 
-  return { port, host, rpcUrl, maxTxs, demo };
+  // The zero-network boot cannot honor an explicit --rpc: the demo never dials out, so the
+  // flag would be silently swallowed and the operator's unit file would describe a server
+  // that does not exist. The ENV value does not refuse — prod images carry LOTWISE_RPC_URL
+  // globally, and a demo on the same host must still boot; only the explicit flag is a
+  // contradiction. Refused at the tail of the parser, before any I/O, in the same
+  // discipline as the grammar guards above.
+  if (demo && rpcFlag !== undefined) {
+    throw new ServeArgsError("--demo boots a static snapshot with no network; remove --rpc or remove --demo", "--rpc");
+  }
+
+  return { port, host, rpcUrl, maxTxs, demo, help: false };
 }
 
 // DNS-resolve --host BEFORE boot : the parser is synchronous and sees only

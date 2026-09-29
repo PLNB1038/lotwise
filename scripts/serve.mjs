@@ -2,10 +2,11 @@
 // Usage: node scripts/serve.mjs [--port 8787] [--host 127.0.0.1] [--rpc URL] [--max-txs 300] [--demo]
 // --demo (src/events/demo-snapshot.mjs): boot the static demonstration set instead — all six
 // event types on fictional tokens, zero network, zero live claims; /health and the vitrine
-// banner mark the mode. Without the flag the boot is bit-for-bit the live one.
+// banner mark the mode. Without the flag the boot is bit-for-bit the live one. --demo and
+// --rpc refuse each other (the demo never dials out); -h/--help prints the full grammar.
 import { loadRegistrySafe, assertBootableRegistrySize } from "../src/registry/registry.mjs";
 import { loadDeclarationsFile } from "../src/events/declarations-file.mjs";
-import { buildDemoSnapshot } from "../src/events/demo-snapshot.mjs";
+import { buildDemoSnapshot, DEMO_SNAPSHOT_AS_OF } from "../src/events/demo-snapshot.mjs";
 import { fetchMultiplierHistory } from "../src/issuer/xstocks.mjs";
 import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
 import { createApiServer } from "../src/api/server.mjs";
@@ -23,6 +24,21 @@ import { fileURLToPath } from "node:url";
 // journal under someone else's directory; the systemd WorkingDirectory contract must not be the only guard.
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+// -h/--help: the full launch grammar on stdout, exit 0. The demo line names the freeze
+// point of the static set — an operator scheduling the demo into a unit file sees how old
+// the story is without reading the source (the same number /health carries).
+const USAGE = `usage: node scripts/serve.mjs [flags]
+
+  --port <n>     TCP port to listen on (default 8787)
+  --host <addr>  bind address (default 127.0.0.1)
+  --rpc <url>    Solana JSON-RPC endpoint (default: $LOTWISE_RPC_URL, else the public RPC);
+                 refused together with --demo — the demo boot has no network
+  --max-txs <n>  wallet-scan signature cap per source (default 300)
+  --demo         static demonstration set, zero network (all six event types on fictional
+                 tokens); the snapshot is frozen at ${DEMO_SNAPSHOT_AS_OF} — /health
+                 carries demo.snapshotAsOf and the day age
+  -h, --help     this help`;
+
 // Flag guards BEFORE any I/O : --port abc used to survive the whole boot
 // (minutes of RPC quota) and fail only at listen, and a trailing --rpc silently
 // killed the env fallback. The parser is src/cli/flags.mjs, covered by tests.
@@ -35,6 +51,10 @@ try {
     process.exit(1);
   }
   throw err;
+}
+if (args.help) {
+  console.log(USAGE);
+  process.exit(0);
 }
 const { port, host, maxTxs, demo } = args;
 // RPC: --rpc flag (dev quotas) → env LOTWISE_RPC_URL (prod: the key must NOT
@@ -108,7 +128,11 @@ if (demo) {
   registry = snapshot.registry;
   events = snapshot.events;
   console.log(`[serve] DEMO MODE (--demo): static demonstration set — ${registry.length} token(s), ${events.length} event(s), all six canonical types`);
-  console.log(`[serve] demo: every source is the literal marker "lotwise-demo-snapshot" — no live issuer, on-chain or price claims; /health carries demo:true`);
+  console.log(`[serve] demo: every source is the literal marker "lotwise-demo-snapshot" — no live issuer, on-chain or price claims; /health carries the demo mark`);
+  // the story dates are fixed 2026 dates and the set does not chase the calendar (a moving
+  // snapshot would not be a snapshot); what ages is NAMED instead — a judge a year later
+  // reads the age off /health instead of discovering the staleness silently
+  console.log(`[serve] demo: the snapshot is frozen at ${DEMO_SNAPSHOT_AS_OF} — /health demo.snapshotAgeDays tells how far it has aged`);
   await startServer({ demo: true, registry, events, rateLimits });
 } else {
 
@@ -137,8 +161,13 @@ registryStats = { corrupted: loadedRegistry.corrupted ? 1 : 0 };
 // file: a broken one degrades to "no accruals" with a loud reason, never a dead boot.
 const loadedDeclarations = loadDeclarationsFile(path.join(ROOT, "data", "declarations.json"), registry);
 // superseded — corrections applied at load (the `supersedes` field): visible in /health,
-// so a feed silently re-declaring dividends cannot hide behind a bare "loaded" count
-declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0, superseded: loadedDeclarations.superseded };
+// so a feed silently re-declaring dividends cannot hide behind a bare "loaded" count.
+// decimalsDrift — declaration `decimals` disagreeing with the registry (tokens.json is the
+// authority): the console.warn at load is invisible to API consumers and to an operator
+// who does not watch boot logs, so the pairs ride into /health (an empty array = no drift;
+// a refused file reports none). Drift is NOT unavailability — the file loads and accrues,
+// ok stays 1 and the X-Declarations-Unavailable header stays silent.
+declarationsStats = { loaded: loadedDeclarations.loaded, ok: loadedDeclarations.ok ? 1 : 0, superseded: loadedDeclarations.superseded, decimalsDrift: loadedDeclarations.decimalsDrift ?? [] };
 if (!loadedDeclarations.ok) {
   console.error(`[serve] DECLARATIONS NOT LOADED (${loadedDeclarations.reason}). Booting without dividend accruals — fix data/declarations.json and restart.`);
 } else if (loadedDeclarations.loaded > 0) {
@@ -394,7 +423,7 @@ try {
     journalStats, // null on a demo boot: /health shows nulls, the readers were not part of it
     registryStats, // { corrupted: 0|1 } — /health contract: registry.corrupted (see the report)
     declarationsStats,
-    demo, // /health.demo:true and the vitrine banner — a demo instance must not pass for the live feed
+    demo, // the /health demo mark (freeze point + age) and the vitrine banner — a demo instance must not pass for the live feed
   });
 } catch (err) {
   console.error(`[serve] failed to come up on port ${port}: ${err.code ?? err.message}`);

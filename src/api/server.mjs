@@ -8,6 +8,7 @@ import { buildWalletReport } from "../wallet/report.mjs";
 import { crossCheckEvents } from "../events/crosscheck.mjs";
 import { isValidIsoDate, parseIsoDateMs } from "../schema/isodate.mjs";
 import { EVENT_TYPES } from "../schema/events.mjs";
+import { DEMO_SNAPSHOT_AS_OF, demoSnapshotAgeDays } from "../events/demo-snapshot.mjs";
 import { renderPage } from "../ui/page.mjs";
 import { createRateLimiter } from "./ratelimit.mjs";
 
@@ -213,7 +214,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const q = url.searchParams;
 
     if (url.pathname === "/") {
-      pageHtml ??= renderPage({ demo });
+      pageHtml ??= renderPage({ demo, demoSnapshotAsOf: demo ? DEMO_SNAPSHOT_AS_OF : null });
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Content-Length": Buffer.byteLength(pageHtml), "X-Content-Type-Options": "nosniff" });
       return res.end(pageHtml);
     }
@@ -504,10 +505,21 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // demo: the boot serves the static demonstration set (src/events/demo-snapshot.mjs) —
       // without the mark, a judge's screenshot of the demo would be indistinguishable from
       // the live feed; the field is ABSENT (not false) on a normal boot, so the live /health
-      // shape stays byte-identical to the pre-demo contract.
+      // shape stays byte-identical to the pre-demo contract. The mark is an object, not a
+      // bare true, because the set is frozen: the story dates never move (determinism
+      // between restarts), and a reader a year later would see "a year ago" with no marker
+      // — snapshotAsOf names the freeze point, snapshotAgeDays is the honest whole-day
+      // distance from it, so staleness is something /health SAYS, not something to guess.
       return json(res, 200, {
         ok: true,
-        ...(demo ? { demo: true } : {}),
+        ...(demo
+          ? {
+              demo: {
+                snapshotAsOf: DEMO_SNAPSHOT_AS_OF,
+                snapshotAgeDays: demoSnapshotAgeDays(),
+              },
+            }
+          : {}),
         tokens: registry.length,
         events: events.length,
         journal: journalStats,

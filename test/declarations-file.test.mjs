@@ -22,7 +22,7 @@ const dir = () => mkdtempSync(path.join(tmpdir(), "lw-decl-"));
 
 test("declarations: a missing file is the norm — ok, loaded 0, no reason", () => {
   const r = loadDeclarationsFile(declPath(dir()), REG);
-  assert.deepEqual(r, { ok: true, events: [], loaded: 0, superseded: 0, reason: null });
+  assert.deepEqual(r, { ok: true, events: [], loaded: 0, superseded: 0, decimalsDrift: [], reason: null });
 });
 
 test("declarations: a shared feed binds per registry symbol, events sorted old → new", () => {
@@ -59,6 +59,7 @@ test("declarations: invalid JSON / non-array / a malformed line — the whole fi
     assert.equal(r.ok, false, `${name}: refused`);
     assert.equal(r.loaded, 0, `${name}: nothing half-loaded`);
     assert.deepEqual(r.events, [], `${name}: no partial events`);
+    assert.deepEqual(r.decimalsDrift, [], `${name}: a refused file reports no drift — nothing was validated`);
     assert.match(r.reason, pattern, `${name}: the reason names the problem`);
   }
 });
@@ -174,8 +175,9 @@ test("declarations: two plain same-day amounts refuse the file — the healthy s
 
 // The refusal is bound to the SAME day: special dividends legitimately sit next to
 // regular ones, so a changed sum on a different day keeps loading — with the advisory
-// proximity warning only, and the warning's reach is the immediately adjacent day (a
-// gap of two days or more is indistinguishable from two real dividends at load time).
+// proximity warning only, and the warning's reach is three days (the same window as the
+// same-amount cluster): a correction landing two or three days late is no less real,
+// while beyond the window two real dividends are the norm.
 test("declarations: a changed sum on a DIFFERENT day still loads — the proximity warning stays advisory", () => {
   const p = declPath(dir());
   writeFileSync(p, JSON.stringify([
@@ -194,7 +196,45 @@ test("declarations: a changed sum on a DIFFERENT day still loads — the proximi
   assert.equal(r.ok, true, "different days are two dividends as far as the refusal goes");
   assert.equal(r.loaded, 2);
   assert.equal(warns.length, 1, "the advisory warn remains — diagnostics for different days");
-  assert.match(warns[0], /a day apart or less/);
+  assert.match(warns[0], /within three days/);
+});
+
+test("declarations: a changed sum two and three days apart still warns — a late correction is no less real", () => {
+  for (const gap of [2, 3]) {
+    const p = declPath(dir());
+    writeFileSync(p, JSON.stringify([
+      { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v1" },
+      { symbol: "SPYx", exDate: `2026-06-${18 + gap}`, amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v2" },
+    ]));
+    const warns = [];
+    const orig = console.warn;
+    console.warn = (...a) => warns.push(a.join(" "));
+    try {
+      const r = loadDeclarationsFile(p, REG);
+      assert.equal(r.ok, true, `gap ${gap}: the warning is advisory, the file is the operator's`);
+      assert.equal(warns.length, 1, `gap ${gap}: the suspicion window reaches it`);
+    } finally {
+      console.warn = orig;
+    }
+  }
+});
+
+test("declarations: a changed sum four days apart stays silent — beyond the window two dividends are the norm", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-14", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q1" },
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/q2" },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(warns.length, 0, "four days apart is outside the suspicion window");
+  } finally {
+    console.warn = orig;
+  }
 });
 
 // The registry is the authority on a token's decimals: a declaration's `decimals` is
@@ -226,6 +266,62 @@ test("declarations: a declaration decimals disagreeing with the registry warns �
   assert.equal(ko.decimals, 8, "the file is the operator's — we warn, we do not silently rewrite the metadata");
 });
 
+// The same drift rides into the RESULT as decimalsDrift: a console.warn is invisible to
+// the API consumer (and to an operator who does not watch the boot log), while the drifted
+// metadata itself reaches the accrual rows. One entry per (symbol, declared value) — the
+// exact pairs the warning names, deduped by the same key; a matching declaration adds
+// nothing; a string "decimals" is normalized to the number it declares. The registry stays
+// the authority: `declared` reports the file, `registry` reports tokens.json.
+test("declarations: the decimals drift rides into the result as decimalsDrift — one deduped entry per (symbol, declared value)", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "KOx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/ko-q2" }, // registry KOx is 6 → drift
+    { symbol: "KOx", exDate: "2026-07-16", amountPerUnitRaw: "2000000", decimals: "8", sourceUrl: "https://issuer.example/ko-q3" }, // the same pair as a string — deduped
+    { symbol: "KOx", exDate: "2026-08-13", amountPerUnitRaw: "2000000", decimals: 9, sourceUrl: "https://issuer.example/ko-q4" }, // a second distinct drift
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/spy-q2" }, // matches — no entry
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  let r;
+  try {
+    r = loadDeclarationsFile(p, REG);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(r.ok, true);
+  assert.equal(r.loaded, 4, "the drift is visibility, the load stands");
+  assert.deepEqual(r.decimalsDrift, [
+    { symbol: "KOX", declared: 8, registry: 6 },
+    { symbol: "KOX", declared: 9, registry: 6 },
+  ]);
+  assert.equal(warns.length, 2, "the console warn keeps its one-per-pair dedup — the array mirrors it, not doubles it");
+});
+
+// The array goes into /health, so it is capped like the other loader aggregates: a
+// pathologically drifted feed must not bloat the health payload. The cap keeps the FIRST
+// pairs in file order; the console warn stays uncapped (it is per-pair and already deduped).
+test("declarations: decimalsDrift is capped at 10 entries", () => {
+  const p = declPath(dir());
+  // 12 distinct drifted values inside the producer's 0..18 range (registry KOx is 6, skipped)
+  writeFileSync(p, JSON.stringify(Array.from({ length: 12 }, (_, i) => ({
+    symbol: "KOx", exDate: `2026-0${(i % 8) + 1}-1${i % 9}`, amountPerUnitRaw: "2000000",
+    decimals: i < 6 ? i : i + 1, sourceUrl: `https://issuer.example/ko-${i}`,
+  }))));
+  const orig = console.warn;
+  console.warn = () => {};
+  let r;
+  try {
+    r = loadDeclarationsFile(p, REG);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(r.ok, true);
+  assert.equal(r.decimalsDrift.length, 10, "the cap keeps /health readable");
+  assert.deepEqual(r.decimalsDrift.map((d) => d.declared), [0, 1, 2, 3, 4, 5, 7, 8, 9, 10], "the first pairs in file order");
+  assert.ok(r.decimalsDrift.every((d) => d.symbol === "KOX" && d.registry === 6));
+});
+
 test("declarations: a LEGAL supersedes correction does not trip the changed-sum proximity warning", () => {
   const p = declPath(dir());
   writeFileSync(p, JSON.stringify([
@@ -245,4 +341,62 @@ test("declarations: a LEGAL supersedes correction does not trip the changed-sum 
     console.warn = orig;
   }
   assert.equal(warns.length, 0, "a resolved correction is not a doubled-income suspicion — the target no longer accrues");
+});
+
+test("declarations: the skip honors the parsed amount, not the spelling — a leading-zero target stays silent", () => {
+  // the producer joins identities on PARSED integers, so both files below resolve cleanly;
+  // the loader's suspicion scan must join on the same canonical form on BOTH sides — the
+  // zero may live in the target line OR in the supersedes reference. Each replaced target
+  // sits next to a plain same-symbol declaration with a different amount: if the skip
+  // misses, that pair is exactly the false "will double the income" accusation
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "02000000", decimals: 8, sourceUrl: "https://issuer.example/q-old" },
+    { symbol: "SPYx", exDate: "2026-06-19", amountPerUnitRaw: "3000000", decimals: 8, sourceUrl: "https://issuer.example/q-special" },
+    { symbol: "SPYx", exDate: "2026-06-25", amountPerUnitRaw: "2500000", decimals: 8, sourceUrl: "https://issuer.example/q-fix",
+      supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "2000000" } },
+    // the mirrored direction: the zero lives in the supersedes reference
+    { symbol: "KOx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 6, sourceUrl: "https://issuer.example/ko-old" },
+    { symbol: "KOx", exDate: "2026-06-19", amountPerUnitRaw: "3000000", decimals: 6, sourceUrl: "https://issuer.example/ko-special" },
+    { symbol: "KOx", exDate: "2026-06-25", amountPerUnitRaw: "2500000", decimals: 6, sourceUrl: "https://issuer.example/ko-fix",
+      supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "02000000" } },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(r.superseded, 2, "the producer resolves both parsed identities");
+    assert.equal(r.loaded, 4, "the two corrections and the two plain dividends accrue");
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 0, "a resolved target must not warn regardless of which side spells the amount");
+});
+
+test("declarations: two corrections declared with supersedes do not suspect each other", () => {
+  // both lines carry their own supersedes and both resolved — a correction is the RIGHT
+  // way to amend, and the changed-sum scan is for corrections smuggled in WITHOUT it
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-16", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/q1-v1" },
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v1",
+      supersedes: { exDate: "2026-06-16", amountPerUnitRaw: "1500000" } },
+    { symbol: "SPYx", exDate: "2026-06-17", amountPerUnitRaw: "3000000", decimals: 8, sourceUrl: "https://issuer.example/q3-v1" },
+    { symbol: "SPYx", exDate: "2026-06-19", amountPerUnitRaw: "3500000", decimals: 8, sourceUrl: "https://issuer.example/q3-v2",
+      supersedes: { exDate: "2026-06-17", amountPerUnitRaw: "3000000" } },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(r.superseded, 2, "both corrections replaced their targets");
+    assert.equal(r.loaded, 2, "only the two corrected amounts accrue");
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 0, "resolved corrections are not a doubled-income suspicion");
 });

@@ -41,9 +41,9 @@ Then open http://127.0.0.1:8787/ .
 
 On startup the server loads the registry, reads mint state for every non-xStocks token, pulls xStocks multiplier history, and only then starts listening. Unavailable sources are skipped with a warning instead of crashing the boot; the state of every source is visible at `/health`.
 
-Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota.
+Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota. `--rpc` and `--demo` refuse each other at startup (exit 1): the demo boot has no network, so a launch line carrying both is a contradiction, not a configuration. `-h`/`--help` prints the full grammar.
 
-`--demo` boots offline in milliseconds: a static demonstration set (fictional `DEMOx`/`DEMO2x` tokens, sources marked `lotwise-demo-snapshot`) serves **all six event types** — see the whole schema without waiting for live issuers. `/health` marks the mode with `demo: true`; without the flag the live boot is unchanged.
+`--demo` boots offline in milliseconds: a static demonstration set (fictional `DEMOx`/`DEMO2x` tokens, sources marked `lotwise-demo-snapshot`) serves **all six event types** — see the whole schema without waiting for live issuers. `/health` marks the mode with `demo: { snapshotAsOf, snapshotAgeDays }`: the snapshot is frozen at 2026-09-27 and the age tells how far the story is behind today, so a stale-looking demo identifies itself instead of passing for fresh. Without the flag the live boot is unchanged.
 
 ```sh
 node scripts/serve.mjs --demo   # then: curl "http://127.0.0.1:8787/events?symbol=DEMOx"
@@ -94,7 +94,7 @@ GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `4
 | `/lots?address=` | Wallet report: FIFO lots with cost basis, raw vs adjusted balances, realized P&L from USDC legs. One scan runs at a time — a concurrent scan answers `503` with `kind: "scan-busy"` and `Retry-After` — and the endpoint is GET-only: a HEAD probe answers `405` without running a scan. `moneyOnly` (USDC the pricing did not consume) and the window's economic-result formula: full semantics in [docs/API_SEMANTICS.md](docs/API_SEMANTICS.md) |
 | `/accruals?symbol=&address=` | Dividend accruals of one token for one wallet: the base is the position held **at the start of the ex-date**, replayed from the scan window, with honest `baseIncomplete` flags and `totalRaw: null` where the window cannot answer. GET-only like `/lots`; a `200 []` is "no dividends" or a down declarations channel — the separator is the `X-Declarations-Unavailable: 1` response header. Dividend identity, the declarations file and the `supersedes` correction contract: full semantics in [docs/API_SEMANTICS.md](docs/API_SEMANTICS.md) |
 | `/crosscheck?symbol=` | Price cross-check verdicts per event (its `ratio` is the one non-string decimal — a float) |
-| `/health` | Event/token counts, journal and registry integrity flags, excluded tokens |
+| `/health` | Event/token counts, journal and registry integrity flags, excluded tokens, declarations channel state (`ok`, `loaded`, `superseded`, `decimalsDrift` — a declaration `decimals` disagreeing with the registry, one entry per drifted pair; an empty array means no drift) |
 
 Examples:
 
@@ -206,7 +206,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-906 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+931 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

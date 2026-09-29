@@ -26,28 +26,32 @@ import { parseIsoDateMs } from "../schema/isodate.mjs";
 /**
  * @param {string} path — the declarations file (conventionally data/declarations.json)
  * @param {Array} registry — the token registry (binds symbols to mints)
- * @returns {{ok: boolean, events: Array, loaded: number, superseded: number, reason: string|null}}
+ * @returns {{ok: boolean, events: Array, loaded: number, superseded: number, decimalsDrift: Array, reason: string|null}}
  *   ok — the file loaded and every line validated; events carry bound mints, old → new
  *   per token. A missing file is ok with loaded 0 (no declarations declared is the norm).
  *   superseded — how many corrections were applied (declarations carrying `supersedes`
  *   that replaced their target); goes into /health.declarations.superseded.
+ *   decimalsDrift — the loaded file's `decimals` disagreements with the registry (the
+ *   authority): one { symbol, declared, registry } per distinct drifted pair, capped,
+ *   mirrored into /health.declarations.decimalsDrift. Empty unless the file loaded —
+ *   a refused file validates nothing and reports no drift.
  */
 export function loadDeclarationsFile(path, registry) {
   let raw;
   try {
     raw = readFileSync(path, "utf8");
   } catch (err) {
-    if (err?.code === "ENOENT") return { ok: true, events: [], loaded: 0, superseded: 0, reason: null };
-    return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations unreadable: ${err.message}` };
+    if (err?.code === "ENOENT") return { ok: true, events: [], loaded: 0, superseded: 0, decimalsDrift: [], reason: null };
+    return { ok: false, events: [], loaded: 0, superseded: 0, decimalsDrift: [], reason: `declarations unreadable: ${err.message}` };
   }
   let list;
   try {
     list = JSON.parse(raw);
   } catch (err) {
-    return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations not valid JSON: ${err.message}` };
+    return { ok: false, events: [], loaded: 0, superseded: 0, decimalsDrift: [], reason: `declarations not valid JSON: ${err.message}` };
   }
   if (!Array.isArray(list)) {
-    return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations must be a JSON array, got ${list === null ? "null" : typeof list}` };
+    return { ok: false, events: [], loaded: 0, superseded: 0, decimalsDrift: [], reason: `declarations must be a JSON array, got ${list === null ? "null" : typeof list}` };
   }
   const events = [];
   let superseded = 0;
@@ -73,7 +77,7 @@ export function loadDeclarationsFile(path, registry) {
   if (rejections.length > 0) {
     const listed = rejections.slice(0, 10);
     if (rejections.length > 10) listed.push(`…and ${rejections.length - 10} more symbols with broken declarations`);
-    return { ok: false, events: [], loaded: 0, superseded: 0, reason: `declarations rejected: ${listed.join("; ")}` };
+    return { ok: false, events: [], loaded: 0, superseded: 0, decimalsDrift: [], reason: `declarations rejected: ${listed.join("; ")}` };
   }
   // a declaration for a symbol that is in NO registry token used to disappear silently —
   // the per-symbol walk simply never looks for it. One loud line names the drift
@@ -98,6 +102,7 @@ export function loadDeclarationsFile(path, registry) {
   // same-symbol line here has producer-valid decimals — the guards below skip the rest.
   const registryDecimals = new Map(registry.map((t) => [t.symbol.toUpperCase(), t.decimals]));
   const decimalsWarned = new Set();
+  const decimalsDrift = [];
   for (const decl of list) {
     if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
     const key = decl.symbol.toUpperCase();
@@ -109,6 +114,7 @@ export function loadDeclarationsFile(path, registry) {
     if (declaredRaw === reg || decimalsWarned.has(`${key}|${declaredRaw}`)) continue;
     decimalsWarned.add(`${key}|${declaredRaw}`);
     console.warn(`[declarations] ${key}: declaration decimals ${declaredRaw} ≠ registry decimals ${reg} — the raw amount is per raw unit and unaffected, but display metadata disagrees with tokens.json`);
+    if (decimalsDrift.length < 10) decimalsDrift.push({ symbol: key, declared: declaredRaw, registry: reg });
   }
   // A corrected re-declaration WITH the supersedes field never reaches this scan: the
   // producer resolved the replacement above, the target event is gone. The warning is
@@ -127,35 +133,49 @@ export function loadDeclarationsFile(path, registry) {
   // same-symbol proximity regardless of amount: a correction that changes the SUM is the
   // classic issuer flow and used to slip past the same-amount cluster warning below while
   // doubling the income in the engine (the engine's identity dedup requires the amount to match)
-  // A line REPLACED by a supersedes correction is excluded first: it no longer accrues, and
-  // a legal correction (target and corrected line a day apart, changed sum) is exactly the
-  // shape this scan suspects — warning about a resolved file cries wolf at the one operator
-  // who did everything right.
+  // A line REPLACED by a supersedes correction is excluded first, and so is a line
+  // CARRYING its own supersedes — a correction is the right way to amend, and this scan
+  // exists for corrections smuggled in WITHOUT it. A legal correction (target and
+  // corrected line a day apart, changed sum) is exactly the shape the scan suspects —
+  // warning about a resolved file cries wolf at the one operator who did everything right.
+  // The join must be on the PARSED amount: the producer resolves identities on integers,
+  // so raw spellings ("02000000" vs "2000000") would disagree with it about what was
+  // resolved and re-admit the replaced target under its spelling.
+  const canonicalAmountKey = (v) => {
+    if (typeof v === "number" && Number.isInteger(v)) return String(v);
+    if (typeof v === "string" && /^-?\d+$/.test(v.trim())) {
+      try { return String(BigInt(v.trim())); } catch { /* non-canonical after all */ }
+    }
+    return String(v);
+  };
   const replaced = new Set();
   for (const decl of list) {
     if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
     const s = decl.supersedes;
     if (s === null || typeof s !== "object" || typeof s.exDate !== "string" || s.amountPerUnitRaw === undefined) continue;
-    replaced.add(`${decl.symbol.toUpperCase()}|${s.exDate.slice(0, 10)}|${String(s.amountPerUnitRaw)}`);
+    replaced.add(`${decl.symbol.toUpperCase()}|${s.exDate.slice(0, 10)}|${canonicalAmountKey(s.amountPerUnitRaw)}`);
   }
   const bySymbolDay = new Map();
   for (const decl of list) {
     if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
+    if (decl.supersedes !== null && typeof decl.supersedes === "object") continue; // an explicit correction is not a suspicion
     const day = typeof decl.exDate === "string" ? decl.exDate.slice(0, 10) : null;
     if (day === null) continue;
     const ms = parseIsoDateMs(day);
     if (ms === null) continue;
     const key = decl.symbol.toUpperCase();
-    const amount = String(decl.amountPerUnitRaw ?? "");
-    if (replaced.has(`${key}|${day}|${amount}`)) continue; // a resolved target — no longer a suspicion
+    if (replaced.has(`${key}|${day}|${canonicalAmountKey(decl.amountPerUnitRaw)}`)) continue; // a resolved target
     if (!bySymbolDay.has(key)) bySymbolDay.set(key, []);
-    bySymbolDay.get(key).push({ day, ms, amount });
+    bySymbolDay.get(key).push({ day, ms, amount: String(decl.amountPerUnitRaw ?? "") });
   }
   for (const [sym, arr] of bySymbolDay) {
     arr.sort((a, b) => a.ms - b.ms);
     for (let i = 1; i < arr.length; i++) {
-      if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 1 * 86_400_000) {
-        console.warn(`[declarations] ${sym}: two declarations a day apart or less (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
+      // the window matches the same-amount cluster's three days below: a correction is
+      // no less likely to land two or three days late than one, and suspicion must not
+      // be backwards — same amounts at gap 3 warned while changed sums at gap 2 slept
+      if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 3 * 86_400_000) {
+        console.warn(`[declarations] ${sym}: two declarations within three days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
       }
     }
   }
@@ -179,5 +199,5 @@ export function loadDeclarationsFile(path, registry) {
     }
     i = j;
   }
-  return { ok: true, events, loaded: events.length, superseded, reason: null };
+  return { ok: true, events, loaded: events.length, superseded, decimalsDrift, reason: null };
 }

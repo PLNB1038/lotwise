@@ -15,7 +15,10 @@ const FAVICON_HREF = `data:image/svg+xml,${encodeURIComponent(FAVICON_SVG)}`;
 // demo: the --demo boot serves the static demonstration set (src/events/demo-snapshot.mjs).
 // The banner must be unmistakable — a screenshot of the demo page must never pass for the
 // live feed; the default render stays byte-identical (the flag adds exactly one block).
-export function renderPage({ demo = false } = {}) {
+// demoSnapshotAsOf names the freeze point of the set: the story dates never move, so a
+// reader a year later sees the age of the story right on the page instead of trusting
+// dates that only look current. Without the date the banner does not invent one.
+export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -111,7 +114,8 @@ export function renderPage({ demo = false } = {}) {
   </header>
   ${demo ? `<div class="demo-banner"><strong>DEMO MODE</strong> — this instance serves a static demonstration
     set (symbols <code>DEMOx</code>, <code>DEMO2x</code>): all six event types, every source marked
-    <code>lotwise-demo-snapshot</code>. Nothing here is a live issuer or on-chain claim; start the server
+    <code>lotwise-demo-snapshot</code>${demoSnapshotAsOf ? `. The snapshot is frozen at <code>${demoSnapshotAsOf}</code>;
+    <code>/health</code> reports how far it has aged` : ""}. Nothing here is a live issuer or on-chain claim; start the server
     without <code>--demo</code> for the live feed.</div>` : ""}
   <p class="tagline">Tokenized stocks split and pay dividends while the raw on-chain balance stays
     frozen — the economics move under a number that does not, so any report computed from raw

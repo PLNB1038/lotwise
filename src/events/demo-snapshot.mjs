@@ -27,6 +27,21 @@ const MERGED_MINT = "W8izEcmYHHaxGspp51b2AK1tmfBSv18SbBoZntv5vFp";
 
 const SOURCE = "lotwise-demo-snapshot";
 
+// The frozen reference "today" of the set: the day this snapshot was authored, kept as a
+// constant — never Date.now(). The event dates are a fixed story (a split, then a dividend
+// walk, a ticker rename...), and moving them with the wall clock would break the
+// determinism between restarts that tests and byte-identical boots rely on. The honest
+// answer to aging is not to chase the calendar but to NAME the freeze point: /health
+// exposes it with the whole-day age (demoSnapshotAgeDays), so a reader in 2027 sees
+// "frozen at <date>, N days ago" instead of silently stale 2026 dates.
+export const DEMO_SNAPSHOT_AS_OF = "2026-09-27";
+
+// Whole days between the freeze point and `now` (the wall clock by default). Never
+// negative: before the freeze point the set is simply current — an age of 0, not an error.
+export function demoSnapshotAgeDays(now = Date.now()) {
+  return Math.max(0, Math.floor((now - Date.parse(DEMO_SNAPSHOT_AS_OF)) / 86_400_000));
+}
+
 // The demo registry: the same entry shape as data/tokens.json (validateRegistry enforces it),
 // issuers drawn from the existing enum. This array REPLACES the live registry under --demo —
 // a demo instance must not mix fictional tokens with tracked ones.
