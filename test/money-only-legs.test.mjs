@@ -6,7 +6,7 @@
 // those legs into a separate moneyOnly section — not lots, not gaps: USDC moved without a
 // tracked token (spread, a USDC fee, a plain transfer — the report does not guess WHICH,
 // it records the FACT and the signed net). Fail-closed: no money legs in the data (a
-// legacy cache) means no rows and no field; a zero NET leg (USDC moved between the
+// legacy cache) means an empty moneyOnly array; a zero NET leg (USDC moved between the
 // owner's own accounts) yields no row either. FIFO math is untouched: a money-only tx has
 // no token deltas, so no lots.
 import test from "node:test";
@@ -147,7 +147,7 @@ test("money-only: a USDC deposit — a positive row; a zero net leg — no tx an
   ], "a positive leg is not a 'loss': the section is neutral, the sign speaks");
 });
 
-test("money-only: a legacy scan without moneyDeltas — no rows, no field, no throw", () => {
+test("money-only: a legacy scan without moneyDeltas — an empty array, never an absent field", () => {
   const legacyScan = {
     owner: OWNER,
     txs: [
@@ -157,7 +157,7 @@ test("money-only: a legacy scan without moneyDeltas — no rows, no field, no th
     skipped: [], truncated: false, signatures: 2, fetched: 2, accounts: {},
   };
   const rep = buildWalletReport(legacyScan, { registry: REG });
-  assert.equal("moneyOnly" in rep, false, "no money-leg data — no section (absence, not zeros)");
+  assert.deepEqual(rep.moneyOnly, [], "no money-leg data — an empty array a client can reduce over, not an absent field");
   assert.equal(rep.tokens.length, 1);
 });
 
@@ -174,7 +174,7 @@ test("money-only: a foreign owner — the tx is in the scan, their USDC never la
   assert.equal(scan.txs.length, 1, "the scan keeps a money-only tx of any owner — the REPORT filters");
   const rep = buildWalletReport(scan, { registry: REG });
   assert.deepEqual(rep.tokens, []);
-  assert.equal("moneyOnly" in rep, false, "someone else's USDC is not ours: no row");
+  assert.deepEqual(rep.moneyOnly, [], "someone else's USDC is not ours: no row");
 });
 
 test("money-only: a hop neither creates nor masks same-slot pairs, pnl untouched", async () => {

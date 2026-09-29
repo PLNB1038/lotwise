@@ -101,8 +101,13 @@ export function loadDeclarationsFile(path, registry) {
   // warning per declaration. Reached only past the rejections gate above, so every
   // same-symbol line here has producer-valid decimals — the guards below skip the rest.
   const registryDecimals = new Map(registry.map((t) => [t.symbol.toUpperCase(), t.decimals]));
+  // the registry's own spelling of the symbol: the drift array is joined by clients against
+  // /tokens and /accruals rows, and the loader's uppercase comparison key would break that
+  // join (the console warn copies the same spelling so it can be pasted into ?symbol=)
+  const registrySymbol = new Map(registry.map((t) => [t.symbol.toUpperCase(), t.symbol]));
   const decimalsWarned = new Set();
   const decimalsDrift = [];
+  let driftSeen = 0;
   for (const decl of list) {
     if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
     const key = decl.symbol.toUpperCase();
@@ -113,8 +118,16 @@ export function loadDeclarationsFile(path, registry) {
     if (typeof declaredRaw !== "number" || !Number.isInteger(declaredRaw)) continue; // malformed → the producer refused the file above
     if (declaredRaw === reg || decimalsWarned.has(`${key}|${declaredRaw}`)) continue;
     decimalsWarned.add(`${key}|${declaredRaw}`);
-    console.warn(`[declarations] ${key}: declaration decimals ${declaredRaw} ≠ registry decimals ${reg} — the raw amount is per raw unit and unaffected, but display metadata disagrees with tokens.json`);
-    if (decimalsDrift.length < 10) decimalsDrift.push({ symbol: key, declared: declaredRaw, registry: reg });
+    driftSeen++;
+    // the console pairs are capped like the /health array: a pathologically drifted feed
+    // must not print one line per pair on every restart
+    if (driftSeen <= 10) {
+      console.warn(`[declarations] ${registrySymbol.get(key) ?? key}: declaration decimals ${declaredRaw} ≠ registry decimals ${reg} — the raw amount is per raw unit and unaffected, but display metadata disagrees with tokens.json`);
+    }
+    if (decimalsDrift.length < 10) decimalsDrift.push({ symbol: registrySymbol.get(key) ?? key, declared: declaredRaw, registry: reg });
+  }
+  if (driftSeen > 10) {
+    console.warn(`[declarations] …and ${driftSeen - 10} more decimals-drift pairs (capped; the first ten ride in /health declarations.decimalsDrift)`);
   }
   // A corrected re-declaration WITH the supersedes field never reaches this scan: the
   // producer resolved the replacement above, the target event is gone. The warning is

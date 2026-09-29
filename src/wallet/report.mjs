@@ -266,9 +266,9 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
       : {}),
     // money legs the pricing did not consume: a round-trip spread (also one mixed with a
     // trade), a USDC fee of a multi-token swap, a USDC transfer; the report does not guess
-    // which. Absent field = none seen in this window (a legacy scan without money legs
-    // cannot see them — re-scan for the money view).
-    ...(moneyOnly.length > 0 ? { moneyOnly } : {}),
+    // which. Always an array — a client reduces over it, and an absent field reads as a
+    // legacy shape (an empty array is the honest "none in this window").
+    moneyOnly,
     complete: !scan.truncated && !hasGaps && allReconcile && !scan.ambiguousSlotPairs, // a guessed order is not a certified history
     tokens,
   };

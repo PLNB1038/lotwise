@@ -139,7 +139,7 @@ test("demo boot: no reader means an honest 503, never a fabricated on-chain clai
   try {
     const res = await fetch(`http://127.0.0.1:${port}/onchain?symbol=DEMOx`);
     assert.equal(res.status, 503);
-    assert.match((await res.json()).error, /not configured/);
+    assert.match((await res.json()).error, /does not read the chain/);
   } finally {
     server.close();
   }

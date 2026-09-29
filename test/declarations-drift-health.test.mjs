@@ -58,7 +58,7 @@ test("/health mirrors a loaded file's decimals drift — the API consumer sees w
   const { server, base } = await startServer({ declarationsStats: statsOf(r) });
   try {
     const h = await (await fetch(`${base}/health`)).json();
-    assert.deepEqual(h.declarations.decimalsDrift, [{ symbol: "SPYX", declared: 6, registry: 8 }]);
+    assert.deepEqual(h.declarations.decimalsDrift, [{ symbol: "SPYx", declared: 6, registry: 8 }]);
     assert.equal(h.declarations.ok, 1, "a drift is a loaded file — the channel is up");
   } finally {
     server.close();

@@ -281,7 +281,7 @@ test("declarations: a declaration decimals disagreeing with the registry warns �
   assert.equal(r.ok, true, "a decimals drift does not refuse the file — the raw amount is per raw unit");
   assert.equal(r.loaded, 2);
   assert.equal(warns.length, 1, "one warning for the drifting symbol; the matching one is silent");
-  assert.match(warns[0], /KOX/, "the symbol is named, uppercased like every loader warning");
+  assert.match(warns[0], /KOx/, "the symbol is named in the registry spelling — pasteable into ?symbol=");
   assert.match(warns[0], /declaration decimals 8 ≠ registry decimals 6/);
   assert.match(warns[0], /tokens\.json/);
   const ko = r.events.find((e) => e.mint === KOX);
@@ -316,9 +316,9 @@ test("declarations: the decimals drift rides into the result as decimalsDrift �
   assert.equal(r.ok, true);
   assert.equal(r.loaded, 5, "the drift is visibility, the load stands");
   assert.deepEqual(r.decimalsDrift, [
-    { symbol: "KOX", declared: 8, registry: 6 },
-    { symbol: "KOX", declared: 9, registry: 6 },
-    { symbol: "SPYX", declared: 6, registry: 8 },
+    { symbol: "KOx", declared: 8, registry: 6 },
+    { symbol: "KOx", declared: 9, registry: 6 },
+    { symbol: "SPYx", declared: 6, registry: 8 },
   ], "a string-only pair is normalized and reported, not silently skipped");
   assert.equal(warns.length, 3, "the console warn keeps its one-per-pair dedup — the array mirrors it, not doubles it");
 });
@@ -344,7 +344,7 @@ test("declarations: decimalsDrift is capped at 10 entries", () => {
   assert.equal(r.ok, true);
   assert.equal(r.decimalsDrift.length, 10, "the cap keeps /health readable");
   assert.deepEqual(r.decimalsDrift.map((d) => d.declared), [0, 1, 2, 3, 4, 5, 7, 8, 9, 10], "the first pairs in file order");
-  assert.ok(r.decimalsDrift.every((d) => d.symbol === "KOX" && d.registry === 6));
+  assert.ok(r.decimalsDrift.every((d) => d.symbol === "KOx" && d.registry === 6));
 });
 
 test("declarations: a LEGAL supersedes correction does not trip the changed-sum proximity warning", () => {

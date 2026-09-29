@@ -39,7 +39,7 @@ node scripts/serve.mjs
 
 Then open http://127.0.0.1:8787/ .
 
-On startup the server loads the registry, reads mint state for every non-xStocks token, pulls xStocks multiplier history, and only then starts listening. Unavailable sources are skipped with a warning instead of crashing the boot; the state of every source is visible at `/health`.
+On startup the server loads the registry, reads mint state for every non-xStocks token, pulls xStocks multiplier history, and only then starts listening. Unavailable sources are skipped with a warning instead of crashing the boot; the state of every source is visible at `/health`. The first `/lots` on the default public RPC can hit a relayed upstream rate limit (`503 {"kind":"rate-limit"}` — the endpoint relays the upstream `429`): that is Solana's public quota talking, not a server fault — `--rpc` with your own endpoint removes it.
 
 Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota. `--rpc` and `--demo` refuse each other at startup (exit 1): the demo boot has no network, so a launch line carrying both is a contradiction, not a configuration. `-h`/`--help` prints the full grammar.
 
@@ -82,7 +82,7 @@ const adjusted = raw * BigInt(multiplier);    // 1000000000n — exactly 10 shar
 
 ## API
 
-GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March.
+GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. A tracked `mint` wins over `symbol`; a `mint` outside the registry falls back to the symbol match — a typo in `mint` is not detected, check the spelling. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March.
 
 | Endpoint | Purpose |
 |---|---|

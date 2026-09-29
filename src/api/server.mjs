@@ -258,7 +258,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           excludedReason: onchainExcludedReason,
         });
       }
-      if (!onchainReader) return json(res, 503, { error: "on-chain reader not configured" });
+      if (!onchainReader) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not read the chain — boot without --demo for the live feed" : "on-chain reader not configured" });
       if (!allow(rpcLimiter, req, res)) return;
       let parsed;
       try {
@@ -288,7 +288,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const address = q.get("address");
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
-      if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
+      if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured" });
       // GET-only: a HEAD probe carries no body and no address semantics a monitor needs —
       // running the FULL scan (semaphore + RPC quota) for an empty response is a probe
       // that can hold the one scan slot
@@ -356,7 +356,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const address = q.get("address");
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
-      if (!walletScanner) return json(res, 503, { error: "wallet scanner not configured" });
+      if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured" });
       if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       if (scanActive) return scanBusy(res);
       if (!allow(scanLimiter, req, res)) return;
@@ -476,7 +476,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           excludedReason: crosscheckExcludedReason,
         });
       }
-      if (!priceProvider) return json(res, 503, { error: "price provider not configured" });
+      if (!priceProvider) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not fetch prices — boot without --demo for the live feed" : "price provider not configured" });
       if (!allow(rpcLimiter, req, res)) return;
       let pool = null;
       let candles = [];

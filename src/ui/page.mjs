@@ -130,8 +130,10 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
   <!-- Dividend layer: static editorial context (not data — data above and below comes
        from the API). Tickers are listed by name without counters so the copy cannot drift
        apart from the registry; the "no events yet" fact is anchored to the expansion date,
-       not to the moment of reading. -->
-  <section id="dividend-layer">
+       not to the moment of reading. Not rendered in demo mode: the demo table carries two
+       fictional tokens, and a card naming live-registry tickers next to it contradicts
+       the banner on the same screen. -->
+  ${demo ? "" : `<section id="dividend-layer">
     <h2>Dividend layer</h2>
     <div class="card">
       <p>The event schema includes <code>DIVIDEND_ACCRUAL</code>: an issuer-declared amount per
@@ -144,7 +146,7 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
         row carries its source link; per-unit amounts become accrual events the moment the issuer
         publishes declarations.</p>
     </div>
-  </section>
+  </section>`}
 
   <section>
     <h2>Tracked tokens</h2>
@@ -216,7 +218,9 @@ function fmtMul(s) {
   // \d is cooked into a bare "d" and the guard silently dies (an audit catch)
   if (/^\\d+$/.test(s)) return s;
   var n = Number(s);
-  return isFinite(n) ? n.toFixed(6) : s;
+  // trailing zeros are noise: 1.05 must not read as "1.050000" — trim to the last
+  // significant digit (the doubled backslashes are the same template-literal rule)
+  return isFinite(n) ? n.toFixed(6).replace(/(\\.[0-9]*[1-9])0+$/, '$1').replace(/\\.$/, '') : s;
 }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
@@ -409,11 +413,23 @@ function renderEvents(list, xcByKey) {
     if (isMult) { key = xcKey(e, seqM); seqM += 1; }
     else if (isDiv) { key = xcKey(e, seqD); seqD += 1; }
     var title = isDiv ? 'dividend accrual' : (e.reason || e.type);
-    // a dividend is not a multiplier change: instead of from → to, its own accrual amount
-    // (raw → human by the event's decimals; unknown decimals — fmtUi will say so honestly)
-    var what = isDiv
-      ? esc(fmtUi(e.amountPerUnitRaw, e.decimals)) + ' per unit'
-      : esc(e.multiplierFrom || '-') + ' &rarr; ' + esc(e.multiplierTo || '-');
+    // each type carries its own money line — a split shows its ratio, a merger its
+    // exchange, a ticker change its rename; "-" placeholders made the demo timeline
+    // (whose whole point is showing all six types) look broken
+    var what;
+    if (isDiv) {
+      what = esc(fmtUi(e.amountPerUnitRaw, e.decimals)) + ' per unit';
+    } else if (e.type === 'SPLIT') {
+      what = esc(e.ratioNumerator || '-') + ' : ' + esc(e.ratioDenominator || '-') + ' split';
+    } else if (e.type === 'MERGER') {
+      what = esc(e.exchangeNumerator || '-') + ' : ' + esc(e.exchangeDenominator || '-') + ' exchange into a new mint';
+    } else if (e.type === 'TICKER_CHANGE') {
+      what = esc(e.oldSymbol || '-') + ' &rarr; ' + esc(e.newSymbol || '-');
+    } else if (e.type === 'REDEEM') {
+      what = 'full redemption of the position';
+    } else {
+      what = esc(e.multiplierFrom || '-') + ' &rarr; ' + esc(e.multiplierTo || '-');
+    }
     return '<li><div class="when">' + esc(e.effectiveDate) + ' — ' + esc(title) +
       xcBadge(xcByKey && key !== null ? xcByKey[key] : null) + '</div>' +
       '<div class="what">' + what + '</div></li>';

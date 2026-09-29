@@ -171,7 +171,10 @@ Two same-day consequences of that order are stated, not hidden:
   amountPerUnitRaw × shadowedQtyRaw` per dividend identity — an exact integer,
   repairable per identity. Two caveats: it is the declared income the canonical order
   lost, not a claim the issuer owes it; and `shadowedQtyRaw` is a quantity without
-  owner attribution.
+  owner attribution. The formula is exact against its own counterfactual — the same
+  facts with the exchange a day earlier and the dividend still at the ex-day midnight
+  base; do not validate it by moving exchanges across days, which drags other same-day
+  arithmetic along and diverges mechanically.
 
 ### `baseIncomplete` and `totalRaw: null`
 
