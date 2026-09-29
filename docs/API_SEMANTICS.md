@@ -149,6 +149,18 @@ produce the same report. A split is therefore always effective before its same-d
 dividend (the dividend accrues on the post-split position), and ties inside one class
 (e.g. two dividends of one day) are reported in a deterministic order independent of the feed.
 
+Two same-day consequences of that order are stated, not hidden:
+
+- A `SPLIT` before its same-day `REDEEM` means the redemption realizes the post-split
+  quantity. If the issuer announced the redemption in pre-split units, the two facts
+  disagree — resolve the declarations instead of trusting either number.
+- A `DIVIDEND_ACCRUAL` for a merger's NEW mint on the merger day accrues nothing: the
+  dividend applies while every holder is still on the old mint. The report carries this
+  as an explicit `warnings` entry (`{kind: "dividend-shadowed-by-merger", mint, day,
+  amountPerUnitRaw}`) instead of a silent zero indistinguishable from "nobody held it".
+  An exchange on a different day, into a different mint, or one that converted no lots
+  is real economics, not a shadow, and produces no warning.
+
 ### `baseIncomplete` and `totalRaw: null`
 
 Rows flag `baseIncomplete` when:
@@ -192,8 +204,11 @@ declarations within three days.
 One ex-day carries one declared amount: two plain declarations of one symbol
 on the same canonical ex-day with different `amountPerUnitRaw` refuse the
 whole file — that is a correction without `supersedes`, and feeding it as two
-dividends would double the income. A changed sum on a different day stays a
-warning. The token's `decimals` in a declaration is display metadata; the
+dividends would double the income. A changed sum on the immediately adjacent day stays
+a warning; beyond that one-day window the loader cannot tell a correction from two real
+dividends — resolve the file by hand. A correction declared WITH `supersedes` does not
+trip the warning at all: the replaced line no longer accrues. The token's `decimals` in
+a declaration is display metadata; the
 registry (`data/tokens.json`) is authoritative, and a disagreement is warned
 at load. The raw amount is per raw unit and is never rescaled.
 

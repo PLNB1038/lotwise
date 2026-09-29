@@ -18,7 +18,7 @@ Lotwise closes that gap with one canonical event stream, verified against the ch
 ## What it does
 
 - **Token registry**: 31 tokenized equities from 4 issuers (xStocks/Backed 16, PreStocks 8, Backpack 4, Tessera 3). Token-2022 mints — decimals per issuer family: 8 (xStocks), 6 (Backpack), 9 (PreStocks/Tessera) — every mint and its decimals verified against mainnet.
-- **Canonical events**: one schema, 6 event types (`SPLIT`, `DIVIDEND_ACCRUAL`, `MERGER`, `TICKER_CHANGE`, `REDEEM`, `MULTIPLIER_CHANGE`). Strict validation: canonical ISO-8601 dates, exact decimal multipliers as strings (no floats), mandatory source references. All six are schema-validated and engine-ready; today's live feed produces `MULTIPLIER_CHANGE` (xStocks issuer history and the on-chain journal) — the rest appear the moment an issuer or operator supplies them. Events apply in a canonical order — chronologically by day, and within a day `SPLIT`, then `DIVIDEND_ACCRUAL`, then `MERGER`, then `REDEEM` — so the same facts in any feed order produce the same report.
+- **Canonical events**: one schema, 6 event types (`SPLIT`, `DIVIDEND_ACCRUAL`, `MERGER`, `TICKER_CHANGE`, `REDEEM`, `MULTIPLIER_CHANGE`). Strict validation: canonical ISO-8601 dates, exact decimal multipliers as strings (no floats), mandatory source references. All six are schema-validated and engine-ready; today's live feed produces `MULTIPLIER_CHANGE` (xStocks issuer history and the on-chain journal) — the rest appear the moment an issuer or operator supplies them. Events apply in a canonical order — chronologically by day, and within a day `SPLIT`, then `DIVIDEND_ACCRUAL`, then `MERGER`, then `REDEEM` — so the same facts in any feed order produce the same report. A dividend declared for a merger's new mint on the merger day accrues nothing (the holders are still on the old mint when it applies) — the engine reports that as an explicit warning instead of a silent zero.
 - **Event sources**: the xStocks issuer API (paginated history with a completeness check: the oldest node must start at multiplier `1`), and for PreStocks/Backpack the mint state itself, read via an on-chain journal that backfills and diffs across restarts.
 - **Adjusted lots**: FIFO lots rebuilt from wallet history and adjusted through the multiplier timeline, with exact dust arithmetic (BigInt rationals; `sampleScaledQty` reports the exact remainder). Swaps against a **USDC leg carry their cost basis**: a lot bought against USDC knows its `basisRaw`, a disposal against USDC books `proceedsRaw` and `pnlRaw` per FIFO piece (basis transfers proportionally with exact trunc-remainder accounting). A trade without a USDC leg — a transfer, a token→token swap, several tracked tokens inside one tx — is flagged `basisKnown: false` / `proceedsKnown: false`, never an invented number.
 - **Price cross-check**: daily GeckoTerminal candles around event dates, per-event verdicts (`consistent` / `mismatch` / `suspicious` / `inconclusive` / `no-price-data`).
@@ -206,7 +206,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-900 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+906 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

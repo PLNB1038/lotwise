@@ -251,3 +251,63 @@ test("property: 200 random event sets — every permutation yields an identical 
     }
   }
 });
+
+// ---- a same-day exchange shadows a dividend declared for the NEW mint ----
+// DIVIDEND_ACCRUAL ranks before MERGER, so a dividend on the merger's new mint applies
+// while every holder is still on the old mint: the accrual is honestly zero, but a silent
+// zero is the engine's quietest failure mode — the report says so instead.
+
+test("a dividend for the merger's NEW mint on merger day accrues nothing — and says so instead of a silent zero", () => {
+  const events = [
+    div({ mint: MINT3, effectiveDate: "2026-06-18", amountPerUnitRaw: 11 }),
+    ev({ type: "MERGER", effectiveDate: "2026-06-18", newMint: MINT3, exchangeNumerator: 5, exchangeDenominator: 2 }),
+  ];
+  const a = applyEvents([lot()], events);
+  const b = applyEvents([lot()], [events[1], events[0]]);
+  assert.equal(a.accruals.length, 0, "canonically the dividend applies before the exchange");
+  assert.deepEqual(a.warnings, [{
+    kind: "dividend-shadowed-by-merger",
+    mint: MINT3,
+    day: "2026-06-18",
+    amountPerUnitRaw: 11n,
+  }]);
+  assert.deepEqual(b.warnings, a.warnings, "the warning ignores the feed order");
+});
+
+test("a pre-existing new-mint position accrues — no shadowed warning", () => {
+  // the exchange converts real lots onto the same mint the same day (the warning's full
+  // trigger shape), yet the dividend DID find holders — a non-zero accrual is not a shadow
+  const r = applyEvents([lot({ id: "L-old" }), lot({ id: "L9", mint: MINT3 })], [
+    div({ mint: MINT3, effectiveDate: "2026-06-18", amountPerUnitRaw: 11 }),
+    ev({ type: "MERGER", effectiveDate: "2026-06-18", newMint: MINT3, exchangeNumerator: 5, exchangeDenominator: 2 }),
+  ]);
+  assert.equal(r.accruals.length, 1, "the lot held before the ex-day accrues normally; the converting one is too late");
+  assert.equal(r.accruals[0].totalRaw, 11n * 1_000_000n);
+  assert.deepEqual(r.warnings, []);
+});
+
+test("an exchange that converts nothing is not a shadow — nobody held anything either way", () => {
+  const r = applyEvents([], [
+    div({ mint: MINT3, effectiveDate: "2026-06-18" }),
+    ev({ type: "MERGER", effectiveDate: "2026-06-18", newMint: MINT3, exchangeNumerator: 5, exchangeDenominator: 2 }),
+  ]);
+  assert.equal(r.accruals.length, 0);
+  assert.deepEqual(r.warnings, []);
+});
+
+test("an exchange AFTER the dividend day is not a shadow — the zero accrual is real economics", () => {
+  const r = applyEvents([lot()], [
+    div({ mint: MINT3, effectiveDate: "2026-06-18" }), // nobody holds the new mint yet
+    ev({ type: "MERGER", effectiveDate: "2026-06-20", newMint: MINT3, exchangeNumerator: 5, exchangeDenominator: 2 }),
+  ]);
+  assert.equal(r.accruals.length, 0);
+  assert.deepEqual(r.warnings, []);
+});
+
+test("a same-day exchange into a DIFFERENT mint does not shadow this dividend", () => {
+  const r = applyEvents([lot()], [
+    div({ mint: MINT3, effectiveDate: "2026-06-18" }),
+    ev({ type: "MERGER", effectiveDate: "2026-06-18", newMint: MINT2, exchangeNumerator: 5, exchangeDenominator: 2 }),
+  ]);
+  assert.deepEqual(r.warnings, []);
+});

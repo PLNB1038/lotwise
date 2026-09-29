@@ -64,7 +64,10 @@ const heldBefore = (lot, effectiveTs, e) => {
  *   dies with a bare "Cannot mix BigInt", not a LotError; this is an exact-arithmetic engine,
  *   we do no type conversion on input)
  * @param {Array<object>} events — canonical schema events
- * @returns {{lots: Array, accruals: Array, realized: Array, symbolMap: object, applied: number}}
+ * @returns {{lots: Array, accruals: Array, realized: Array, symbolMap: object, applied: number, warnings: Array}}
+ *   warnings — order-consequence notes ({kind:"dividend-shadowed-by-merger", mint, day,
+ *   amountPerUnitRaw}): a dividend for a merger's new mint on the merger day accrues
+ *   zero (the holders are still on the old mint when it applies) and the report says so.
  *
  * Date semantics (see the header): lot-touching events (SPLIT/DIVIDEND_ACCRUAL/
  * MERGER/REDEEM) apply only to lots with acquiredDate strictly earlier than
@@ -85,7 +88,7 @@ export function applyEvents(lots, events) {
     }
   }
 
-  // Canonical application order (FIX-1, the rationale lives in the header). The caller's
+  // Canonical application order (the rationale lives in the header). The caller's
   // array is not touched — the sort decorates a copy.
   const CLASS_RANK = {
     SPLIT: 0,
@@ -132,6 +135,12 @@ export function applyEvents(lots, events) {
   const accruals = [];
   const realized = [];
   const symbolMap = {};
+  // honesty bookkeeping for one canonical-order consequence: a DIVIDEND_ACCRUAL for a
+  // merger's NEW mint ranks before the exchange, so on the merger day it applies while
+  // every holder is still on the old mint — the accrual is zero, and the report must say
+  // so instead of returning a silent zero indistinguishable from "nobody held the token"
+  const zeroAccrualDivs = [];
+  const mergerConversions = [];
 
   const lotsOf = (mint) => out.filter((l) => l.mint === mint);
 
@@ -195,6 +204,7 @@ export function applyEvents(lots, events) {
             event: e,
           });
         }
+        if (holders.size === 0) zeroAccrualDivs.push(e);
         break;
       }
       case "MERGER": {
@@ -203,6 +213,7 @@ export function applyEvents(lots, events) {
         }
         const { exchangeNumerator: N, exchangeDenominator: D, newMint } = e; // N old for D new
         const effTs = parseIsoDateMs(e.effectiveDate); // validated by phase 1 — not null
+        let converted = 0;
         for (const lot of lotsOf(e.mint)) {
           if (!heldBefore(lot, effTs, e)) continue; // a lot after the exchange is not converted
           if (lot.qtyRaw % BigInt(N) !== 0n) {
@@ -213,7 +224,11 @@ export function applyEvents(lots, events) {
           lot.qtyRaw = (lot.qtyRaw / BigInt(N)) * BigInt(D);
           lot.mint = newMint;
           // basisRaw is preserved.
+          converted++;
         }
+        // materiality for the shadow bookkeeping above: only an exchange that actually
+        // moved lots could have supplied the holders the dividend applied without
+        mergerConversions.push({ newMint, day: String(e.effectiveDate).slice(0, 10), converted });
         break;
       }
       case "TICKER_CHANGE": {
@@ -248,5 +263,21 @@ export function applyEvents(lots, events) {
         throw new LotError(`unhandled event type ${e.type}`, e);
     }
   }
-  return { lots: out, accruals, realized, symbolMap, applied: events.length };
+  // The shadow warning fires only when the zero accrual is the ORDER's doing: the
+  // dividend found no holders, and a same-day exchange moved real lots onto its mint
+  // right after it. Deterministic: both lists follow the canonical order, so any
+  // permutation of the same facts yields the same warnings.
+  const warnings = [];
+  for (const e of zeroAccrualDivs) {
+    const day = String(e.effectiveDate).slice(0, 10);
+    if (mergerConversions.some((m) => m.converted > 0 && m.newMint === e.mint && m.day === day)) {
+      warnings.push({
+        kind: "dividend-shadowed-by-merger",
+        mint: e.mint,
+        day,
+        amountPerUnitRaw: BigInt(e.amountPerUnitRaw),
+      });
+    }
+  }
+  return { lots: out, accruals, realized, symbolMap, applied: events.length, warnings };
 }

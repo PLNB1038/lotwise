@@ -173,8 +173,9 @@ test("declarations: two plain same-day amounts refuse the file — the healthy s
 });
 
 // The refusal is bound to the SAME day: special dividends legitimately sit next to
-// regular ones, so a changed sum on a different (adjacent) day keeps loading — with the
-// advisory proximity warning only.
+// regular ones, so a changed sum on a different day keeps loading — with the advisory
+// proximity warning only, and the warning's reach is the immediately adjacent day (a
+// gap of two days or more is indistinguishable from two real dividends at load time).
 test("declarations: a changed sum on a DIFFERENT day still loads — the proximity warning stays advisory", () => {
   const p = declPath(dir());
   writeFileSync(p, JSON.stringify([
@@ -193,7 +194,7 @@ test("declarations: a changed sum on a DIFFERENT day still loads — the proximi
   assert.equal(r.ok, true, "different days are two dividends as far as the refusal goes");
   assert.equal(r.loaded, 2);
   assert.equal(warns.length, 1, "the advisory warn remains — diagnostics for different days");
-  assert.match(warns[0], /adjacent days/);
+  assert.match(warns[0], /a day apart or less/);
 });
 
 // The registry is the authority on a token's decimals: a declaration's `decimals` is
@@ -223,4 +224,25 @@ test("declarations: a declaration decimals disagreeing with the registry warns �
   assert.match(warns[0], /tokens\.json/);
   const ko = r.events.find((e) => e.mint === KOX);
   assert.equal(ko.decimals, 8, "the file is the operator's — we warn, we do not silently rewrite the metadata");
+});
+
+test("declarations: a LEGAL supersedes correction does not trip the changed-sum proximity warning", () => {
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v1" },
+    { symbol: "SPYx", exDate: "2026-06-19", amountPerUnitRaw: "2500000", decimals: 8, sourceUrl: "https://issuer.example/q2-v2",
+      supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "2000000" } },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(r.superseded, 1, "the correction replaced its target");
+    assert.equal(r.loaded, 1, "the target's accrual is gone — only the corrected amount loads");
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 0, "a resolved correction is not a doubled-income suspicion — the target no longer accrues");
 });

@@ -127,6 +127,17 @@ export function loadDeclarationsFile(path, registry) {
   // same-symbol proximity regardless of amount: a correction that changes the SUM is the
   // classic issuer flow and used to slip past the same-amount cluster warning below while
   // doubling the income in the engine (the engine's identity dedup requires the amount to match)
+  // A line REPLACED by a supersedes correction is excluded first: it no longer accrues, and
+  // a legal correction (target and corrected line a day apart, changed sum) is exactly the
+  // shape this scan suspects — warning about a resolved file cries wolf at the one operator
+  // who did everything right.
+  const replaced = new Set();
+  for (const decl of list) {
+    if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
+    const s = decl.supersedes;
+    if (s === null || typeof s !== "object" || typeof s.exDate !== "string" || s.amountPerUnitRaw === undefined) continue;
+    replaced.add(`${decl.symbol.toUpperCase()}|${s.exDate.slice(0, 10)}|${String(s.amountPerUnitRaw)}`);
+  }
   const bySymbolDay = new Map();
   for (const decl of list) {
     if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
@@ -135,14 +146,16 @@ export function loadDeclarationsFile(path, registry) {
     const ms = parseIsoDateMs(day);
     if (ms === null) continue;
     const key = decl.symbol.toUpperCase();
+    const amount = String(decl.amountPerUnitRaw ?? "");
+    if (replaced.has(`${key}|${day}|${amount}`)) continue; // a resolved target — no longer a suspicion
     if (!bySymbolDay.has(key)) bySymbolDay.set(key, []);
-    bySymbolDay.get(key).push({ day, ms, amount: String(decl.amountPerUnitRaw ?? "") });
+    bySymbolDay.get(key).push({ day, ms, amount });
   }
   for (const [sym, arr] of bySymbolDay) {
     arr.sort((a, b) => a.ms - b.ms);
     for (let i = 1; i < arr.length; i++) {
       if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 1 * 86_400_000) {
-        console.warn(`[declarations] ${sym}: two declarations on adjacent days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
+        console.warn(`[declarations] ${sym}: two declarations a day apart or less (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
       }
     }
   }
