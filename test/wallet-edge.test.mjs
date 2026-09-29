@@ -183,8 +183,8 @@ test("scanWallet: pagination by before — the cursor = the last signature of a 
   assert.equal(scan.signatures, 5, "all five signatures from all pages");
   assert.equal(scan.truncated, false);
   // the third page is short (1 < 2) — no longer the end: the fourth request confirms
-  // (a repeated page = no progress/no new uniques) and only then a stop. Round28 S3:
-  // after the address walk, 4 more first pages (one per derived ATA of SPYx/AAPLx × 2 programs)
+  // (a repeated page = no progress/no new uniques) and only then a stop.
+  // After the address walk: 4 more first pages (one per derived ATA of SPYx/AAPLx × 2 programs)
   assert.deepEqual(client.sigCalls, [undefined, "s1", "s3", "s4", undefined, undefined, undefined, undefined], "the cursor — the last signature of each read page; derived sources walk after the listed ones");
 });
 

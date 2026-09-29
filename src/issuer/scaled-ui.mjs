@@ -13,8 +13,8 @@ export class ScaledUiError extends Error {
  */
 // Canonical form is the schema's common ground : "05"→"5", "5.0"→"5",
 // "1.10"→"1.1". The representation depends on the source (RPC/issuer API) while comparisons
-// are string-based: the journal diff and reconcile lied on representation drift,
-// Jev R3). Significant digits are untouched; called after the regex guard.
+// are string-based: the journal diff and reconcile lied on representation drift before
+// this canonicalization). Significant digits are untouched; called after the regex guard.
 import { canonicalDecimalString as canonicalDecimal } from "../schema/events.mjs";
 
 export function parseScaledUiAmount(accountInfoValue) {
@@ -117,7 +117,7 @@ export function reconcileMultiplier(apiMultiplier, onChain, date = new Date().to
       : onChain.activeMultiplier;
   // Compare canonically, display as received: "1.10" (API) vs "1.1" (chain) is the same value;
   // a false planes-disagree on representation drift would be exactly the class of quiet lie
-  // that canonicalization kills (Jev R3).
+  // that canonicalization kills.
   const agree = canonicalDecimal(String(apiMultiplier)) === canonicalDecimal(String(effectiveOnChain));
   return {
     api: apiMultiplier,

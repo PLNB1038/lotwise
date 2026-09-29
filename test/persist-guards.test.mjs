@@ -83,7 +83,7 @@ test("scaled-ui: pending is canonicalized too (\"5.000\"→\"5\")", () => {
   assert.equal(parsed.pendingMultiplier, "5");
 });
 
-test("reconcile: a representation drift of the same value (api \"1.10\" vs chain \"1.1\") — ok, not planes-disagree (Jev R3, the R7-16 tail)", async () => {
+test("reconcile: a representation drift of the same value (api \"1.10\" vs chain \"1.1\") — ok, not planes-disagree", async () => {
   const { reconcileMultiplier } = await import("../src/issuer/scaled-ui.mjs");
   const onChain = parseScaledUiAmount(settled("1.1"));
   const r = reconcileMultiplier("1.10", onChain, "2026-01-01T00:00:00Z");

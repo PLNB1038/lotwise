@@ -1,4 +1,4 @@
-// Unit pin of the serve.mjs shutdown exit (commit 1f6e3fe), round36-v15.
+// Unit pin of the serve.mjs shutdown exit (commit 1f6e3fe).
 //
 // scripts/serve.mjs is a top-level script with no exports, so the stop() logic cannot be
 // imported. It IS self-contained text, though: the block from `const SHUTDOWN_DRAIN_MS`
@@ -18,7 +18,7 @@
 // a guard against a pin that cannot go red.
 //
 // Transfer-ready: the relative path ../scripts/serve.mjs resolves identically from
-// test/ and from _bughunt/.
+// test/ and from ad-hoc probe scripts outside it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -151,5 +151,5 @@ test("red proof: the same pin fails the pre-fix shape (sync exit, ignored repeat
   assert.ok(violations.some((m) => m.includes("force-exit(1)")), "the ignored-repeated-signal regression must be caught");
 });
 
-// exported for the round36-v15-red-show.mjs probe (prints the red violations for the notes)
+// exported for the red-show probe (prints the red violations for the notes)
 export { extractShutdownBlock, evaluateShutdownBlock, scenario };

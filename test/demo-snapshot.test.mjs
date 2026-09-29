@@ -1,4 +1,4 @@
-// The --demo boot (docs/review/ROUND25_JUDGE.md, top-3 #3): a judge must see all SIX
+// The --demo boot: a judge must see all SIX
 // canonical event types live, but a real feed shows one (MULTIPLIER_CHANGE) and a live boot
 // without RPC waits minutes. The contract pinned here, in the order a reviewer would trip on it:
 //   1. the flag grammar: bare --demo is the switch; --demo=true/false is the explicit spelling;

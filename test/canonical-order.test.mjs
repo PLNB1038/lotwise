@@ -1,6 +1,6 @@
-// Canonical order of event application (FIX-1, docs/review/ROUND40_FINANCE_SPEC.md).
+// Canonical order of event application.
 // applyEvents used to consume events in array order: the same facts fed in a different
-// order produced a different report (round39 s2c — a same-day split+dividend accrued
+// order produced a different report (a same-day split+dividend accrued
 // 2e15 or 1e15 depending on the feed). The engine now sorts events itself, and these
 // tests pin the contract: any permutation of the same event array yields the same lots,
 // accruals, realized and symbolMap — byte-identical, not just economically equal.

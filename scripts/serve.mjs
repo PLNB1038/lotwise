@@ -97,7 +97,7 @@ const rateLimits = {
 };
 
 if (demo) {
-  // DEMO MODE — the judge-facing boot (docs/review/ROUND25_JUDGE.md, top-3 #3): a live feed
+  // DEMO MODE — the judge-facing boot: a live feed
   // shows a single event type, and a judge without RPC waits ~2 minutes for a degraded boot.
   // Here: the validated static set, no network at all, listening in milliseconds. The live
   // registry file is not even read — a demo instance must not mix fictional tokens with
