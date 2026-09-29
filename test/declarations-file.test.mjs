@@ -199,6 +199,28 @@ test("declarations: a changed sum on a DIFFERENT day still loads — the proximi
   assert.match(warns[0], /within three days/);
 });
 
+test("declarations: the same numeric amount in two spellings is NOT a changed sum — the cluster warn owns the pair", () => {
+  // "02000000" and "2000000" are one amount; a raw-string comparison used to cry
+  // "a corrected re-declaration with a changed sum" about an unchanged sum
+  const p = declPath(dir());
+  writeFileSync(p, JSON.stringify([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "02000000", decimals: 8, sourceUrl: "https://issuer.example/q2" },
+    { symbol: "SPYx", exDate: "2026-06-19", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/q2-v2" },
+  ]));
+  const warns = [];
+  const orig = console.warn;
+  console.warn = (...a) => warns.push(a.join(" "));
+  try {
+    const r = loadDeclarationsFile(p, REG);
+    assert.equal(r.ok, true);
+    assert.equal(r.loaded, 2);
+  } finally {
+    console.warn = orig;
+  }
+  assert.equal(warns.length, 1, "one warning — the same-amount cluster, not a changed-sum accusation");
+  assert.match(warns[0], /same-amount/);
+});
+
 test("declarations: a changed sum two and three days apart still warns — a late correction is no less real", () => {
   for (const gap of [2, 3]) {
     const p = declPath(dir());
@@ -278,7 +300,9 @@ test("declarations: the decimals drift rides into the result as decimalsDrift �
     { symbol: "KOx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/ko-q2" }, // registry KOx is 6 → drift
     { symbol: "KOx", exDate: "2026-07-16", amountPerUnitRaw: "2000000", decimals: "8", sourceUrl: "https://issuer.example/ko-q3" }, // the same pair as a string — deduped
     { symbol: "KOx", exDate: "2026-08-13", amountPerUnitRaw: "2000000", decimals: 9, sourceUrl: "https://issuer.example/ko-q4" }, // a second distinct drift
-    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/spy-q2" }, // matches — no entry
+    // a drift that appears ONLY as a string — no numeric twin to carry it into the array
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "1500000", decimals: "6", sourceUrl: "https://issuer.example/spy-q2" }, // registry SPYx is 8 → drift
+    { symbol: "SPYx", exDate: "2026-09-17", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/spy-q3" }, // matches — no entry
   ]));
   const warns = [];
   const orig = console.warn;
@@ -290,12 +314,13 @@ test("declarations: the decimals drift rides into the result as decimalsDrift �
     console.warn = orig;
   }
   assert.equal(r.ok, true);
-  assert.equal(r.loaded, 4, "the drift is visibility, the load stands");
+  assert.equal(r.loaded, 5, "the drift is visibility, the load stands");
   assert.deepEqual(r.decimalsDrift, [
     { symbol: "KOX", declared: 8, registry: 6 },
     { symbol: "KOX", declared: 9, registry: 6 },
-  ]);
-  assert.equal(warns.length, 2, "the console warn keeps its one-per-pair dedup — the array mirrors it, not doubles it");
+    { symbol: "SPYX", declared: 6, registry: 8 },
+  ], "a string-only pair is normalized and reported, not silently skipped");
+  assert.equal(warns.length, 3, "the console warn keeps its one-per-pair dedup — the array mirrors it, not doubles it");
 });
 
 // The array goes into /health, so it is capped like the other loader aggregates: a

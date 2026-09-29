@@ -108,15 +108,21 @@ export function parseServeArgs(argv, env = process.env) {
     throw new ServeArgsError(`--host must not contain whitespace, got ${JSON.stringify(host)}`, "--host");
   }
   // flag > env > public RPC; an env key must not leak into the cmdline (see serve.mjs)
+  const demo = readBoolFlag(argv, "demo");
   const rpcFlag = readFlag(argv, "rpc");
   const rpcUrl = rpcFlag ?? env.LOTWISE_RPC_URL ?? DEFAULT_RPC;
-  try {
-    const u = new URL(rpcUrl);
-    if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("not http(s)");
-  } catch {
-    // booting into honest 503s on a garbage URL is legal, but rejecting BEFORE I/O is cheaper
-    // (the same family as /
-    throw new ServeArgsError(`--rpc must be a valid http(s) URL, got ${JSON.stringify(rpcUrl)}`, "--rpc");
+  // The URL is validated only where it is USED: a --demo boot never dials out, so even a
+  // garbage ENV value must not refuse it (prod images carry LOTWISE_RPC_URL globally);
+  // an explicit --rpc alongside --demo is refused at the tail regardless of its spelling
+  if (!demo) {
+    try {
+      const u = new URL(rpcUrl);
+      if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("not http(s)");
+    } catch {
+      // booting into honest 503s on a garbage URL is legal, but rejecting BEFORE I/O is cheaper
+      // (the same family as /
+      throw new ServeArgsError(`--rpc must be a valid http(s) URL, got ${JSON.stringify(rpcUrl)}`, "--rpc");
+    }
   }
 
   let maxTxs = 300;
@@ -128,8 +134,6 @@ export function parseServeArgs(argv, env = process.env) {
       throw new ServeArgsError(`--max-txs must be an integer > 0, got ${JSON.stringify(maxTxsRaw)}`, "--max-txs");
     }
   }
-
-  const demo = readBoolFlag(argv, "demo");
 
   // The zero-network boot cannot honor an explicit --rpc: the demo never dials out, so the
   // flag would be silently swallowed and the operator's unit file would describe a server

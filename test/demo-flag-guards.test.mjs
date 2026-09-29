@@ -51,6 +51,23 @@ test("flags: --demo with the RPC from the environment still boots — prod carri
   assert.equal(args.rpcUrl, "https://rpc.example.test", "the env value parses as before; the demo simply never uses it");
 });
 
+test("flags: --demo boots even with a GARBAGE env RPC — the zero-network boot never uses the value", () => {
+  // prod images carry LOTWISE_RPC_URL globally and a demo on the same host must boot;
+  // refusing a network-free boot over a URL it never dials would make the demo hostage
+  // to an unrelated typo in the environment
+  const args = parseServeArgs(["--demo"], { LOTWISE_RPC_URL: "not-a-url" });
+  assert.equal(args.demo, true);
+  assert.equal(args.rpcUrl, "not-a-url", "carried through unvalidated; the demo never uses it");
+});
+
+test("flags: a LIVE boot still refuses a garbage env RPC before any I/O", () => {
+  assert.throws(
+    () => parseServeArgs([], { LOTWISE_RPC_URL: "not-a-url" }),
+    /--rpc must be a valid http\(s\) URL/,
+    "the live boot dials the URL — a typo is caught at the parser, not mid-boot",
+  );
+});
+
 test("flags: -h/--help wins over validation — a lost operator gets help, not a refusal", () => {
   assert.equal(parseServeArgs(["--help"]).help, true);
   assert.equal(parseServeArgs(["-h"]).help, true);

@@ -37,8 +37,10 @@ test("demo snapshot: the set is static — two builds are byte-identical and no 
 
 test("demo snapshot: ageDays counts whole days from the freeze point — never negative", () => {
   assert.equal(demoSnapshotAgeDays(Date.parse("2026-09-27")), 0, "the freeze point itself is age zero");
+  assert.equal(demoSnapshotAgeDays(Date.parse("2026-09-27T12:00:00Z")), 0, "midday of the freeze day is still zero WHOLE days — never rounded up");
   assert.equal(demoSnapshotAgeDays(Date.parse("2026-09-28")), 1);
   assert.equal(demoSnapshotAgeDays(Date.parse("2026-09-30")), 3, "whole days — a partial day does not count");
+  assert.equal(demoSnapshotAgeDays(Date.parse("2026-09-30T23:59:59Z")), 3, "a second short of day four is still three");
   assert.equal(demoSnapshotAgeDays(Date.parse("2027-09-27")), 365, "a judge a year later sees an honest 365");
   assert.equal(demoSnapshotAgeDays(Date.parse("2026-09-26")), 0, "before the freeze point the set is simply current, not an error");
   const wallClock = demoSnapshotAgeDays();

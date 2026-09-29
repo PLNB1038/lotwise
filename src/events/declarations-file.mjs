@@ -166,15 +166,18 @@ export function loadDeclarationsFile(path, registry) {
     const key = decl.symbol.toUpperCase();
     if (replaced.has(`${key}|${day}|${canonicalAmountKey(decl.amountPerUnitRaw)}`)) continue; // a resolved target
     if (!bySymbolDay.has(key)) bySymbolDay.set(key, []);
-    bySymbolDay.get(key).push({ day, ms, amount: String(decl.amountPerUnitRaw ?? "") });
+    bySymbolDay.get(key).push({ day, ms, amount: String(decl.amountPerUnitRaw ?? ""), canon: canonicalAmountKey(decl.amountPerUnitRaw ?? "") });
   }
   for (const [sym, arr] of bySymbolDay) {
     arr.sort((a, b) => a.ms - b.ms);
     for (let i = 1; i < arr.length; i++) {
+      // the sum comparison is canonical too: "02000000" and "2000000" are ONE amount, and
+      // the raw-string comparison used to cry "a changed sum" about an unchanged one (the
+      // same-amount cluster below owns that pair — it sees parsed events)
       // the window matches the same-amount cluster's three days below: a correction is
       // no less likely to land two or three days late than one, and suspicion must not
       // be backwards — same amounts at gap 3 warned while changed sums at gap 2 slept
-      if (arr[i].amount !== arr[i - 1].amount && arr[i].ms - arr[i - 1].ms <= 3 * 86_400_000) {
+      if (arr[i].canon !== arr[i - 1].canon && arr[i].ms - arr[i - 1].ms <= 3 * 86_400_000) {
         console.warn(`[declarations] ${sym}: two declarations within three days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
       }
     }

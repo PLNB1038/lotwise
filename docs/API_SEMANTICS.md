@@ -166,7 +166,12 @@ Two same-day consequences of that order are stated, not hidden:
   `{kind: "dividend-partially-shadowed-by-merger", mint, day, amountPerUnitRaw, shadowedQtyRaw}`.
   Only units an exchange moved from lots that predate the ex-day base count as shadowed
   — an exchange on a different day, into a different mint, or of intraday lots is real
-  economics and produces no warning.
+  economics and produces no warning. A consumer can size the understatement exactly:
+  the counterfactual declared income of the day is `Σ accruals.totalRaw +
+  amountPerUnitRaw × shadowedQtyRaw` per dividend identity — an exact integer,
+  repairable per identity. Two caveats: it is the declared income the canonical order
+  lost, not a claim the issuer owes it; and `shadowedQtyRaw` is a quantity without
+  owner attribution.
 
 ### `baseIncomplete` and `totalRaw: null`
 
@@ -215,8 +220,10 @@ dividends would double the income. A changed sum within three days — the same 
 the same-amount cluster uses — stays a warning; beyond that window the loader cannot
 tell a correction from two real
 dividends — resolve the file by hand. A correction declared WITH `supersedes` does not
-trip the changed-sum warning — neither its replaced target nor the correction itself
-is a suspicion: neither line is an uncorrected declaration. The token's `decimals` in
+trip the changed-sum warning: its replaced target is gone and the correction line itself
+is not scanned — only plain, uncorrected declarations suspect each other (a plain line
+next to a correction stays silent: the correction is explicit, and the plain line has no
+uncorrected partner). The token's `decimals` in
 a declaration is display metadata; the
 registry (`data/tokens.json`) is authoritative, and a disagreement is warned
 at load and carried into `/health` as `declarations.decimalsDrift` — one
