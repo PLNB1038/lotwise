@@ -31,6 +31,17 @@ const redactUrls = (msg) => String(msg).replace(URL_IN_MESSAGE, "[url]");
 const TRANSIENT_RPC_CODES = new Set([-32005]);
 const TRANSIENT_RPC_MESSAGE = /node is behind|behind by|rate limit|too many requests/i;
 
+// An abort observed through the caller's signal names its CLASS: a plain
+// AbortController means the CALLER left (kind "aborted" — the route answers 503
+// "aborted"), an AbortSignal.timeout() deadline means the ENDPOINT went silent
+// (kind "timeout" — a different failure: the boot path refuses to come up degraded
+// on it instead of hanging for the transport's default timeout). Scan-path signals
+// carry plain reasons, so their classification is unchanged.
+const abortError = (signal) =>
+  signal?.reason?.name === "TimeoutError"
+    ? new RpcError("timeout", "RPC deadline exceeded (endpoint did not answer in time)")
+    : new RpcError("aborted", "request aborted by the caller");
+
 export class RpcClient {
   /**
    * @param {object} opts
@@ -110,7 +121,7 @@ export class RpcClient {
             // shutdown grace — the drain-abort's 503 never reached the client.
             lane.splice(i, 1);
             this._drain();
-            reject(new RpcError("aborted", "request aborted by the caller"));
+            reject(abortError(signal));
           }
           // already selected: the post-await guard in call() throws the same error
         };
@@ -135,7 +146,7 @@ export class RpcClient {
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       // the caller departed before this attempt even started: stop now — a retry would
       // burn quota and pacing time for a client that is already gone
-      if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
+      if (signal?.aborted) throw abortError(signal);
       if (attempt > 0) {
         // the backoff is abortable too: a 2.8s sleep outlives the shutdown grace
         // exactly like the lane wait did — race the sleep against the departure
@@ -143,7 +154,7 @@ export class RpcClient {
           this.sleep(this.minIntervalMs * 2 ** attempt), // exponential backoff
           signal
             ? new Promise((_, rej) => signal.addEventListener("abort",
-                () => rej(new RpcError("aborted", "request aborted by the caller")), { once: true }))
+                () => rej(abortError(signal)), { once: true }))
             : new Promise(() => {}),
         ]);
       }
@@ -153,7 +164,7 @@ export class RpcClient {
       // the abort is re-checked AFTER the lane wait too: a caller that departed while
       // this call sat in the queue must not spend a paced slot and an RPC request —
       // the fetch would reject immediately, but the slot (and requestCount) is spent
-      if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
+      if (signal?.aborted) throw abortError(signal);
       const id = ++this._id;
       this.requestCount++;
       let res;
@@ -171,7 +182,7 @@ export class RpcClient {
         // an abort by OUR caller is an immediate stop, not a network error to retry.
         // Only the caller's signal decides: a transport AbortError WITHOUT it (an
         // exotic gateway abort) stays a retryable network error
-        if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
+        if (signal?.aborted) throw abortError(signal);
         lastErr = new RpcError("network", redactUrls(err.message));
         continue;
       }
@@ -188,7 +199,7 @@ export class RpcClient {
       } catch (err) {
         // the body read races the caller's departure on the LAST attempt too: without
         // this check the abort leaked out as a retryable "bad JSON" network error
-        if (signal?.aborted) throw new RpcError("aborted", "request aborted by the caller");
+        if (signal?.aborted) throw abortError(signal);
         lastErr = new RpcError("network", `bad JSON: ${err.message}`);
         continue;
       }

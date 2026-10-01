@@ -9,6 +9,14 @@ introduces behavior — every statement is pinned by the test suite.
 
 Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy.
 
+Two responses carry documented extras:
+
+- a `404` body adds `endpoints` — the list of routable paths, so a mistyped path is
+  answerable without leaving the API;
+- a `400` refusal for a token excluded from multiplier reporting (`/events`, `/onchain`,
+  `/crosscheck`, `/accruals`) adds `excluded: true` and `excludedReason` — the reason
+  from `error`, duplicated for programmatic consumers.
+
 ## Transient — back off and retry
 
 - `rate-limit` — arrives in **two shapes**: our own `429` (body `kind: "rate-limit"`,
@@ -21,7 +29,7 @@ Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy.
 - `aborted` — the caller's own connection went away (the scan is stopped for them);
   nothing to retry, the client is gone.
 
-## Not retryable — the upstream refused or sent garbage
+## Not retryable — the refusal is stable
 
 The endpoint answers `503` without fabricating data:
 
@@ -29,6 +37,10 @@ The endpoint answers `503` without fabricating data:
 - `http` — an HTTP-level failure at the source.
 - `parse` — a price source returned an unusable body.
 - `malformed-source` — an RPC source returned a non-array response.
+- `not-configured` — this deployment lacks the component the endpoint needs (the on-chain
+  reader, the wallet scanner, the price provider — on a `--demo` boot all three, since the
+  demo serves a static snapshot). STABLE: it will not recover by retrying — boot without
+  `--demo` (or wire the component) instead.
 
 A few untyped internal checks reject with `"kind": null`.
 
@@ -51,4 +63,6 @@ else the socket):
 
 Every attempt counts, including refusals. Configure via `RATE_LIMIT_SCAN_PER_MIN` /
 `RATE_LIMIT_RPC_PER_MIN`. The scan bucket is checked after the one-scan semaphore: a
-`scan-busy` refusal does not consume rate budget.
+`scan-busy` refusal does not consume rate budget. The client learns its budget from the
+`429` + `Retry-After` response; rate-budget headers (`X-RateLimit-*`) are intentionally
+not provided.

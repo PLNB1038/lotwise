@@ -46,6 +46,7 @@ function evaluateShutdownBlock(block) {
   const logs = [];
   const errors = [];
   const handlers = {};
+  const detached = [];
   // exit TERMINATES: the code is recorded and every injected service goes dead —
   // the fallthrough after a real process.exit never executes, and the stubs must
   // model that (a throwing stub would turn the .finally-path exit into an
@@ -54,6 +55,9 @@ function evaluateShutdownBlock(block) {
   const fakeProcess = {
     exit: (code) => { exits.push(code); terminated = true; },
     on: (signal, fn) => { handlers[signal] = fn; },
+    // the early boot handlers (round 49) are detached right before the drain pair
+    // is attached — the spy records the swap so the pin can hold it
+    removeAllListeners: (signal) => { detached.push(signal); },
   };
   const fakeSetTimeout = (fn, ms) => {
     if (terminated) return 0;
@@ -76,7 +80,7 @@ function evaluateShutdownBlock(block) {
   new Function("server", "process", "console", "setTimeout", block)(
     server, fakeProcess, fakeConsole, fakeSetTimeout,
   );
-  return { exits, timers, logs, errors, handlers, server };
+  return { exits, timers, logs, errors, handlers, detached, server };
 }
 
 const settle = () => new Promise((r) => setImmediate(r));
@@ -98,6 +102,8 @@ async function scenario(block) {
     "the drain must start with the 15s window");
   check(a.logs.some((l) => l.includes("[serve] shutdown: draining")),
     "the drain must announce itself in the log");
+  check(a.detached.includes("SIGTERM") && a.detached.includes("SIGINT"),
+    "the early boot signal handlers must be detached before the drain pair is attached — a signal must have exactly one owner");
   await settle();
   await settle();
   check(a.timers.length === 1 && a.timers[0].ms === 200,

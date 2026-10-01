@@ -81,17 +81,20 @@ export function loadDeclarationsFile(path, registry) {
   }
   // a declaration for a symbol that is in NO registry token used to disappear silently —
   // the per-symbol walk simply never looks for it. One loud line names the drift
-  // (a typo in the file, or a token that left the registry).
+  // (a typo in the file, or a token that left the registry). The FILE's own spelling is
+  // printed, not the uppercase comparison key: there is no registry authority for a
+  // foreign symbol, and the file line is the thing the operator edits — the same
+  // copy-paste discipline as the registry-cased warnings below.
   const known = new Set(registry.map((t) => t.symbol.toUpperCase()));
-  const foreign = new Set();
+  const foreign = new Map(); // uppercase key → the file's own spelling (first seen)
   for (const decl of list) {
     if (decl !== null && typeof decl === "object" && typeof decl.symbol === "string") {
       const up = decl.symbol.toUpperCase();
-      if (!known.has(up)) foreign.add(up);
+      if (!known.has(up) && !foreign.has(up)) foreign.set(up, decl.symbol);
     }
   }
   if (foreign.size > 0) {
-    console.warn(`[declarations] symbols not in the registry were skipped: ${[...foreign].join(", ")} — no token binds them`);
+    console.warn(`[declarations] symbols not in the registry were skipped: ${[...foreign.values()].join(", ")} — no token binds them`);
   }
   // The registry is the authority on a token's decimals: a declaration's `decimals` is
   // display metadata only (amountPerUnitRaw is per raw unit and is never rescaled), so a
@@ -169,6 +172,9 @@ export function loadDeclarationsFile(path, registry) {
     replaced.add(`${decl.symbol.toUpperCase()}|${s.exDate.slice(0, 10)}|${canonicalAmountKey(s.amountPerUnitRaw)}`);
   }
   const bySymbolDay = new Map();
+  // the file's own spelling per symbol, for the warning below: symbols IN the registry get
+  // the registry's casing (registrySymbol), foreign ones fall back to the file's spelling
+  const fileSpelling = new Map();
   for (const decl of list) {
     if (decl === null || typeof decl !== "object" || typeof decl.symbol !== "string") continue;
     if (decl.supersedes !== null && typeof decl.supersedes === "object") continue; // an explicit correction is not a suspicion
@@ -177,11 +183,16 @@ export function loadDeclarationsFile(path, registry) {
     const ms = parseIsoDateMs(day);
     if (ms === null) continue;
     const key = decl.symbol.toUpperCase();
+    if (!fileSpelling.has(key)) fileSpelling.set(key, decl.symbol);
     if (replaced.has(`${key}|${day}|${canonicalAmountKey(decl.amountPerUnitRaw)}`)) continue; // a resolved target
     if (!bySymbolDay.has(key)) bySymbolDay.set(key, []);
     bySymbolDay.get(key).push({ day, ms, amount: String(decl.amountPerUnitRaw ?? ""), canon: canonicalAmountKey(decl.amountPerUnitRaw ?? "") });
   }
   for (const [sym, arr] of bySymbolDay) {
+    // the registry's spelling when the symbol is tracked, the file's own otherwise — the
+    // uppercased comparison key in a warning reads as a symbol the operator would paste
+    // into ?symbol=, and ?symbol= is case-sensitive (an uppercased key 400s)
+    const display = registrySymbol.get(sym) ?? fileSpelling.get(sym) ?? sym;
     arr.sort((a, b) => a.ms - b.ms);
     for (let i = 1; i < arr.length; i++) {
       // the sum comparison is canonical too: "02000000" and "2000000" are ONE amount, and
@@ -191,7 +202,7 @@ export function loadDeclarationsFile(path, registry) {
       // no less likely to land two or three days late than one, and suspicion must not
       // be backwards — same amounts at gap 3 warned while changed sums at gap 2 slept
       if (arr[i].canon !== arr[i - 1].canon && arr[i].ms - arr[i - 1].ms <= 3 * 86_400_000) {
-        console.warn(`[declarations] ${sym}: two declarations within three days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
+        console.warn(`[declarations] ${display}: two declarations within three days (${arr[i - 1].day} and ${arr[i].day}, amounts ${arr[i - 1].amount} and ${arr[i].amount}) — a corrected re-declaration with a changed sum bypasses supersedes and will double the income; resolve the file`);
       }
     }
   }

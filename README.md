@@ -43,7 +43,7 @@ On startup the server loads the registry, reads mint state for every non-xStocks
 
 Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota. `--rpc` and `--demo` refuse each other at startup (exit 1): the demo boot has no network, so a launch line carrying both is a contradiction, not a configuration. `-h`/`--help` prints the full grammar.
 
-`--demo` boots offline in milliseconds: a static demonstration set (fictional `DEMOx`/`DEMO2x` tokens, sources marked `lotwise-demo-snapshot`) serves **all six event types** — see the whole schema without waiting for live issuers. `/health` marks the mode with `demo: { snapshotAsOf, snapshotAgeDays }`: the snapshot is frozen at 2026-09-27 and the age tells how far the story is behind today, so a stale-looking demo identifies itself instead of passing for fresh. Without the flag the live boot is unchanged.
+`--demo` boots offline in milliseconds: a static demonstration set (fictional `DEMOx`/`DEMO2x` tokens, sources marked `lotwise-demo-snapshot`) serves **all six event types** — see the whole schema without waiting for live issuers. Demo `/tokens` rows carry the same eight fields as the live registry, filled honestly: `sourceUrl`/`sourceDecimals` are the `lotwise-demo-snapshot` marker and `verified` is `false` (a demo set is by definition not issuer-confirmed). `/health` marks the mode with `demo: { snapshotAsOf, snapshotAgeDays }`: the snapshot is frozen at 2026-09-27 and the age tells how far the story is behind today, so a stale-looking demo identifies itself instead of passing for fresh. Without the flag the live boot is unchanged.
 
 ```sh
 node scripts/serve.mjs --demo   # then: curl "http://127.0.0.1:8787/events?symbol=DEMOx"
@@ -82,7 +82,7 @@ const adjusted = raw * BigInt(multiplier);    // 1000000000n — exactly 10 shar
 
 ## API
 
-GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. A tracked `mint` wins over `symbol`; a `mint` outside the registry falls back to the symbol match — a typo in `mint` is not detected, check the spelling. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March.
+GET (and HEAD) only. Token endpoints accept `?mint=` or `?symbol=` and return `400` for anything outside the registry instead of returning empty data. A tracked `mint` wins over `symbol`; a `mint` outside the registry falls back to the symbol match — a typo in `mint` is not detected, check the spelling. Dates are strict ISO-8601: `2026-02-30` is rejected, not rolled over to March. `/multiplier` and `/onchain` evaluate `date` as an instant: a bare `YYYY-MM-DD` is that day's UTC midnight, so an event effective later that day (say `2026-06-10T04:30Z`) is not yet in effect at `date=2026-06-10` — it applies from the next bare date; an event at exactly midnight is in effect at its own date.
 
 | Endpoint | Purpose |
 |---|---|
@@ -121,7 +121,7 @@ curl "http://127.0.0.1:8787/crosscheck?symbol=OPENAI"
 
 ### Response and error contract
 
-Every response is JSON; decimal quantities are strings everywhere (including `amountPerUnitRaw` in `/events`); `/events` rows are chronological. Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy: transient (`rate-limit`, `network`, `scan-busy`, `aborted`) means back off and retry; everything else is the upstream refusing or sending garbage, answered `503` without fabricating data. A `400` is the request itself being wrong and fails identically on every retry. Full contract — both rate-limit shapes, the kind catalog, HEAD rules, rate buckets and their env knobs: **docs/ERRORS.md**.
+Every response is JSON; decimal quantities are strings everywhere (including `amountPerUnitRaw` in `/events`); `/events` rows are chronological. Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy: transient (`rate-limit`, `network`, `scan-busy`, `aborted`) means back off and retry; everything else is a stable refusal answered `503` without fabricating data — the upstream refusing or sending garbage, or a component this deployment does not have (`not-configured`: a `--demo` boot serves a static snapshot). A `400` is the request itself being wrong and fails identically on every retry. Full contract — both rate-limit shapes, the kind catalog, HEAD rules, rate buckets and their env knobs: **docs/ERRORS.md**.
 
 Response shape (a real `/events` row, truncated):
 
@@ -206,7 +206,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-934 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+948 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

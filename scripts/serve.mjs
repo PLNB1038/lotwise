@@ -93,6 +93,20 @@ try {
   throw err;
 }
 
+// Signals are handled from the FIRST await, not only after startServer: a SIGTERM
+// arriving during the boot I/O (registry, journal, on-chain reads) used to hit the
+// DEFAULT termination — the unit died mid-boot with no line in the log explaining why.
+// An operator stopping a slow boot now gets a named line and a clean non-zero exit
+// (systemd sees an honest failure; Restart=on-failure retries deliberately). Once
+// startServer is up there is a server to drain, and it REPLACES these handlers with
+// the graceful-drain pair — the two never run together.
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => {
+    console.error(`[serve] ${sig} during boot — no server to drain yet, aborting before listen (exit 1)`);
+    process.exit(1);
+  });
+}
+
 // ---- boot state shared by the two paths ----
 // The demo branch fills its own; the live branch assigns below. The readers stay null in
 // demo mode: the routes answer the honest 503 "not configured" (a demo has no RPC, no
@@ -214,6 +228,14 @@ if (journalCorrupted) {
 }
 let journalReplayed = 0;
 let journalUnavailable = 0;
+// Boot reads must not outlive a deadline: an endpoint that accepts and never answers
+// used to park the boot on undici's default transport timeout (300s, retried) — minutes
+// to HOURS of silence before listen, past any systemd TimeoutStartSec, a start-timeout
+// restart-loop on a half-dead node behind LOTWISE_RPC_URL. 10s per read bounds the
+// silence; a deadline miss is treated as "endpoint down at boot" and REFUSES the boot
+// (a loud, non-zero failure systemd can retry) instead of limping through 15 per-token
+// warns into a degraded listen. Fast RPC errors keep the per-token fail-closed path.
+const BOOT_RPC_DEADLINE_MS = 10_000;
 // Boot milestones: with live sources a boot runs ~1.5 min and per-token lines appear only
 // for events and warnings — a silent phase reads as a hang. One line per phase boundary,
 // no per-token spam.
@@ -224,10 +246,16 @@ for (const t of onchainBoot) {
   let parsed = null;
   try {
     // boot-time point read, high lane: the journal loop must not queue behind a scan
-    // backlog left over from a previous process (the RpcClient priority contract)
-    const raw = await rpcForJournal.call("getAccountInfo", [t.mint, { encoding: "jsonParsed", commitment: "confirmed" }], { priority: "high" });
+    // backlog left over from a previous process (the RpcClient priority contract).
+    // The deadline is the boot's own: it bounds a silent endpoint (see above) and is
+    // invisible to the interactive scan path, which keeps its caller-driven signals.
+    const raw = await rpcForJournal.call("getAccountInfo", [t.mint, { encoding: "jsonParsed", commitment: "confirmed" }], { priority: "high", signal: AbortSignal.timeout(BOOT_RPC_DEADLINE_MS) });
     parsed = parseScaledUiAmount(raw.value);
   } catch (err) {
+    if (err?.kind === "timeout") {
+      console.error(`[serve] RPC endpoint did not answer within ${BOOT_RPC_DEADLINE_MS}ms (getAccountInfo for ${t.symbol}) — the endpoint is unreachable at boot, refusing to listen degraded. Check LOTWISE_RPC_URL (${rpcDisplay}) and restart.`);
+      process.exit(1);
+    }
     console.warn(`[serve] ${t.symbol}: on-chain journal unavailable (${err.message}) — fail-closed`);
   }
   // Per-token isolation: a broken mint (corrupt journal cache, validation refusal) must not
@@ -473,6 +501,13 @@ const stop = () => {
     // A short grace lets the response (and its access-log line) flush first.
     .finally(() => setTimeout(() => process.exit(0), 200));
 };
+// From here on there IS a server to drain: replace the early boot handlers with the
+// graceful-shutdown pair. removeAllListeners first — process.on would ADD a second
+// listener and both would fire on the same signal (the boot-abort one exits(1) while
+// the drain one is still draining). The swap is synchronous, so no signal can land in
+// between; from the first boot await up to this point the early pair owns the process.
+process.removeAllListeners("SIGTERM");
+process.removeAllListeners("SIGINT");
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
 }

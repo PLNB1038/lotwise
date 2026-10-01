@@ -258,7 +258,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           excludedReason: onchainExcludedReason,
         });
       }
-      if (!onchainReader) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not read the chain — boot without --demo for the live feed" : "on-chain reader not configured" });
+      if (!onchainReader) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not read the chain — boot without --demo for the live feed" : "on-chain reader not configured", kind: "not-configured" });
       if (!allow(rpcLimiter, req, res)) return;
       let parsed;
       try {
@@ -288,11 +288,14 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const address = q.get("address");
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
-      if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured" });
       // GET-only: a HEAD probe carries no body and no address semantics a monitor needs —
       // running the FULL scan (semaphore + RPC quota) for an empty response is a probe
-      // that can hold the one scan slot
+      // that can hold the one scan slot. The method gate precedes the not-configured
+      // check: method semantics must not depend on configuration — the !walletScanner
+      // 503 used to precede it, and on a --demo boot (no scanner) a HEAD probe answered
+      // 503 where docs/ERRORS.md promises 405 + Allow: GET (a live boot answered 405).
       if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
+      if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured", kind: "not-configured" });
       // the semaphore is checked BEFORE the limiter: a scan-busy refusal costs the caller
       // nothing — checked after, a dozen refusals used to exhaust the rate bucket and the
       // honest retry (after the scan released) hit a 429 on top of the wait
@@ -356,8 +359,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const address = q.get("address");
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
-      if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured" });
+      // GET-only like /lots — the method gate precedes the not-configured check (see /lots)
       if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
+      if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured", kind: "not-configured" });
       if (scanActive) return scanBusy(res);
       if (!allow(scanLimiter, req, res)) return;
       const abort = new AbortController();
@@ -476,7 +480,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           excludedReason: crosscheckExcludedReason,
         });
       }
-      if (!priceProvider) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not fetch prices — boot without --demo for the live feed" : "price provider not configured" });
+      if (!priceProvider) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not fetch prices — boot without --demo for the live feed" : "price provider not configured", kind: "not-configured" });
       if (!allow(rpcLimiter, req, res)) return;
       let pool = null;
       let candles = [];
@@ -643,6 +647,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // window's edge (waiting for the aborted scan to settle would only delay the restart).
   // In-flight non-scan requests are NOT waited for: every route except the scans answers
   // within its own RPC timeout, so close() plus the exit after this promise is enough.
+  //
+  // One hard bound on that edge: after the abort, the promise still waits for the aborted
+  // scan to SETTLE (capped). The route's catch writes the client's 503 {kind:"aborted"}
+  // synchronously before scanEnd fires, so settling first is what puts the response on
+  // the wire before serve.mjs's fixed 200ms exit grace starts. The abort itself is not
+  // always observed instantly: a scan call already selected by the RpcClient pacing gate
+  // surfaces only when the gate's non-abortable sleep runs out (up to minIntervalMs) —
+  // resolving at the bare window's edge used to win the exit race and the client saw a
+  // bare connection reset instead of the 503 (r36/r48 SRE rounds). The cap keeps the
+  // stop bounded when a scanner ignores the signal entirely.
+  const ABORT_SETTLE_CAP_MS = 2_000;
   server.shutdown = ({ drainMs = 15_000 } = {}) =>
     new Promise((resolve) => {
       server.close(); // the listener is down: no new connection enters the drain
@@ -661,7 +676,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       scanSettlers.push(settle); // the scan finishing inside the window releases the drain
       timer = setTimeout(() => {
         activeScanAbort?.abort(); // the window ran out: stop the scan's RPCs point-blank
-        settle();
+        timer = setTimeout(settle, ABORT_SETTLE_CAP_MS); // bounded wait for the 503 to be written
       }, drainMs);
     });
   server.isScanBusy = () => scanActive; // the SIGTERM handler's "scan active|idle" log line
