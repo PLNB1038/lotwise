@@ -1,4 +1,5 @@
-// Unit pin of the serve.mjs shutdown exit (commit 1f6e3fe).
+// Unit pin of the serve.mjs shutdown exit (commit 1f6e3fe; the exit-grace refinement
+// keeps the same extraction contract).
 //
 // scripts/serve.mjs is a top-level script with no exports, so the stop() logic cannot be
 // imported. It IS self-contained text, though: the block from `const SHUTDOWN_DRAIN_MS`
@@ -10,8 +11,13 @@
 //   1. a signal starts the drain and does NOT exit synchronously (the pre-fix bug);
 //   2. the exit is delayed via setTimeout(..., 200) scheduled in .finally, and the
 //      captured timer fires exit(0) exactly once;
-//   3. a REPEATED signal during the drain force-exits(1) immediately instead of being
-//      ignored, and does not start a second drain.
+//   3. a REPEATED signal DURING the drain force-exits(1) immediately instead of being
+//      ignored, does not start a second drain, and NAMES itself in the log (an unnamed
+//      non-zero exit after "draining" is indistinguishable from a crash);
+//   4. a repeated signal AFTER the drain fully resolved — inside the 200ms flush grace —
+//      leaves with the already-scheduled exit(0), also named in the log: the stop is a
+//      success, and exit(1) there would make Restart=on-failure restart a cleanly
+//      stopped unit.
 //
 // The red proof at the bottom runs the same scenarios against the pre-fix source shape
 // (synchronous exit in .finally, `if (stopping) return`) and asserts the pin FAILS it —
@@ -111,23 +117,34 @@ async function scenario(block) {
   a.timers[0]?.fn();
   check(JSON.stringify(a.exits) === "[0]", `the delayed exit must be exit(0) once, got ${JSON.stringify(a.exits)}`);
 
-  // ---- repeated signal during the drain: force-exit(1), no second drain ----
+  // ---- repeated signal DURING the drain: force-exit(1), named in the log, no second drain ----
   const b = evaluateShutdownBlock(block);
   b.handlers.SIGINT();
-  await settle();
-  await settle(); // drain resolved, the 200ms timer pending (not fired)
-  b.handlers.SIGINT(); // the operator's "enough"
+  b.handlers.SIGINT(); // the operator's "enough" — the drain is still in flight
   check(JSON.stringify(b.exits) === "[1]",
-    `a repeated signal must force-exit(1) immediately, got ${JSON.stringify(b.exits)}`);
+    `a repeated signal during the drain must force-exit(1) immediately, got ${JSON.stringify(b.exits)}`);
   check(b.server.shutdownCalls.length === 1,
     "a repeated signal must not start a second drain on top of the first");
-  check(b.timers.length === 1,
-    `exactly one exit timer is expected in the repeated-signal scenario (the first drain's, no extra), got ${b.timers.length}`);
+  check(b.errors.some((l) => l.includes("forced exit")),
+    "the forced exit must name itself in the log — an unexplained non-zero exit after 'draining' reads as a crash");
+
+  // ---- repeated signal AFTER the drain resolved (the 200ms exit-grace): exit 0, named ----
+  const c = evaluateShutdownBlock(block);
+  c.handlers.SIGINT();
+  await settle();
+  await settle(); // drain fully resolved, the 200ms flush timer pending (not fired)
+  c.handlers.SIGINT(); // operator impatience inside the grace — the stop has already succeeded
+  check(JSON.stringify(c.exits) === "[0]",
+    `a repeated signal after a fully resolved drain must leave with the scheduled exit(0), got ${JSON.stringify(c.exits)}`);
+  check(c.logs.some((l) => l.includes("repeated signal")),
+    "the grace-window early exit must name itself in the log too — a silent early exit is unexplainable in the journal");
+  check(c.timers.length === 1,
+    `exactly one exit timer is expected in the grace-window scenario (the first drain's, no extra), got ${c.timers.length}`);
 
   return v;
 }
 
-test("shutdown exit: drain first, delayed exit(0) via a 200ms timer, repeated signal force-exits(1)", async () => {
+test("shutdown exit: drain first, delayed exit(0); repeated signal during the drain force-exits(1), in the exit-grace leaves exit(0) — both named", async () => {
   const block = extractShutdownBlock(readFileSync(SERVE, "utf8"));
   const violations = await scenario(block);
   assert.deepEqual(violations, [], `the shutdown-exit pin holds only if all checks pass:\n  - ${violations.join("\n  - ")}`);
@@ -152,9 +169,10 @@ test("red proof: the same pin fails the pre-fix shape (sync exit, ignored repeat
   ].join("\n");
   const violations = await scenario(preFix);
   assert.ok(violations.length > 0, "the pin must go red against the pre-fix shape — otherwise it pins nothing");
-  // both regressions the commit fixed must be caught, not just one
+  // the regressions the commits fixed must be caught, not just one
   assert.ok(violations.some((m) => m.includes("200ms")), "the sync-exit regression must be caught");
   assert.ok(violations.some((m) => m.includes("force-exit(1)")), "the ignored-repeated-signal regression must be caught");
+  assert.ok(violations.some((m) => m.includes("grace-window")), "the unnamed early exit in the grace window must be caught");
 });
 
 // exported for the red-show probe (prints the red violations for the notes)

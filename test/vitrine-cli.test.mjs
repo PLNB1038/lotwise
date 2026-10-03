@@ -34,6 +34,7 @@ function runClient(routes) {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [{ className: "", getAttribute() { return "AAA"; }, addEventListener() {} }],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => {
       const hit = routes[String(url)];
@@ -127,6 +128,7 @@ function runClientDynamic() {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [{ className: "", getAttribute() { return "AAA"; }, addEventListener() {} }],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => {
       if (String(url).startsWith("/multiplier")) {
@@ -160,7 +162,7 @@ test("vitrine: the wallet report shows the server generation time (rep.now)", ()
     const els = new Map();
     const makeEl = (id) => ({ id, value: "", innerHTML: "", textContent: "", className: "", style: {}, attrs: {}, getAttribute() { return null; }, scrollIntoView() {} });
     const sb = {
-      document: { getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); }, querySelectorAll: () => [] },
+      document: { getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); }, querySelectorAll: () => [], addEventListener: () => {} }, // tap-tooltips wire at load
       fetch: () => new Promise(() => {}),
       console: { error() {}, warn() {} },
     };

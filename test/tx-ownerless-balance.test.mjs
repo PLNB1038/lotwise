@@ -98,3 +98,22 @@ test("row order cannot resurrect the fabricated owner: ownerless + ownerful of o
   assert.ok(seen.every((s) => s === seen[0]), `row order changed the money: ${seen.join(" vs ")}`);
   assert.equal(seen[0], "[]", "an unpairable ownerless pair leaves no deltas under any order");
 });
+
+test("an empty-string owner is the same ownerless class — the split must not fire against \"\"", async () => {
+  // typeof "" === "string": a POST row with owner "" passed the ownerless guard, the
+  // ownership-change branch fired (OLD !== ""), and the split booked OLD a phantom −100
+  // disposal plus a +50 acquisition under the owner "" that no wallet ever matches —
+  // zero warns. The same lying-gateway class, one spelling further.
+  const { result: tx, lines } = await withErrors(() =>
+    fetchWalletDeltas(clientOf([bal(OLD, 100)], [bal("", 50)]), "sig-empty-owner-post", new Set([MINT]), { moneyMints: new Set() }));
+  assert.deepEqual(tx.deltas, [], "no phantom disposal for OLD, no acquisition under the empty-string owner");
+  assert.deepEqual(tx.zeroNetMints, [], "no fabricated 'touched, net 0' trace for a dropped pair");
+  assert.equal(lines.length, 1, "exactly one warn names the collapse");
+  assert.match(lines[0], /accountIndex/);
+  // the symmetric PRE-side shape: "" before, NEW after — the same unpairable evidence
+  const { result: preTx, lines: preLines } = await withErrors(() =>
+    fetchWalletDeltas(clientOf([bal("", 100)], [bal(NEW, 50)]), "sig-empty-owner-pre", new Set([MINT]), { moneyMints: new Set() }));
+  assert.deepEqual(preTx.deltas, [], "no −100 under the empty-string owner, no phantom +50 for NEW");
+  assert.equal(preLines.length, 1);
+  assert.match(preLines[0], /accountIndex/);
+});

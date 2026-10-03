@@ -31,6 +31,7 @@ function runClient(renderOpts, route) {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => {
       const hit = route(url);

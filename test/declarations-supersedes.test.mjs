@@ -66,6 +66,49 @@ test("supersedes: an amount correction REPLACES the target — one accrual with 
   assert.equal(String(spy[0].effectiveDate).slice(0, 10), "2026-06-18");
 });
 
+test("supersedes: a same-day plain pair the file itself resolves loads — the correction is the documented cure", async () => {
+  // plain 06-18|4000000 + plain 06-18|2000000 + the correction replacing 4000000 with
+  // 2000000: the same-day conflict the plain gate hunts is RESOLVED in-file — the target
+  // is removed before any accrual and the day carries one declared amount. Refusing the
+  // whole file used to punish the documented treatment: the feed stayed down until the
+  // operator deleted the already-replaced line by hand. The bare pair without the
+  // correction still refuses (the plain-gate pins).
+  const p = write([
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/spy/q2-v1" },
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/spy/q2-v2" },
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/spy/q2-v2", supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "4000000" } },
+  ]);
+  const r = loadDeclarationsFile(p, REG);
+  assert.equal(r.ok, true, r.reason ?? "a pair resolved by the in-file correction loads");
+  assert.equal(r.superseded, 1, "the replacement applied");
+  assert.equal(r.loaded, 2, "the twin sightings ride to the engine — its identity dedup owns them");
+  const ADDR = "SupersAddr" + "1".repeat(33);
+  const aTx = (signature, deltaRaw, isoDate) => ({
+    signature,
+    slot: 1,
+    blockTime: Math.floor(Date.parse(isoDate) / 1000),
+    deltas: [{ owner: ADDR, mint: SPYX, preRaw: 0n, postRaw: 0n, deltaRaw }],
+  });
+  const server = await createApiServer({
+    registry: REG,
+    events: r.events,
+    walletScanner: async () => ({
+      owner: ADDR, signatures: 1, fetched: 1, txs: [aTx("b1", 100n, "2026-01-01")], skipped: [], truncated: false, accounts: {},
+    }),
+  });
+  try {
+    const { port } = server.address();
+    const res = await fetch(`http://127.0.0.1:${port}/accruals?symbol=SPYx&address=${ADDR}`);
+    assert.equal(res.status, 200);
+    const rows = await res.json();
+    assert.equal(rows.length, 1, "one dividend row — the engine collapsed the twin sightings");
+    assert.equal(rows[0].amountPerUnitRaw, "2000000", "the day accrues its single declared amount");
+    assert.equal(rows[0].totalRaw, "200000000", "100 units × 2000000 — no doubled income");
+  } finally {
+    server.close();
+  }
+});
+
 test("supersedes: an ex-day correction with the same amount — one accrual, not 400 instead of 200", () => {
   // the day moved, the amount did not: two same-amount lines on DIFFERENT days are two
   // dividends to the day-key dedup — exactly the doubling the warning could only point at.

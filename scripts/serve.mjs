@@ -12,7 +12,7 @@ import { multiplierHistoryToEvents, bindMintAndValidate } from "../src/events/no
 import { createApiServer } from "../src/api/server.mjs";
 import { RpcClient } from "../src/ingest/rpc.mjs";
 import { parseScaledUiAmount } from "../src/issuer/scaled-ui.mjs";
-import { scanWallet } from "../src/wallet/scan.mjs";
+import { scanWallet, unreadableSkips } from "../src/wallet/scan.mjs";
 import { GeckoTerminalClient } from "../src/price/geckoterminal.mjs";
 import { planJournalStep, issuerChainComplete, bootJournalOnchain, persistJournalOnBoot, sweepStaleTmpFiles } from "../src/events/journal.mjs";
 import { parseServeArgs, ServeArgsError, assertHostResolvable, checkPortAvailable, envPositiveInt as envPositiveIntShared } from "../src/cli/flags.mjs";
@@ -416,6 +416,21 @@ walletScanner = (address, { signal } = {}) =>
       },
     }).then((scan) => {
       console.log(`[serve] ${address}: done — ${scan.txs.length} relevant txs out of ${scan.fetched}`);
+      // Skips used to be visible only in the response body (counts.skipped): a scan that
+      // lost transactions to the network (a mid-body cut, exhausted retries) read in this
+      // log as a clean "done" line. One aggregated line at scan end names them — how many
+      // and why, never a per-tx flood. Failed-on-chain skips are routine chain reality
+      // (log-level); unreadable ones are degradation (warn-level).
+      const skipped = Array.isArray(scan.skipped) ? scan.skipped : [];
+      if (skipped.length > 0) {
+        const unreadable = unreadableSkips(scan);
+        const line = `${address}: ${skipped.length} tx(s) skipped — ${skipped.length - unreadable.length} failed on-chain, ${unreadable.length} unreadable`;
+        if (unreadable.length > 0) {
+          console.warn(`[serve] ${line} (last: ${unreadable[unreadable.length - 1].reason})`);
+        } else {
+          console.log(`[serve] ${line}`);
+        }
+      }
       return scan;
     });
   });
@@ -493,11 +508,25 @@ console.log(`[serve] rate limits (per IP): ${rateLimits.scan.max}/min wallet sca
 // notes) — systemd's SIGKILL is the outer backstop, never the normal path.
 const SHUTDOWN_DRAIN_MS = 15_000;
 let stopping = false;
+// the drain RESOLVED: the stop has already succeeded and exit(0) is scheduled in the
+// 200ms response-flush grace below. A repeated signal inside that grace changes nothing
+// about the outcome — it only shortens the tail.
+let drainSettled = false;
 const stop = () => {
   if (stopping) {
+    if (drainSettled) {
+      // a repeated signal AFTER a fully resolved drain is an impatient operator, not a
+      // failure: the work is done, the responses are flushing, exit(0) is scheduled.
+      // Leaving with 1 here would make systemd's Restart=on-failure restart a unit
+      // that has just shut down cleanly.
+      console.log("[serve] repeated signal after a completed drain — leaving now (exit 0)");
+      return process.exit(0); // return: the branches stay exclusive even where exit is stubbed
+    }
     // a REPEATED signal during the drain is an operator's "enough": leave now instead
-    // of ignoring it for the rest of the window
-    process.exit(1);
+    // of ignoring it for the rest of the window. The forced exit names itself — an
+    // unexplained non-zero exit after "draining" reads as a crash in the journal.
+    console.error("[serve] repeated signal during the drain — forced exit (1)");
+    return process.exit(1);
   }
   stopping = true;
   console.log(`[serve] shutdown: draining (${server.isScanBusy() ? "scan active" : "idle"})`);
@@ -508,7 +537,10 @@ const stop = () => {
     // route's own async frames, and a synchronous exit(0) in this finally wins that
     // race — the client saw a bare connection reset where the contract promised a 503.
     // A short grace lets the response (and its access-log line) flush first.
-    .finally(() => setTimeout(() => process.exit(0), 200));
+    .finally(() => {
+      drainSettled = true; // from here a repeated signal cannot turn the success into a failure
+      setTimeout(() => process.exit(0), 200);
+    });
 };
 // From here on there IS a server to drain: replace the early boot handlers with the
 // graceful-shutdown pair. removeAllListeners first — process.on would ADD a second

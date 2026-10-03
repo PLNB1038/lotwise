@@ -52,8 +52,10 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     // An indexed row WITHOUT an owner is unpairable evidence (the lying-gateway class):
     // letting it in would fire the ownership-change branch against owner === undefined and
     // book a phantom disposal to the old owner plus an acquisition under the literal
-    // undefined. It pairs with nothing → the same ambiguous verdict, dropped whole.
-    if (typeof b.owner !== "string") { ambiguous.add(key); continue; }
+    // undefined. The EMPTY STRING is the same class — typeof passes it, but no wallet is
+    // ever "", so the split would book the acquisition under an owner no consumer can match.
+    // It pairs with nothing → the same ambiguous verdict, dropped whole.
+    if (typeof b.owner !== "string" || b.owner.length === 0) { ambiguous.add(key); continue; }
     byAccount.set(key, { owner: b.owner, mint: b.mint, preRaw: BigInt(b.uiTokenAmount.amount), postRaw: 0n });
   }
   const postSeen = new Set();
@@ -61,9 +63,10 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
     if (postSeen.has(key)) { ambiguous.add(key); continue; }
-    // Same verdict for an ownerless POST row: it cannot be paired against a pre entry
-    // without fabricating a nonsense owner on one of the two sides — drop the pair whole.
-    if (typeof b.owner !== "string") { ambiguous.add(key); continue; }
+    // Same verdict for an ownerless POST row (undefined, null or "" — a gateway is not
+    // obliged to pick one): it cannot be paired against a pre entry without fabricating a
+    // nonsense owner on one of the two sides — drop the pair whole.
+    if (typeof b.owner !== "string" || b.owner.length === 0) { ambiguous.add(key); continue; }
     postSeen.add(key);
     const cur = byAccount.get(key);
     if (cur !== undefined && cur.mint !== b.mint) {
@@ -71,8 +74,11 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
       // accountIndex is a lying-gateway shape, and pairing it books the old owner a phantom
       // disposal of a mint that is no longer there and the new owner an unpriced lot of a
       // mint nobody bought — only the coarse reconciles:false would ever flag it. The rows
-      // cannot be paired → the same ambiguous verdict, dropped whole with the warn below.
-      ambiguous.add(key);
+      // cannot be paired → the key is dropped WHOLE here, with its own warn: the generic
+      // ambiguous template below says "a repeated accountIndex … second balance" and would
+      // send the operator looking for a duplicate balance instead of a mint swap.
+      console.error(`[tx] ${signature}: accountIndex ${key} carried mint ${cur.mint} before the pass and mint ${b.mint} after it — a token account cannot change its mint within a tx, the pre and post rows cannot be paired and pairing them would book a phantom disposal plus an unpriced lot; the whole owner+mint pair is dropped from this tx`);
+      byAccount.delete(key);
       continue;
     }
     if (cur !== undefined && cur.owner !== b.owner) {

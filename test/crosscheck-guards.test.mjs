@@ -137,6 +137,7 @@ function runClient() {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: () => new Promise(() => {}),
   };

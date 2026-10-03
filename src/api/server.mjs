@@ -3,7 +3,7 @@
 import { createServer } from "node:http";
 import { MultiplierTimeline } from "../lots/timeline.mjs";
 import { reconcileMultiplier } from "../issuer/scaled-ui.mjs";
-import { isValidAddress } from "../wallet/scan.mjs";
+import { isValidAddress, unreadableSkips } from "../wallet/scan.mjs";
 import { buildWalletReport } from "../wallet/report.mjs";
 import { crossCheckEvents } from "../events/crosscheck.mjs";
 import { isValidIsoDate, parseIsoDateMs } from "../schema/isodate.mjs";
@@ -446,7 +446,7 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
           // a skipped tx is the same class of unknown: it may carry mint deltas of this
           // window, and a base built without it is a guess presented as a confident zero
           let incomplete = token.gaps.length > 0 || Boolean(scan.truncated)
-            || (Array.isArray(scan.skipped) && scan.skipped.some((sk) => sk?.reason !== "tx failed on-chain" && sk?.reason !== "failed-tx"));
+            || unreadableSkips(scan).length > 0;
           // a position older than the window: the deltas cannot reach the pre-ex-date
           // buys and the live balance disagrees with the window — `reconciles` measures
           // exactly this and the route must listen to it like it listens to gaps: a

@@ -48,6 +48,9 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
   .stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; }
   .stat b { font-family: var(--mono); font-size: 20px; display: block; }
   .stat i { font-style: normal; color: var(--muted); font-size: 12px; }
+  /* the qualitative tile among the counters ("cross-checked") must not scan as a broken
+     numeral: caption type on the numeral line's height keeps the row aligned */
+  .stat-note b { font-family: inherit; font-size: 13px; line-height: 30px; }
   section { margin-top: 28px; }
   h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 10px; }
   table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -86,6 +89,17 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
   footer { margin-top: 40px; color: var(--muted); font-size: 13px; }
   footer code { font-family: var(--mono); color: var(--accent); }
   .err { color: var(--warn); font-size: 13px; }
+  /* touch accessibility: the explanations ride title attributes, which a hover shows and
+     a tap does not — the delegated click handler at the bottom of the script opens the
+     same text as a fixed bubble; pointer-events none keeps the bubble from eating the
+     "tap anywhere else closes it" click */
+  .tip-bubble {
+    position: fixed; z-index: 9; max-width: 320px;
+    background: #1c2129; border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; word-break: break-word;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .45); pointer-events: none;
+  }
+  [title] { cursor: help; }
   /* the address stays on screen, the multiplier column is not cut
      off at the edge — on narrow screens it collapses (the value is in the token card),
      long numbers wrap instead of tearing the grid */
@@ -250,7 +264,7 @@ function renderStats(h, tokens) {
     '<div class="stat"><b>' + esc(h.tokens) + '</b><i>tokens tracked</i></div>' +
     '<div class="stat"><b>' + esc(h.events) + '</b><i>events normalized</i></div>' +
     '<div class="stat"><b>' + Object.keys(issuers).length + '</b><i>issuers</i></div>' +
-    '<div class="stat"><b>cross-checked</b><i>issuer vs on-chain</i></div>';
+    '<div class="stat stat-note"><b>cross-checked</b><i>issuer vs on-chain</i></div>';
   // The RPC may have been down at startup: journal.unavailable — tokens not read from
   // the chain, and the showcase paints multiplier "1" for them. Silence = a quiet lie;
   // show an honest warn.
@@ -786,6 +800,56 @@ function renderWallet(rep) {
 
 document.getElementById('scan-btn').onclick = scanWalletUi;
 el('addr-in').onkeydown = function (e) { if (e.key === 'Enter') scanWalletUi(); };
+
+// Touch accessibility: the explanations live in title attributes, which a hover reveals
+// and a tap does not. A delegated click opens the tapped element's title as a fixed
+// bubble (role="tooltip", wired by aria-describedby); a second tap on the same element,
+// a tap anywhere else, or Escape closes it. The native hover tooltip stays — the bubble
+// is the touch path, not a replacement. Delegation at the document: every tooltip on
+// this page is innerHTML-built (verdicts, wallet report), rebinding per element would
+// rot on the next re-render.
+var openTip = null;
+var tipSeq = 0;
+function closeTip() {
+  if (!openTip) return;
+  openTip.src.removeAttribute('aria-describedby');
+  openTip.bubble.parentNode.removeChild(openTip.bubble);
+  openTip = null;
+}
+function toggleTip(src) {
+  var text = src.getAttribute('title') || '';
+  if (!text) return;
+  if (openTip && openTip.src === src) { closeTip(); return; }
+  closeTip();
+  var bubble = document.createElement('div');
+  bubble.className = 'tip-bubble';
+  bubble.setAttribute('role', 'tooltip');
+  var id = 'tip-' + (++tipSeq);
+  bubble.setAttribute('id', id);
+  bubble.textContent = text;
+  document.body.appendChild(bubble);
+  src.setAttribute('aria-describedby', id);
+  // fixed to the viewport: a tap on a table cell also selects the token and the page
+  // scrolls — the bubble must survive that scroll, not be left behind it
+  var r = src.getBoundingClientRect();
+  var w = bubble.offsetWidth, h = bubble.offsetHeight;
+  var vh = window.innerHeight || 640;
+  var left = Math.min(Math.max(r.left, 8), Math.max(8, (window.innerWidth || 980) - w - 8));
+  var top = r.top - h - 6;
+  if (top < 8) top = r.top + r.height + 6; // no room above — flip below
+  if (top + h > vh - 8) top = Math.max(8, vh - h - 8);
+  bubble.style.left = left + 'px';
+  bubble.style.top = top + 'px';
+  openTip = { src: src, bubble: bubble };
+}
+document.addEventListener('click', function (ev) {
+  var t = ev.target && ev.target.closest ? ev.target.closest('[title]') : null;
+  if (!t) { closeTip(); return; }
+  toggleTip(t);
+});
+document.addEventListener('keydown', function (ev) {
+  if (ev.key === 'Escape') closeTip();
+});
 
 fetch('/health').then(function (r) {
   if (!r.ok) throw new Error('/health HTTP ' + r.status); // a proxy's 502 JSON — not "undefined tokens" 

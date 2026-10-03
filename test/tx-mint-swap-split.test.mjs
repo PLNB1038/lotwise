@@ -4,8 +4,9 @@
 // books the old owner a phantom disposal of a mint that is no longer there and the new
 // owner an unpriced lot of a mint nobody bought — silently, with no ambiguous marker and
 // no warn, only the coarse reconciles:false far downstream. The contract: the pair cannot
-// be matched → the SAME ambiguous verdict as a repeated balance — dropped WHOLE with the
-// existing console.error; a same-mint tx of any shape keeps pairing exactly.
+// be matched → dropped WHOLE with its own console.error naming the mint mismatch (the
+// generic repeated-balance template would diagnose the wrong corruption); a same-mint tx
+// of any shape keeps pairing exactly.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fetchWalletDeltas } from "../src/ingest/tx.mjs";
@@ -88,6 +89,18 @@ test("the same balance change with the mint intact still pairs exactly — the g
     { owner: A, mint: M1, preRaw: 100n, postRaw: 40n, deltaRaw: -60n },
   ]);
   assert.deepEqual(lines, [], "no warn for a pairable same-mint tx");
+});
+
+test("the mint-swap warn names the mint mismatch, not a repeated balance", async () => {
+  // the drop rode the ambiguous cleanup, whose template says "a repeated accountIndex …
+  // received a second balance of the same pass" — an operator reading it goes hunting for
+  // a duplicate balance while the real corruption is a different mint under one index
+  const { lines } = await withErrors(() =>
+    fetchWalletDeltas(clientOf([bal(1, A, M1, 100)], [bal(1, B, M2, 50)]), "sig-mint-swap-warn", new Set([M1, M2]), { moneyMints: new Set() }));
+  assert.equal(lines.length, 1, "exactly one warn — the honest one, not the generic template on top");
+  assert.match(lines[0], /accountIndex/);
+  assert.ok(lines[0].includes(M1) && lines[0].includes(M2), "both mints of the swap are named");
+  assert.doesNotMatch(lines[0], /second balance of the same pass/, "the repeated-balance template must not diagnose a mint swap");
 });
 
 test("an honest ownership split with the mint intact still splits — SetAuthority is not a mint swap", async () => {

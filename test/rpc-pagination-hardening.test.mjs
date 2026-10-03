@@ -199,6 +199,7 @@ function runClient() {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: () => new Promise(() => {}),
   };
@@ -245,6 +246,7 @@ function runClientCalc(multBody) {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [{ className: "", getAttribute() { return "TSTx"; }, addEventListener() {} }],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => Promise.resolve({
       ok: true, status: 200,

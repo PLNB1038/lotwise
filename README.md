@@ -9,7 +9,7 @@ A corporate actions engine for tokenized equities on Solana. Lotwise normalizes 
 
 ## Try it live
 
-A deployed showcase runs on live mainnet at **https://lotwise.tail88c821.ts.net** — read-only, no wallet scans, safe to open or curl: the tracked registry, per-token event histories with price verdicts, the issuer-vs-chain reconcile, current multipliers. The [30-second tour](#30-second-tour) walks it in four curls; to serve the same API offline on a static demonstration set, boot `--demo` (see [Quickstart](#quickstart)).
+A deployed showcase runs on live mainnet at **https://lotwise.tail88c821.ts.net** — read-only, no wallet scans, safe to open or curl: the tracked registry, per-token event histories with price verdicts, the issuer-vs-chain reconcile, current multipliers. The [30-second tour](#30-second-tour) walks it in four curls; to serve the same API surface offline on a static demonstration set, boot `--demo` (see [Quickstart](#quickstart)).
 
 ## Problem
 
@@ -136,7 +136,7 @@ Response shape (a real `/events` row, truncated):
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
-Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, `truncated` when the signature cap or a stuck page cut the walk short, and `ambiguousSlotPairs` when the RPC could not order same-slot balance pairs (the order in the transaction list is then a deterministic guess, not a certified history). Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, `truncated` when the signature cap or a stuck page cut the walk short, `ambiguousSlotPairs` when the RPC could not order same-slot balance pairs (the order in the transaction list is then a deterministic guess, not a certified history), and `unreadableTxs` when transactions could not be read from the endpoint at all (a transport cut, exhausted retries — their deltas are unknown, the window may be missing them). Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
 
 Rate limits, per client IP: 12 wallet scans/min, 60 on-chain/price calls/min (see docs/ERRORS.md for buckets and env knobs). Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree` — the verdict compares the issuer plan (`api`, evaluated at the requested date) against `onChainEffective` (the mint's current `active` multiplier with an already-activated `pending` applied); the raw `active` value may legitimately differ from `api` when a pending rebase sits in between. `/crosscheck` verdicts are the five values listed above.
 
@@ -210,7 +210,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-1021 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+1041 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 

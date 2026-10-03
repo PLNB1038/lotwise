@@ -284,6 +284,20 @@ export async function fetchOwnerTokenAccounts(client, owner, registry, {
   return out;
 }
 
+// The two skip classes a scan produces, separated where every consumer sees them.
+// A tx FAILED ON CHAIN ("tx failed on-chain" from the signature list, "failed-tx" from
+// meta.err) has no deltas by definition — a rolled-back tx moves nothing, the window
+// history is not missing it. A tx the scan could not READ ("tx unreadable: …" — a broken
+// transport, exhausted retries, malformed meta; "tx unavailable on endpoint" — a null
+// result) is UNREAD history: it may carry mint deltas nobody saw. Every honesty consumer
+// of that distinction — the /accruals baseIncomplete gate, the report's complete
+// certificate, the serve-log skip line — goes through this one predicate, so the
+// classes cannot drift apart per route.
+export function unreadableSkips(scan) {
+  const skipped = Array.isArray(scan?.skipped) ? scan.skipped : [];
+  return skipped.filter((sk) => sk?.reason !== "tx failed on-chain" && sk?.reason !== "failed-tx");
+}
+
 /**
  * @param {RpcClient} client
  * @param {string} owner — wallet address

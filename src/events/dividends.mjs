@@ -298,12 +298,17 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
   // would accrue BOTH — the income doubles silently while the file looks loaded. The
   // whole feed refuses instead: zero accruals is the honest direction, not doubled ones.
   // The grouping rides the plainIdentities set (corrections are excluded — a superseded
-  // replacement is the legal way to change a same-day amount), and keys on the canonical
+  // replacement is the legal way to change a same-day amount, and so is a plain line a
+  // surviving correction REPLACES: the same-day pair is resolved in-file by the correction
+  // channel, and refusing the file for it would keep the feed down until the operator
+  // deleted the already-replaced line by hand — what the replacement lands on is the
+  // survivor gate's verdict below), and keys on the canonical
   // ex-day, so a datetime twin of the day is the same ex-day here too. A changed sum on a
   // DIFFERENT day stays advisory: special dividends legitimately sit next to regular
   // ones, and the loader's proximity warning covers that case.
   const byDayAmounts = new Map(); // canonical ex-day → the distinct plain amounts on it
   for (const id of plainIdentities) {
+    if (supersedeTargets.has(id)) continue; // the replaced line is removed before any accrual
     const cut = id.indexOf("|");
     if (!byDayAmounts.has(id.slice(0, cut))) byDayAmounts.set(id.slice(0, cut), new Set());
     byDayAmounts.get(id.slice(0, cut)).add(id.slice(cut + 1));

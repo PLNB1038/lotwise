@@ -178,6 +178,7 @@ function runClient(route) {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [], // the token table rows are not exercised in these tests
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => {
       const hit = route(url);

@@ -223,6 +223,7 @@ function runClient(route) {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [], // the token table rows are not exercised in these tests
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => {
       const hit = route(url);
@@ -542,6 +543,7 @@ test("vm: the filter hides #tokens rows without the substring in symbol+name (ca
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: (sel) => (sel === "#tokens tr" ? [spy, ko] : []),
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: () => new Promise(() => {}), // the boot chains hang: the filter needs no network
   };
@@ -583,6 +585,7 @@ test("esc: the full escape table is pinned — the & rule carries the data-symbo
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: () => new Promise(() => {}), // the boot chains hang; esc/renderTokens need no network
   };
@@ -625,6 +628,7 @@ function runScanClient(route) {
     document: {
       getElementById: (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); },
       querySelectorAll: () => [],
+      addEventListener: () => {}, // the page wires delegated tap-tooltips at load
     },
     fetch: (url) => {
       const hit = route(url);
@@ -871,7 +875,7 @@ test("fmtMul: whole multipliers stay whole in the EMITTED page script", async ()
     if (!els.has(id)) els.set(id, { id, value: "", innerHTML: "", textContent: "", className: "", style: {}, onclick: null, scrollIntoView() {}, querySelectorAll: () => [] });
     return els.get(id);
   };
-  const sb = { document: { getElementById: stub, querySelectorAll: () => [] }, fetch: () => new Promise(() => {}) };
+  const sb = { document: { getElementById: stub, querySelectorAll: () => [], addEventListener: () => {} }, fetch: () => new Promise(() => {}) }; // tap-tooltips wire at load
   vm.createContext(sb);
   const m = renderPage().match(/<script>([\s\S]*?)<\/script>/);
   new vm.Script(m[1], { filename: "page-client.js" }).runInContext(sb);

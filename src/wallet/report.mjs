@@ -19,6 +19,8 @@
 // engine throws LotError "refusing to guess" on such a lot and, by atomicity,
 // crashes the application of the ENTIRE history. The /lots consumer must filter such
 // lots out or handle LotError; date semantics — see the header of src/lots/lots.mjs.
+import { unreadableSkips } from "./scan.mjs";
+
 export class ReportError extends Error {
   constructor(msg) {
     super(msg);
@@ -250,6 +252,12 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
 
   const hasGaps = tokens.some((t) => t.gaps.length > 0);
   const allReconcile = tokens.every((t) => t.reconciles);
+  // txs the endpoint never served (a mid-body transport cut, exhausted retries, a null
+  // result): history this certificate has not seen. /accruals already refuses to certify
+  // such a base (baseIncomplete); the report used to answer complete:true over the same
+  // scan — the flag promised more than the scan delivered. On-chain FAILED txs stay
+  // exempt: they have no deltas by definition (the shared unreadableSkips gate).
+  const unreadable = unreadableSkips(scan).length;
   return {
     owner,
     method: "fifo",
@@ -264,12 +272,15 @@ export function buildWalletReport(scan, { registry, timelines = new Map(), now =
     ...(scan.ambiguousSlotPairs
       ? { ambiguousSlotPairs: scan.ambiguousSlotPairs } // same-slot pairs whose ledger order the RPC cannot tell apart (two sources) — the order in txs is a deterministic guess
       : {}),
+    ...(unreadable > 0
+      ? { unreadableTxs: unreadable } // txs the endpoint failed to serve — their deltas are unknown; on-chain FAILED txs are not counted (no deltas by definition)
+      : {}),
     // money legs the pricing did not consume: a round-trip spread (also one mixed with a
     // trade), a USDC fee of a multi-token swap, a USDC transfer; the report does not guess
     // which. Always an array — a client reduces over it, and an absent field reads as a
     // legacy shape (an empty array is the honest "none in this window").
     moneyOnly,
-    complete: !scan.truncated && !hasGaps && allReconcile && !scan.ambiguousSlotPairs, // a guessed order is not a certified history
+    complete: !scan.truncated && !hasGaps && allReconcile && !scan.ambiguousSlotPairs && unreadable === 0, // a guessed order is not a certified history; an unread tx is history the certificate has not seen
     tokens,
   };
 }

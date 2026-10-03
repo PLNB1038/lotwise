@@ -68,10 +68,15 @@ strings, unknown ones are `null` — never an invented number):
 ```
 
 When the RPC could not order same-slot balance pairs, the report carries a
-top-level `ambiguousSlotPairs` count (present only when non-zero). It is a
-fourth `complete: false` cause beside `truncated`, per-token `gaps` and a
-failed `reconciles`: the order in the transaction list is then a deterministic
-guess, and a guessed order is not a certified history.
+top-level `ambiguousSlotPairs` count (present only when non-zero). When
+transactions could not be read at all — a mid-body transport cut, exhausted
+retries, an endpoint that answered `null` — it carries a top-level
+`unreadableTxs` count under the same only-when-non-zero convention; on-chain
+FAILED transactions are not counted (they have no deltas by definition, the
+same exemption the `/accruals` `baseIncomplete` gate applies). Both are
+`complete: false` causes beside `truncated`, per-token `gaps` and a failed
+`reconciles`: a guessed order is not a certified history, and an unread
+transaction is history the certificate has not seen.
 
 ### Unpriced money: `moneyOnly`
 
@@ -127,7 +132,7 @@ route's own truth, and it never advertises HEAD on these routes.
 ### Queue priorities
 
 Point reads (the boot journal, `/onchain`) are prioritized over the scan stream
-inside the shared RPC pacing queue — the vitrine stays responsive while a scan
+inside the shared RPC pacing queue — the report page stays responsive while a scan
 runs.
 
 ---
