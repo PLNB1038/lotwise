@@ -41,6 +41,33 @@ const withErrors = async (fn) => {
   }
 };
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test("the window boundaries are INCLUSIVE: exactly 2020-01-01T00:00:00Z passes, exactly now+1d passes, one second past refuses", async () => {
+  // the window is documented as [2020-01-01, now+1d] — a CLOSED interval. The boundary
+  // values must be pinned ON THEMSELVES: probed "next to" them (1_577_836_799 refuses),
+  // an open bound slipping in (raw > MIN) refuses the honest first second of 2020 —
+  // a real blockTime — and the suite stays green while honest dates normalize to null.
+  const { result: first, lines } = await withErrors(() =>
+    fetchWalletDeltas(deltaClient(1_577_836_800), "sig-exact-min", MINT));
+  assert.equal(first.blockTime, 1_577_836_800, "exactly 2020-01-01T00:00:00Z is inside the window");
+  assert.deepEqual(lines, [], "no warn for the exact lower boundary");
+
+  // the upper boundary is computed per call — align to a fresh second so the exact
+  // now+1d pass and the now+1d+1 refusal are deterministic, not a race on Date.now()
+  const s = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === s) await sleep(5);
+  const base = Math.floor(Date.now() / 1000);
+  const exactSkew = await fetchWalletDeltas(deltaClient(base + 86_400), "sig-exact-skew", MINT);
+  assert.equal(exactSkew.blockTime, base + 86_400, "exactly one day of endpoint clock skew is the inclusive upper boundary");
+
+  const tooLate = base + 86_401; // computed inside the aligned second — the source's own floor cannot have advanced
+  const { result: refused, lines: late } = await withErrors(() =>
+    fetchWalletDeltas(deltaClient(tooLate), "sig-past-skew", MINT));
+  assert.equal(refused.blockTime, null, "one second past the skew window is outside");
+  assert.equal(late.length, 1, "the out-of-window value is warned, not dropped silently");
+});
+
 test("a plausible blockTime passes through untouched (within [2020-01-01, now+1d])", async () => {
   const { result: tx, lines } = await withErrors(() => fetchWalletDeltas(deltaClient(1_750_000_000), "sig-ok", MINT));
   assert.equal(tx.blockTime, 1_750_000_000);

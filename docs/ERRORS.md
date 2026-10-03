@@ -57,6 +57,14 @@ endpoints (`/lots`, `/accruals`) are GET-only: a `HEAD` probe answers `405` with
 and every other non-GET method is refused by the same route with the same `Allow: GET`
 (discovery never advertises HEAD on these routes; other routes keep `Allow: GET, HEAD`).
 
+## Before the handler
+
+One refusal never reaches the JSON contract: a request target beyond the HTTP
+stack's request-line limit (node:http's 16 KB header cap) is answered by the
+transport with a bare `431` and an empty body — no `error`/`kind` shape, nothing
+to retry against, the endpoint never sees the request. Just below the cap the
+app's own contract holds again (an oversized-but-fitting address is a `400`).
+
 ## Rate limits
 
 Per client IP (keyed by the trailing `X-Forwarded-For` hop behind a trusted proxy,

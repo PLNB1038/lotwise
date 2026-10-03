@@ -37,10 +37,14 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   // SECOND balance of the same pass cannot be paired (which pre row belongs to which
   // post row is unknowable) — and Map.set would silently keep only the last row: a real
   // disposal nets against a phantom buy and vanishes as delta 0. An ambiguous key is
-  // dropped WHOLE with a console.error; a UNIQUE owner|mint fallback key (one account
+  // dropped WHOLE with a console.error — the key AND, when the ownership-change split
+  // ran for it, the synthetic sibling the split created (leaving the sibling would book
+  // the old owner a phantom disposal and make the money depend on the row order within
+  // the pass); a UNIQUE owner|mint fallback key (one account
   // per owner+mint — the lying-gateway case) pairs exactly and stays.
   const byAccount = new Map(); // accountIndex → {owner, mint, preRaw, postRaw}
   const ambiguous = new Set(); // keys that got a second balance of one pass — unpairable
+  const splitOf = new Map(); // key → the synthetic sibling its ownership-change split created
   for (const b of tx.meta?.preTokenBalances ?? []) {
     if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
@@ -63,7 +67,9 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
       // pre-entry). The "owner|mint" fallback never reaches here — the fallback key already
       // contains the owner, so pre/post cannot meet there and the split falls out structurally.
       cur.postRaw = 0n; // the old owner keeps the full pre-balance, his delta = −preRaw
-      byAccount.set(`${key}~${cur.owner}`, cur);
+      const sibling = `${key}~${cur.owner}`;
+      splitOf.set(key, sibling); // remembered: an ambiguity verdict on this key must drop the pair WHOLE
+      byAccount.set(sibling, cur);
       byAccount.set(key, { owner: b.owner, mint: b.mint, preRaw: 0n, postRaw: BigInt(b.uiTokenAmount.amount) });
       continue;
     }
@@ -76,6 +82,8 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     if (a === undefined) continue;
     console.error(`[tx] ${signature}: a ${typeof key === "number" ? "repeated accountIndex" : "balance without accountIndex"} for owner ${a.owner}, mint ${a.mint} received a second balance of the same pass — the accounts cannot be paired and the delta would silently collapse; the whole owner+mint pair is dropped from this tx`);
     byAccount.delete(key);
+    const sibling = splitOf.get(key);
+    if (sibling !== undefined) byAccount.delete(sibling);
   }
 
   // Aggregate accounts up to the owner level: an owner's delta = sum of his accounts' deltas.

@@ -90,6 +90,41 @@ test("different owners without accountIndex never collide — the fallback key c
   assert.deepEqual(lines, []);
 });
 
+test("a MIXED tx: the ambiguous owner's pair is dropped WHOLE, the innocent second owner keeps his delta", async () => {
+  // the drop is scoped to the unpairable owner+mint pair — it must not escalate to the
+  // whole transaction. A second, perfectly pairable owner of the SAME tx is honest
+  // material: his delta survived the ambiguity and vanishing him would erase a real
+  // acquisition with the same silence the guard exists to prevent.
+  const client = {
+    call: async () => ({
+      slot: 1, blockTime: 1750000000,
+      meta: {
+        err: null,
+        preTokenBalances: [
+          { owner: OWNER, mint: MINT, uiTokenAmount: { amount: "150" } },
+          { owner: OWNER, mint: MINT, uiTokenAmount: { amount: "50" } }, // second balance: OWNER|MINT unpairable
+          { owner: BUYER, mint: MINT, uiTokenAmount: { amount: "100" } },
+        ],
+        postTokenBalances: [
+          { owner: OWNER, mint: MINT, uiTokenAmount: { amount: "50" } },
+          { owner: OWNER, mint: MINT, uiTokenAmount: { amount: "50" } },
+          { owner: BUYER, mint: MINT, uiTokenAmount: { amount: "150" } },
+        ],
+      },
+    }),
+  };
+  const { result: tx, lines } = await withErrors(() =>
+    fetchWalletDeltas(client, "sig-mixed", new Set([MINT]), { moneyMints: new Set() }));
+  assert.deepEqual(tx.deltas, [
+    { owner: BUYER, mint: MINT, preRaw: 100n, postRaw: 150n, deltaRaw: 50n },
+  ], "only the ambiguous owner+mint pair leaves the tx — the innocent owner's +50n stays");
+  assert.equal(tx.deltas.some((d) => d.owner === OWNER), false, "the unpairable pair is dropped whole");
+  assert.deepEqual(tx.zeroNetMints, [], "no fabricated trace for the dropped pair");
+  assert.equal(lines.length, 1, "exactly one warn for the one ambiguous pair");
+  assert.match(lines[0], /accountIndex/);
+  assert.ok(lines[0].includes(OWNER), "the warn names the ambiguous owner, not the tx");
+});
+
 test("a repeated accountIndex within one pass is the same silent-overwrite shape — dropped with a warn", async () => {
   // accountIndex is unique within a tx; a gateway repeating index 3 in pre used to let
   // the second row overwrite the first via Map.set — the same quiet collapse

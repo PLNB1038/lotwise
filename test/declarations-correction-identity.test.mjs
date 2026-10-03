@@ -72,6 +72,22 @@ test("two GENUINELY different corrections of one target still refuse (the file i
   );
 });
 
+test("two corrections of one target with the SAME amount but DIFFERENT ex-days refuse too — the replacement identity includes the ex-day", () => {
+  // a replacement is (canonical ex-day + amount): a correction accrues on its own day,
+  // so two same-amount corrections landing on different days are TWO genuinely different
+  // replacements of one target — the file cannot be loaded without guessing which one is
+  // true. Keying the replacement on the amount alone would silently merge them.
+  assert.throws(
+    () => buildDeclarationEvents([
+      plain(),
+      corr({ exDate: "2026-06-20", sourceUrl: "https://issuer.example/q2-corr-a" }),
+      corr({ exDate: "2026-06-21", sourceUrl: "https://issuer.example/q2-corr-b" }),
+    ], SYM),
+    (e) => e instanceof DeclarationError && /already superseded/.test(e.message),
+    "a same-amount different-day pair is a double supersede, not one replacement",
+  );
+});
+
 test("a verbatim repeat of a correction still collapses — re-submitting the feed is not a double supersede", () => {
   const { events, superseded } = buildDeclarationEvents([plain(), corr(), corr()], SYM);
   assert.equal(events.length, 1);

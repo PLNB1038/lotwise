@@ -137,3 +137,65 @@ test("a schema-clean history still passes the gate untouched: the entry is retur
   assert.deepEqual(down.replay, prior.events, "the healthy history is replayed");
   assert.doesNotThrow(() => bindMintAndValidate(down.replay, MINT));
 });
+
+test("a mint-LESS element is a genuine legacy record, not corruption — the gate binds the token's mint itself", (t) => {
+  // every journal element carries mint because the WRITER bound it; the gate must not
+  // demand it back: validation runs over a copy with the token's mint bound, and the
+  // boot replay binds the mint the same way. A gate that refuses mint-less elements
+  // classifies the honest legacy history corrupted — fail-closed erases it on the
+  // first live load (replay: [], events: []) with no chain evidence of wrongdoing.
+  const errLog = t.mock.method(console, "error", () => {});
+  const legacy = {
+    type: "MULTIPLIER_CHANGE",
+    effectiveDate: "2026-06-10T04:30:00.000Z",
+    status: "confirmed",
+    sources: ["solana:getAccountInfo:x#scaledUiAmountConfig"],
+    multiplierFrom: "1", multiplierTo: "5",
+  };
+  const prior = {
+    lastEffective: "5",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    events: [legacy],
+  };
+  const down = planJournalStep(token, prior, null, NOW);
+  assert.equal(down.corrupted, false, "a mint-less element is completed by the token's mint, not distrusted");
+  assert.equal(errLog.mock.callCount(), 0, "no corruption is reported for a healthy legacy record");
+  assert.deepEqual(down.replay, prior.events, "the legacy history is replayed");
+  assert.equal(down.entry, prior, "the legacy entry keeps the by-reference contract");
+  // the exact boot sequence over the step's output: the replay binding supplies the mint
+  assert.doesNotThrow(() => bindMintAndValidate(down.replay, MINT), "the replay survives the boot validation unchanged");
+  // and on a live chain the legacy base produces the normal mid-history step, no wipe
+  const live = planJournalStep(token, prior, LIVE, NOW);
+  assert.equal(live.corrupted, false, "the legacy history is not wiped on a live chain either");
+  assert.notEqual(live.entry, null);
+  assert.notEqual(live.entry.events.length, 0, "the legacy history is carried over, not reset to empty");
+});
+
+test("the gate classifies a COPY: a datetime DIVIDEND_ACCRUAL is validated without rewriting the record in place", (t) => {
+  // validateEvent canonicalizes a DIVIDEND_ACCRUAL's date in place — that is correct on
+  // the ENTRY paths it owns, but the gate is a PREDICATE over a record it may decline or
+  // hand back untouched: validating the element itself would silently rewrite the journal
+  // on disk (the tz-spelling "2026-06-18T05:00:00+03:00" becomes "2026-06-18" merely
+  // because the token's health was checked) and the by-reference contract would return
+  // the mutated record. The element carries its own mint — a healthy record, classified
+  // through a copy — so the assertion below isolates the copy, not the mint binding.
+  const dividend = {
+    type: "DIVIDEND_ACCRUAL", mint: MINT,
+    effectiveDate: "2026-06-18T05:00:00+03:00",
+    status: "confirmed", sources: ["https://issuer.example/dividends/q2"],
+    amountPerUnitRaw: 1000, decimals: 6,
+  };
+  const prior = {
+    lastEffective: "2",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    events: [dividend],
+  };
+  const before = JSON.stringify(prior);
+  const down = planJournalStep(token, prior, null, NOW);
+  assert.equal(down.corrupted, false, "a datetime spelling is schema-valid — the element is healthy");
+  assert.equal(down.entry, prior, "the healthy entry keeps the by-reference contract");
+  assert.deepEqual(down.replay, prior.events, "the healthy history is replayed");
+  assert.equal(JSON.stringify(prior), before, "classification left the record byte-identical");
+  assert.equal(prior.events[0].effectiveDate, "2026-06-18T05:00:00+03:00",
+    "the tz-spelled effectiveDate was not canonicalized in place by the gate");
+});

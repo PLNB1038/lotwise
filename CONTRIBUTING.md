@@ -20,7 +20,7 @@ should be auditable by reading it, not by auditing a dependency tree.
 
 ```sh
 node --test test/*.test.mjs   # full suite, ~7s, fully offline
-node scripts/serve.mjs        # local demo on http://127.0.0.1:8787/
+node scripts/serve.mjs        # local server (live sources; use --demo for the offline snapshot)
 ```
 
 The suite is hermetic: no network, no fixture servers, no mocks on the core paths —

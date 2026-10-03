@@ -36,7 +36,10 @@ test("the wait ceiling is the wall clock: the default attempt budget cannot stre
     );
     const elapsed = Date.now() - t0;
     assert.ok(elapsed >= 500, `the budget is still waited out, not skipped (${elapsed}ms)`);
-    assert.ok(elapsed < 3000, `the wait must be capped at ~staleMs by the wall clock, got ${elapsed}ms ` +
+    // the ceiling is 1.5×staleMs: the deadline is honored as WRITTEN, not merely "roughly" —
+    // a doubled deadline (staleMs*2 → ~2011ms) is the same lie stretched over a wider
+    // window, and the honest wait is ~staleMs plus one timer quantum, far under the pin.
+    assert.ok(elapsed < 1500, `the wait must be capped at ~staleMs by the wall clock, got ${elapsed}ms ` +
       `(the default ${Math.ceil(1000 / 5) + 100} attempts burn ~4.7s under the Windows timer quantum)`);
   } finally {
     rmSync(dir, { recursive: true, force: true });

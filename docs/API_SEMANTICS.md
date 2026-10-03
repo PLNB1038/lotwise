@@ -23,6 +23,11 @@ an active wallet can take minutes.
   server-side consumers and the bundled showcase.
 - **No pagination and no versioning**: responses are whole; the contract is pinned by
   the test suite and a version bump will be a breaking announcement, not a silent drift.
+- **One balance-parsing blind spot is documented, not guarded**: balances are paired by
+  account key, and an account receiving a second balance of the same pass is dropped
+  whole — but the same account entering one tx under two different keys (an indexed row
+  and an `owner|mint` fallback row) sums as two entries, so a gateway lying that way can
+  double an account's weight in the report.
 
 ---
 

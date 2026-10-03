@@ -12,7 +12,10 @@ import http from "node:http";
 import { createApiServer } from "../src/api/server.mjs";
 
 const OWNER = "9BB7Tt5uW5QbAorLkF3Hn1P2mGcXvcDdR7y8LbT9KdUu"; // valid base58, not in the registry
+const MINT = "DrainMint" + "1".repeat(35); // valid base58, keeps /accruals' symbol resolvable
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const TOKEN = { mint: MINT, symbol: "PLx", name: "Plausible Token", decimals: 6, issuer: "tessera" };
 
 const emptyScan = { owner: OWNER, signatures: 1, fetched: 1, skipped: [], truncated: false, accounts: new Map(), txs: [] };
 
@@ -92,6 +95,40 @@ test("work admitted BEFORE shutdown keeps its service — the gate fires only on
     await draining;
     assert.equal((await client).status, 200, "the drain exists for admitted work — it must not 503 it");
   } finally {
+    server.close(() => {});
+    server.closeAllConnections();
+  }
+});
+
+test("the admission gate is not /lots-only: a late /accruals is refused too, no second scan", async () => {
+  // the gate sits at ADMISSION, before routing: every data route is closed to new work
+  // once the drain begins, not just the wallet-report route. A gate narrowed into /lots
+  // lets a late /accruals start a doomed scan (the drain has resolved, serve.mjs's exit
+  // grace kills it mid-RPC) while the client waits forever.
+  const gate = countingScanner();
+  const server = await createApiServer({ registry: [TOKEN], events: [], walletScanner: gate.scanner });
+  const { port } = server.address();
+  const base = `http://127.0.0.1:${port}`;
+  const agent = new http.Agent({ keepAlive: true });
+  try {
+    // the in-flight scan's connection survives closeIdleConnections and carries the late request
+    const first = get(agent, base, `/lots?address=${OWNER}`);
+    await gate.entered();
+    const draining = server.shutdown({ drainMs: 5000 });
+    gate.release();
+    await draining;
+    assert.equal((await first).status, 200);
+
+    const late = await Promise.race([
+      get(agent, base, `/accruals?symbol=PLx&address=${OWNER}`),
+      sleep(2_000).then(() => null),
+    ]);
+    assert.ok(late, "the late /accruals got no answer at all (it started a scan nobody waits for)");
+    assert.equal(late.status, 503, "the drain admits no new work on /accruals either");
+    assert.equal(late.body && JSON.parse(late.body).kind, "shutting-down", "the refusal names the shutdown");
+    assert.equal(gate.calls.length, 1, "no second scan may start after the drain resolved");
+  } finally {
+    agent.destroy();
     server.close(() => {});
     server.closeAllConnections();
   }
