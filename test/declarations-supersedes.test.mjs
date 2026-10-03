@@ -155,10 +155,15 @@ test("supersedes: a self-reference refuses", () => {
 });
 
 test("supersedes: two corrections on one target refuse (the file is ambiguous — resolve it)", () => {
+  // the corrections DISAGREE about the replacement (2000000 vs 1500000) — nobody can
+  // tell which sum the issuer meant, so the whole file refuses. Two lines that DECLARE
+  // the same replacement are one correction republished (a tz-skin date spelling, a
+  // re-rendered link) and load — the counter keys on the replacement, not on the lines
+  // (see declarations-correction-identity.test.mjs).
   const p = write([
     { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "4000000", decimals: 8, sourceUrl: "https://issuer.example/spy/v1" },
     { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/spy/v2", supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "4000000" } },
-    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "2000000", decimals: 8, sourceUrl: "https://issuer.example/spy/v3", supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "4000000" } },
+    { symbol: "SPYx", exDate: "2026-06-18", amountPerUnitRaw: "1500000", decimals: 8, sourceUrl: "https://issuer.example/spy/v3", supersedes: { exDate: "2026-06-18", amountPerUnitRaw: "4000000" } },
   ]);
   const r = loadDeclarationsFile(p, REG);
   assert.equal(r.ok, false);

@@ -42,7 +42,17 @@ test("journal: a legacy record with \"5.0\" in the history + the chain moved to 
   const priorEntry = {
     lastEffective: "5", // already canonical
     observedAt: "2026-09-01T00:00:00.000Z",
-    events: [{ effectiveDate: "2026-06-10T04:30:00.000Z", multiplierFrom: "1", multiplierTo: "5.0", reason: "legacy build" }], // the raw representation of the old build
+    // the legacy delta is the RAW multiplier representation only: every build wrote the
+    // full canonical event shape and validated it at write time, so the fixture carries
+    // type/mint/status/sources. The corruption gate trusts only elements that survive the
+    // replay's schema validation — a field-less element is a foreign/poisoned record,
+    // not a legacy one, and routes to the corrupted branch.
+    events: [{
+      type: "MULTIPLIER_CHANGE", mint: MINT,
+      effectiveDate: "2026-06-10T04:30:00.000Z", status: "confirmed",
+      sources: ["solana:getAccountInfo:x#scaledUiAmountConfig"],
+      multiplierFrom: "1", multiplierTo: "5.0", reason: "legacy build",
+    }], // the raw "5.0" representation of the old build
   };
   const r = planJournalStep(TOKEN, priorEntry, parseScaledUiAmount(settled("6")));
   assert.notEqual(r.event, null, "a real 5→6 rotation is not swallowed because of a raw old record");

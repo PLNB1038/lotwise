@@ -69,6 +69,21 @@ const rpcDisplay = (() => {
   }
 })();
 
+// Signals are handled from BEFORE the first await — installed synchronously, ahead of the
+// pre-boot I/O below. They used to be installed only AFTER the DNS-resolve and port-probe
+// awaits: a SIGTERM landing while those were still in flight (a hostname that resolves
+// slowly, a busy port) hit the DEFAULT termination — the unit died mid-boot with exit 143
+// and no line in the log explaining why. An operator stopping a slow boot gets a named
+// line and a clean non-zero exit (systemd sees an honest failure; Restart=on-failure
+// retries deliberately). Once startServer is up there is a server to drain, and it
+// REPLACES these handlers with the graceful-drain pair — the two never run together.
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => {
+    console.error(`[serve] ${sig} during boot — no server to drain yet, aborting before listen (exit 1)`);
+    process.exit(1);
+  });
+}
+
 // DNS-resolve the host before boot I/O — a garbage --host used to survive the whole boot
 // (registry+journal+RPC quota) and die only at listen with a cryptic ENOTFOUND.
 try {
@@ -93,19 +108,6 @@ try {
   throw err;
 }
 
-// Signals are handled from the FIRST await, not only after startServer: a SIGTERM
-// arriving during the boot I/O (registry, journal, on-chain reads) used to hit the
-// DEFAULT termination — the unit died mid-boot with no line in the log explaining why.
-// An operator stopping a slow boot now gets a named line and a clean non-zero exit
-// (systemd sees an honest failure; Restart=on-failure retries deliberately). Once
-// startServer is up there is a server to drain, and it REPLACES these handlers with
-// the graceful-drain pair — the two never run together.
-for (const sig of ["SIGTERM", "SIGINT"]) {
-  process.on(sig, () => {
-    console.error(`[serve] ${sig} during boot — no server to drain yet, aborting before listen (exit 1)`);
-    process.exit(1);
-  });
-}
 
 // ---- boot state shared by the two paths ----
 // The demo branch fills its own; the live branch assigns below. The readers stay null in
@@ -264,13 +266,20 @@ for (const t of onchainBoot) {
   try {
     const { replay, event, entry, chain, unavailableV1 } = planJournalStep(t, priorEntry, parsed);
     if (chain === "unavailable") journalUnavailable++;
+    // The journal slot is filled only AFTER validation: every event this step hands out
+    // is bound and schema-checked FIRST. A validation failure used to land in the catch
+    // below ("token skipped") with the entry already in the map — the final persist
+    // rewrote the poison to disk forever. Nothing is assigned that has not passed the
+    // same validation the events stream applies.
+    const replayBound = replay.length > 0 ? bindMintAndValidate(replay, t.mint) : [];
+    const eventBound = event !== null ? bindMintAndValidate([event], t.mint) : [];
     if (entry !== null) journal[t.mint] = entry;
     // a process restart must NOT lose already-emitted events: replay from the journal
-    if (replay.length > 0) {
-      events.push(...bindMintAndValidate(replay, t.mint));
-      journalReplayed += replay.length;
+    if (replayBound.length > 0) {
+      events.push(...replayBound);
+      journalReplayed += replayBound.length;
       if (chain === "unavailable") {
-        console.log(`[serve] ${t.symbol}: replayed ${replay.length} events from the journal cache (chain unavailable — plan stale, observedAt honest)`);
+        console.log(`[serve] ${t.symbol}: replayed ${replayBound.length} events from the journal cache (chain unavailable — plan stale, observedAt honest)`);
       }
     }
     if (entry && entry.lastEffective !== "1" && entry.events.length === 0) {
@@ -280,8 +289,8 @@ for (const t of onchainBoot) {
       // v1 record (no events) + unavailable chain: without this warn the vitrine would silently show 1
       console.warn(`[serve] ${t.symbol}: journal record v1 (multiplier ${priorEntry.lastEffective}) without events and the chain is unavailable — migration deferred, the vitrine will show 1 until the chain returns`);
     }
-    if (event) {
-      events.push(...bindMintAndValidate([event], t.mint));
+    if (eventBound.length > 0) {
+      events.push(...eventBound);
       console.log(`[serve] ${t.symbol}: on-chain event ${event.multiplierFrom} -> ${event.multiplierTo} @ ${event.effectiveDate.slice(0, 10)}`);
     }
   } catch (err) {

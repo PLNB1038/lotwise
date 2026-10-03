@@ -28,6 +28,9 @@ Two responses carry documented extras:
   answers `503` with this kind and `Retry-After` (at least 30s; grows with the previous scan's wall time). Retry, do not parallelize.
 - `aborted` — the caller's own connection went away (the scan is stopped for them);
   nothing to retry, the client is gone.
+- `shutting-down` — the instance is stopping: the request entered after shutdown began,
+  and the drain admits no new work (requests that entered before it keep their service).
+  Back off and retry — the deployment brings the instance back.
 
 ## Not retryable — the refusal is stable
 
@@ -35,7 +38,8 @@ The endpoint answers `503` without fabricating data:
 
 - `rpc` — an RPC-level failure.
 - `http` — an HTTP-level failure at the source.
-- `parse` — a price source returned an unusable body.
+- `parse` — a source returned an unusable body: a price response, or a store event the
+  endpoint refused to read (an unparseable dividend date, a malformed event record).
 - `malformed-source` — an RPC source returned a non-array response.
 - `not-configured` — this deployment lacks the component the endpoint needs (the on-chain
   reader, the wallet scanner, the price provider — on a `--demo` boot all three, since the
@@ -49,7 +53,9 @@ A few untyped internal checks reject with `"kind": null`.
 The request itself is wrong — unknown symbol/mint/issuer/type, a rolled-over date, a
 structurally invalid address — and will fail identically on every retry. Wallet scan
 endpoints (`/lots`, `/accruals`) are GET-only: a `HEAD` probe answers `405` with
-`Allow: GET` without running a scan.
+`Allow: GET` at any query — including a bare path with none — without running a scan,
+and every other non-GET method is refused by the same route with the same `Allow: GET`
+(discovery never advertises HEAD on these routes; other routes keep `Allow: GET, HEAD`).
 
 ## Rate limits
 

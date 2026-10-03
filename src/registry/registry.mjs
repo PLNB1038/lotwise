@@ -120,15 +120,30 @@ export function validateRegistryEntry(entry) {
 }
 
 // Strict validation of the whole list: every entry valid, mints and symbols unique.
+// Symbols are unique CASE-INSENSITIVELY: the declarations channel matches symbols
+// through toUpperCase end to end (the producer's ctx match, the loader's per-symbol
+// walk and its drift maps), so "KOx" and "KOX" would bind ONE declaration line to BOTH
+// mints — a phantom dividend on the token that never declared it. The original spelling
+// stays the display authority (it is what /tokens and ?symbol= carry); uniqueness rides
+// the uppercase key.
 export function validateRegistry(list) {
   const mints = new Set();
-  const symbols = new Set();
+  const symbols = new Map(); // uppercase key → the first spelling (names the collision)
   for (const entry of list) {
     validateRegistryEntry(entry);
     if (mints.has(entry.mint)) throw new RegistryError(`duplicate mint ${entry.mint}`, entry);
-    if (symbols.has(entry.symbol)) throw new RegistryError(`duplicate symbol ${entry.symbol}`, entry);
+    const symbolKey = entry.symbol.toUpperCase();
+    const first = symbols.get(symbolKey);
+    if (first !== undefined) {
+      throw new RegistryError(
+        first === entry.symbol
+          ? `duplicate symbol ${entry.symbol}`
+          : `duplicate symbol ${entry.symbol} (${first} differs only in case — symbols match case-insensitively in the declarations channel)`,
+        entry,
+      );
+    }
     mints.add(entry.mint);
-    symbols.add(entry.symbol);
+    symbols.set(symbolKey, entry.symbol);
   }
   return list;
 }

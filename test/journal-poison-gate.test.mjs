@@ -1,0 +1,139 @@
+// The corruption gate of the on-chain journal must distrust EVERY element of
+// entry.events that would not survive the replay validation — not only the ones with an
+// unknown/absent type. An element of a KNOWN type carrying a garbage VALUE (a
+// calendar-impossible effectiveDate, a non-array sources, a bad status) used to pass the
+// gate as "healthy", ride into the replay, and throw NormalizeError in the boot loop
+// AFTER the entry had already been applied to the in-memory journal: the token was
+// silently dead on every boot, the final persist rewrote the poison to disk forever, and
+// /health kept showing a clean journal. The contract (see the comment at the gate): an
+// element is trusted only if it passes the SAME schema validation the replay applies;
+// everything else routes to the corrupted branch — a loud console.error with the evidence,
+// no replay over the distrusted history, a rebuild from the chain's fact (or an honest
+// untouched entry when the chain is unavailable).
+import test from "node:test";
+import assert from "node:assert/strict";
+import { planJournalStep } from "../src/events/journal.mjs";
+import { bindMintAndValidate } from "../src/events/normalize-xstocks.mjs";
+
+const MINT = "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W";
+const token = { mint: MINT, symbol: "TESTx" };
+const NOW = Date.parse("2026-10-02T00:00:00Z");
+
+const parsedOf = (active, pending, date, hasExtension = true) => ({
+  hasExtension, decimals: 8,
+  activeMultiplier: active,
+  pendingMultiplier: pending,
+  pendingEffectiveDate: date,
+  authority: null,
+});
+const LIVE = parsedOf("1", "5", "2026-06-10T04:30:00.000Z");
+
+// shape-valid record (events IS an array, element type IS known) with one poisoned VALUE
+const eventOf = (overrides) => ({
+  type: "MULTIPLIER_CHANGE",
+  mint: MINT,
+  effectiveDate: "2026-09-01T00:00:00.000Z",
+  status: "confirmed",
+  multiplierFrom: "1",
+  multiplierTo: "2",
+  sources: ["solana:getAccountInfo:x#scaledUiAmountConfig"],
+  ...overrides,
+});
+const poisonEntryOf = (event) => ({
+  lastEffective: "2",
+  observedAt: "2026-09-01T00:00:00.000Z",
+  events: [event],
+});
+
+test("a known-type event with a garbage VALUE field is corruption: routed to the corrupted branch before any assignment, not into the replay", (t) => {
+  const errLog = t.mock.method(console, "error", () => {});
+  const prior = poisonEntryOf(eventOf({ effectiveDate: "2026-02-30" })); // a calendar-impossible date
+
+  // chain unavailable: nothing is replayed over the distrusted record, the entry on disk
+  // is untouched until a rebuild by the chain's fact
+  const down = planJournalStep(token, prior, null, NOW);
+  assert.equal(down.corrupted, true, "a value-poisoned element must be classified corrupted, not healthy");
+  assert.deepEqual(down.replay, [], "the poisoned history is not mixed into the replay");
+  assert.equal(down.event, null);
+  assert.equal(down.entry, null, "with the chain down the broken record is not touched");
+  assert.equal(errLog.mock.callCount(), 1, "the corruption is loud: one console.error with the evidence");
+  const shouted = String(errLog.mock.calls[0].arguments[0]);
+  assert.match(shouted, /CORRUPTED/);
+  assert.match(shouted, /invalid element/, "the reason names the element, not the record shape");
+  assert.match(shouted, /2026-02-30/, "the evidence carries the poison itself");
+
+  // chain live: a rebuild from scratch — the token comes back alive with a clean entry
+  // (the chain's fact here is "5": the pending rotation is already in force)
+  errLog.mock.resetCalls();
+  const live = planJournalStep(token, prior, LIVE, NOW);
+  assert.equal(live.corrupted, true);
+  assert.deepEqual(live.replay, [], "the poisoned history is not replayed");
+  assert.equal(live.event, null, "the backfill duplicate is NOT re-emitted over a distrusted base");
+  assert.equal(live.entry.lastEffective, "5", "lastEffective is rebuilt from the chain's fact");
+  assert.deepEqual(live.entry.events, [], "the old history is unrecoverable — events honestly empty");
+  assert.equal(errLog.mock.callCount(), 1);
+
+  // the rebuilt record survives the exact validation the boot replay applies — the
+  // "silently dead each session" trap cannot close over it again
+  assert.doesNotThrow(() => bindMintAndValidate(live.replay, MINT));
+  assert.doesNotThrow(() => bindMintAndValidate(live.entry.events, MINT));
+});
+
+test("a missing or non-string event type is corruption (the same gate, the other sub-kind)", (t) => {
+  const errLog = t.mock.method(console, "error", () => {});
+  for (const [label, bad] of [
+    ["no type at all", eventOf({ type: undefined })],
+    ["numeric type", eventOf({ type: 42 })],
+    ["null element", null],
+  ]) {
+    errLog.mock.resetCalls();
+    const prior = bad === null
+      ? { lastEffective: "2", observedAt: "2026-09-01T00:00:00.000Z", events: [null] }
+      : poisonEntryOf(bad);
+    const down = planJournalStep(token, prior, null, NOW);
+    assert.equal(down.corrupted, true, `${label}: trusted only as an object with a KNOWN string type`);
+    assert.deepEqual(down.replay, [], `${label}: nothing rides into the replay`);
+    const live = planJournalStep(token, prior, LIVE, NOW);
+    assert.equal(live.corrupted, true, `${label}: live chain rebuilds, not skips`);
+    assert.equal(live.entry.lastEffective, "5", `${label}: rebuilt from the chain's fact`);
+    assert.deepEqual(live.entry.events, [], `${label}: the distrusted history is not carried over`);
+    assert.equal(errLog.mock.callCount(), 2, `${label}: the corruption is loud on every boot while the record persists`);
+  }
+});
+
+test("a poisoned replay can no longer throw AFTER the entry was built: what the step hands out survives the boot validation", (t) => {
+  // every field-poison class, in one record: what matters is
+  // that NONE of them reaches the replay as "healthy history"
+  const prior = {
+    lastEffective: "2",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    events: [
+      eventOf({ status: "confirmed-ish" }), // a status outside the vocabulary
+      eventOf({ sources: "not-an-array" }), // a sources string
+      eventOf({ multiplierTo: "2.0.1" }), // a non-decimal multiplier
+      eventOf({ mint: "short" }), // a mint that is not a pubkey
+    ],
+  };
+  const down = planJournalStep(token, prior, null, NOW);
+  assert.equal(down.corrupted, true);
+  assert.deepEqual(down.replay, []);
+  const live = planJournalStep(token, prior, LIVE, NOW);
+  assert.equal(live.corrupted, true);
+  assert.deepEqual(live.entry.events, []);
+  // the full boot sequence over the step's output must not throw: replay is empty,
+  // the rebuilt events are schema-clean
+  assert.doesNotThrow(() => bindMintAndValidate(live.replay, MINT));
+});
+
+test("a schema-clean history still passes the gate untouched: the entry is returned by reference when the chain is down", () => {
+  const prior = {
+    lastEffective: "2",
+    observedAt: "2026-09-01T00:00:00.000Z",
+    events: [eventOf({})],
+  };
+  const down = planJournalStep(token, prior, null, NOW);
+  assert.equal(down.corrupted, false, "a valid history is not distrusted");
+  assert.equal(down.entry, prior, "the healthy entry keeps the by-reference contract");
+  assert.deepEqual(down.replay, prior.events, "the healthy history is replayed");
+  assert.doesNotThrow(() => bindMintAndValidate(down.replay, MINT));
+});

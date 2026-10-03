@@ -33,16 +33,26 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
 
   // The key is accountIndex, NOT owner|mint: one owner can hold several token accounts
   // of the same mint (legacy + ATA), and a self-transfer between them is a delta of 0,
-  // not a phantom buy. accountIndex is unique within a tx.
+  // not a phantom buy. accountIndex is unique within a tx, so a key that receives a
+  // SECOND balance of the same pass cannot be paired (which pre row belongs to which
+  // post row is unknowable) — and Map.set would silently keep only the last row: a real
+  // disposal nets against a phantom buy and vanishes as delta 0. An ambiguous key is
+  // dropped WHOLE with a console.error; a UNIQUE owner|mint fallback key (one account
+  // per owner+mint — the lying-gateway case) pairs exactly and stays.
   const byAccount = new Map(); // accountIndex → {owner, mint, preRaw, postRaw}
+  const ambiguous = new Set(); // keys that got a second balance of one pass — unpairable
   for (const b of tx.meta?.preTokenBalances ?? []) {
     if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
+    if (byAccount.has(key)) { ambiguous.add(key); continue; }
     byAccount.set(key, { owner: b.owner, mint: b.mint, preRaw: BigInt(b.uiTokenAmount.amount), postRaw: 0n });
   }
+  const postSeen = new Set();
   for (const b of tx.meta?.postTokenBalances ?? []) {
     if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
+    if (postSeen.has(key)) { ambiguous.add(key); continue; }
+    postSeen.add(key);
     const cur = byAccount.get(key);
     if (cur !== undefined && cur.owner !== b.owner) {
       // Token-account ownership change WITHIN a tx (SetAuthority on the account): the pre-entry
@@ -60,6 +70,12 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     const entry = cur ?? { owner: b.owner, mint: b.mint, preRaw: 0n, postRaw: 0n };
     entry.postRaw = BigInt(b.uiTokenAmount.amount);
     byAccount.set(key, entry);
+  }
+  for (const key of ambiguous) {
+    const a = byAccount.get(key);
+    if (a === undefined) continue;
+    console.error(`[tx] ${signature}: a ${typeof key === "number" ? "repeated accountIndex" : "balance without accountIndex"} for owner ${a.owner}, mint ${a.mint} received a second balance of the same pass — the accounts cannot be paired and the delta would silently collapse; the whole owner+mint pair is dropped from this tx`);
+    byAccount.delete(key);
   }
 
   // Aggregate accounts up to the owner level: an owner's delta = sum of his accounts' deltas.
@@ -100,11 +116,33 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
   return {
     signature,
     slot: tx.slot,
-    blockTime: tx.blockTime ?? null,
+    blockTime: plausibleBlockTime(tx.blockTime, signature),
     err: tx.meta?.err ?? null,
     deltas,
     ...(moneyMints !== null ? { moneyDeltas, zeroNetMints } : {}),
   };
+}
+
+// blockTime is unix SECONDS from the endpoint. Solana had no blocks before 2020 and
+// none in the future beyond clock skew: a value outside the window is a lying gateway,
+// not a date. It normalizes to null — the same shape as a missing blockTime — so the
+// consumers' existing incompleteness contracts apply (/accruals: baseIncomplete and the
+// tx stays out of the base; /lots: acquiredDate:null) instead of comparing garbage:
+// raw pass-through let a pre-epoch tx enter EVERY dividend base, silently dropped an
+// absurd-future one, and 1e308 crashed /lots with a bare RangeError (toISOString over
+// Infinity) — the "a garbage date is an error, not a silent comparison" discipline,
+// bypassed on the whole tx path until now.
+const BLOCK_TIME_MIN = 1_577_836_800; // 2020-01-01T00:00:00Z — before Solana's genesis
+const BLOCK_TIME_MAX_SKEW = 86_400; // a full day of endpoint clock skew
+
+function plausibleBlockTime(raw, signature) {
+  if (raw == null) return null;
+  const ok = typeof raw === "number" && Number.isFinite(raw)
+    && raw >= BLOCK_TIME_MIN
+    && raw <= Math.floor(Date.now() / 1000) + BLOCK_TIME_MAX_SKEW;
+  if (ok) return raw;
+  console.error(`[tx] ${signature}: blockTime ${JSON.stringify(raw)} is outside the plausible window [2020-01-01, now+1d] — normalized to null: the tx cannot be ordered against any date (/accruals flags baseIncomplete, /lots keeps acquiredDate:null)`);
+  return null;
 }
 
 /** Deltas of a single mint — the original contract, delegates to the set variant. */

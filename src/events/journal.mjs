@@ -6,7 +6,7 @@ import { journalTransition } from "./normalize-onchain.mjs";
 import { readFileSync, openSync, closeSync, unlinkSync, statSync, writeSync, readdirSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
 import { parseIsoDateMs } from "../schema/isodate.mjs";
-import { canonicalDecimalString, EVENT_TYPES } from "../schema/events.mjs";
+import { canonicalDecimalString, validateEvent } from "../schema/events.mjs";
 import { atomicWriteJson, preserveCorruptedFile } from "../fs/atomic.mjs";
 
 // Canonicalization of a journal entry AT READ TIME : a journal written by a
@@ -35,6 +35,19 @@ function canonicalizeEntry(entry) {
   };
 }
 
+// The gate's predicate: an element passes exactly what bindMintAndValidate demands of a
+// replayed event — the full schema over a copy with the token's mint bound. A copy, not
+// the element itself: validation canonicalizes in place (a DIVIDEND_ACCRUAL's date), and
+// a predicate must not rewrite the record it only classifies.
+function isValidJournalElement(e, mint) {
+  try {
+    validateEvent({ ...e, mint });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * @param {object} token — registry entry (mint, symbol needed)
  * @param {{lastEffective: string, observedAt: string, events?: Array}|null} priorEntry — entry from the journal on disk
@@ -47,7 +60,8 @@ function canonicalizeEntry(entry) {
  *   unavailableV1 — a v1 entry (no events) with a multiplier ≠ "1" and an unreachable chain:
  *   backfill migration is impossible, the vitrine will show multiplier 1 — the warn must fire,
  *   otherwise "the real 5" silently looks like 1 (a quiet lie,;
- *   corrupted — the priorEntry is corrupted (events present but not an array): the history
+ *   corrupted — the priorEntry is corrupted (a broken entry shape, or an events element
+ *   that would not survive the replay's schema validation): the history
  *   is distrusted, the step ran fail-closed (see the body of planJournalStep).
  */
 export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
@@ -79,12 +93,13 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
   // an events array with an INVALID ELEMENT is the same corruption —
   // a future/downgraded writer's record used to survive every boot: the replay validation
   // threw, the token was silently dead each session, and the broken record was rewritten
-  // to disk forever. An element is trusted only as a non-null object with a KNOWN event
-  // type (the schema's EVENT_TYPES — the same list replay validation enforces); the rest
-  // routes to the corrupted branch, which rebuilds the token from the chain's fact.
+  // to disk forever. An element is trusted only if it survives the SAME schema validation
+  // the replay applies (validateEvent with the token's mint bound — see
+  // isValidJournalElement below): a KNOWN type is not enough, a garbage VALUE inside a
+  // known-type element is the same poison. Anything else routes to the corrupted branch,
+  // which rebuilds the token from the chain's fact BEFORE any assignment can happen.
   const invalidEventElement = Array.isArray(priorEntry?.events)
-    ? priorEntry.events.find((e) => e === null || typeof e !== "object"
-        || (typeof e.type === "string" && !EVENT_TYPES.includes(e.type)))
+    ? priorEntry.events.find((e) => !isValidJournalElement(e, token.mint))
     : undefined;
   const priorIsCorrupted = priorEntry !== null && priorEntry !== undefined
     && (typeof priorEntry !== "object"
@@ -103,7 +118,7 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
               : `events carries an invalid element (${JSON.stringify(invalidEventElement)})`
       }, history is distrusted. Evidence: ${JSON.stringify(priorEntry)}. ` +
       `Replay and backfill over it are NOT performed — no duplicate event is re-emitted; ` +
-      `with a live chain the entry will be rebuilt from scratch (no events; the vitrine will warn about a multiplier without history).`,
+      `with a live chain the entry will be rebuilt from the chain's fact (no events; the vitrine will warn about a multiplier without history).`,
     );
     if (parsed === null) {
       return { replay: [], event: null, entry: null, chain: "unavailable", unavailableV1: false, corrupted: true };
@@ -112,7 +127,13 @@ export function planJournalStep(token, priorEntry, parsed, nowMs = Date.now()) {
     return {
       replay: [],
       event: null, // backfill suppressed: re-emitting a duplicate from a distrusted base is not allowed
-      entry: { ...recovered.entry, events: [] },
+      // journalTransition honestly returns entry:null when the chain offers no fact (a
+      // token without the rebase extension: the parser's default "1" is not a fact).
+      // Spreading {...null, events:[]} materialized a GHOST record — no lastEffective,
+      // no observedAt, persisted forever against the "no chain fact — no record"
+      // contract. null leaves the slot untouched: the broken record stays on disk as the
+      // evidence (loudly reported on every boot) until a fact rebuilds it.
+      entry: recovered.entry === null ? null : { ...recovered.entry, events: [] },
       chain: "ok",
       unavailableV1: false,
       corrupted: true,

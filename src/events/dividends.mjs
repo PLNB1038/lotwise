@@ -134,7 +134,11 @@ function toSupersedesTarget(v, decl) {
  *   feed as well — one ex-day carries one declared amount; a correction goes through
  *   `supersedes`. A VERBATIM repeat of
  *   a correction line collapses in the exact-duplicate dedup first — re-submitting the
- *   feed is not a double supersede.
+ *   feed is not a double supersede. Neither is a REPUBLISHED one (a tz-spelling of the
+ *   same date, a re-rendered sourceUrl): the supersede counter keys on the replacement
+ *   a correction DECLARES — its canonical ex-day and amount — so one correction carried
+ *   by two lines is one replacement; two genuinely different replacements of one target
+ *   still refuse.
  * @param {{symbol: string}} ctx
  *   The symbol of the token we build events for (e.g. "KOx"); required.
  * @returns {Array<object>} DIVIDEND_ACCRUAL without mint, old → new.
@@ -188,8 +192,13 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
     }
     (decl.supersedes !== undefined ? correctionIdentities : plainIdentities).add(`${decl.exDate.slice(0, 10)}|${amount}`);
   }
-  // targetIdentity → how many DISTINCT (dedup-surviving) corrections name it; more than
-  // one is an ambiguous file, resolved below
+  // targetIdentity → the DISTINCT replacements its dedup-surviving corrections declare
+  // (the correction's own canonical ex-day + amount); more than one distinct replacement
+  // is an ambiguous file, resolved below. A Set, not a line counter: two lines agreeing
+  // here are ONE correction republished (a tz-spelling of the date, a re-rendered link —
+  // the declaration carries no id, so a link is a reference, not payload), and counting
+  // lines refused a whole legal file as a "double supersede" over one republished
+  // correction.
   const supersedeTargets = new Map();
 
   for (const decl of declarations) {
@@ -253,21 +262,32 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
       amountPerUnitRaw,
       decimals,
     };
-    // The dedup key is the MOMENT of the date, not the string : "2026-06-18"
-    // and "2026-06-18T00:00:00Z" are the same ex-day; a string key produced two
-    // DIVIDEND_ACCRUAL and a double accrual by the engine. parseIsoDateMs cannot return null:
-    // exDate has already passed isValidIsoDate above. The supersedes reference is part of
-    // the line's identity: two lines differing ONLY in the correction they declare are
-    // not the same declaration (an ambiguity → refused below, not collapsed away).
-    const key = JSON.stringify([decl.symbol.toUpperCase(), parseIsoDateMs(decl.exDate), amountPerUnitRaw, decimals, decl.sourceUrl, supersedesTarget]);
+    // The dedup key is the CANONICAL EX-DAY, not the string and not the instant:
+    // "2026-06-18", "2026-06-18T00:00:00Z" and "2026-06-18T05:00:00+03:00" are one
+    // ex-day, and every downstream identity (the supersedes target, the one-amount rule,
+    // the engine, the /accruals dedup) keys on that day — an instant key let two
+    // tz-spellings of one line survive as two dividends. parseIsoDateMs cannot return
+    // null: exDate has already passed isValidIsoDate above. The supersedes reference is
+    // part of the line's identity: two lines differing ONLY in the correction they
+    // declare are not the same declaration (an ambiguity → refused below, not collapsed
+    // away). A different sourceUrl stays two lines — a reference is not payload, but it
+    // IS what tells "a repeat" from "a second announcement".
+    const key = JSON.stringify([decl.symbol.toUpperCase(), parseIsoDateMs(exDay), amountPerUnitRaw, decimals, decl.sourceUrl, supersedesTarget]);
     if (seen.has(key)) continue;
     seen.set(key, e);
     events.push(e);
     // a correction registers ONLY when its line survives the exact-duplicate dedup:
-    // a verbatim re-submitted correction is one correction, not a double supersede
+    // a verbatim re-submitted correction is one correction, not a double supersede.
+    // What registers is the REPLACEMENT the line declares (its canonical ex-day +
+    // amount): a republished spelling of the same correction adds no second entry.
     if (supersedesTarget !== null) {
       const targetId = `${supersedesTarget.day}|${supersedesTarget.amount}`;
-      supersedeTargets.set(targetId, (supersedeTargets.get(targetId) ?? 0) + 1);
+      let replacements = supersedeTargets.get(targetId);
+      if (replacements === undefined) {
+        replacements = new Set();
+        supersedeTargets.set(targetId, replacements);
+      }
+      replacements.add(`${exDay}|${amountPerUnitRaw}`);
     }
   }
 
@@ -314,9 +334,9 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
   // used to mean an edit-restart cycle per reference (each restart re-pulls the feed).
   // Serve-side this lands in /health declarations.ok = 0 with the reason logged.
   const supersedeProblems = [];
-  for (const [targetId, corrections] of supersedeTargets) {
+  for (const [targetId, replacements] of supersedeTargets) {
     const [day, amount] = targetId.split("|");
-    if (corrections > 1) {
+    if (replacements.size > 1) {
       supersedeProblems.push(`supersedes: the target (ex-day ${day}, amountPerUnitRaw ${amount}) is already superseded by another declaration — one correction per target, resolve the file`);
     } else if (!plainIdentities.has(targetId)) {
       supersedeProblems.push(`supersedes: no declaration to replace (ex-day ${day}, amountPerUnitRaw ${amount} is not declared) — a correction must name an existing declaration of the same symbol`);

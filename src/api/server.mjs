@@ -181,6 +181,13 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       });
     }
     try {
+      // The drain admits no NEW work: a request can still enter after shutdown() began on
+      // a keep-alive socket that closeIdleConnections did not kill (a connection busy with
+      // the in-flight scan is not idle). Without this gate such a late request started a
+      // fresh scan the drain no longer waits for — it had already resolved, and serve.mjs's
+      // 200ms exit grace killed the scan mid-RPC. What entered BEFORE shutdown keeps the
+      // service it was promised; the instance is going away, so late arrivals get 503.
+      if (draining) return json(res, 503, { error: "the server is shutting down, retry after the restart", kind: "shutting-down" });
       let url;
       // A request-target with a leading "//" is the protocol-relative form: new URL
       // swallows the next segment as the authority ("//events?x" → host "events",
@@ -209,7 +216,11 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
         // consume the request body — a slow-body client kept the socket
         // alive up to requestTimeout (300s) after the 405, draining connection capacity
         req.resume();
-        return json(res, 405, { error: "method not allowed" }, { Allow: "GET, HEAD" });
+        // Allow is the ROUTE's truth about itself (RFC 9110 §15.5.5): /lots and /accruals
+        // refuse HEAD in their own 405 (wallet scans are GET-only), so advertising HEAD
+        // here promised a method the route rejects on the very next probe.
+        const allow = url.pathname === "/lots" || url.pathname === "/accruals" ? "GET" : "GET, HEAD";
+        return json(res, 405, { error: "method not allowed" }, { Allow: allow });
       }
       const q = url.searchParams;
 
@@ -285,16 +296,19 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       });
     }
     if (url.pathname === "/lots") {
+      // GET-only: a HEAD probe carries no body and no address semantics a monitor needs —
+      // running the FULL scan (semaphore + RPC quota) for an empty response is a probe
+      // that can hold the one scan slot. The method gate is the FIRST check on the route:
+      // method semantics must not depend on configuration (the !walletScanner 503 used to
+      // precede it, and on a --demo boot a HEAD probe answered 503 where docs/ERRORS.md
+      // promises 405 + Allow: GET) nor on the query's validity — the address checks used
+      // to precede it, and the canonical monitoring probe, the bare path without a query,
+      // fell into the 400 "address required". The probe is answered before the route
+      // reads a single parameter.
+      if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       const address = q.get("address");
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
-      // GET-only: a HEAD probe carries no body and no address semantics a monitor needs —
-      // running the FULL scan (semaphore + RPC quota) for an empty response is a probe
-      // that can hold the one scan slot. The method gate precedes the not-configured
-      // check: method semantics must not depend on configuration — the !walletScanner
-      // 503 used to precede it, and on a --demo boot (no scanner) a HEAD probe answered
-      // 503 where docs/ERRORS.md promises 405 + Allow: GET (a live boot answered 405).
-      if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured", kind: "not-configured" });
       // the semaphore is checked BEFORE the limiter: a scan-busy refusal costs the caller
       // nothing — checked after, a dozen refusals used to exhaust the rate bucket and the
@@ -344,6 +358,9 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       // for ONE wallet. A separate endpoint, not a field in /lots: the /lots report is
       // wallet-wide (its contract has no symbol) and its wire shape is pinned by tests
       // (dividend-e2e GAP 2: there must be no "accrual" rows in /lots).
+      // GET-only like /lots — the method gate is the FIRST check, above the mint/address
+      // validation (see /lots): a bare HEAD probe answers 405 regardless of the query.
+      if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       const mint = resolveMint(q);
       if (!mint) return json(res, 400, { error: "mint or symbol required (must be a tracked token)" });
       // Excluded token (broken timeline): the events are hidden WHOLE; a silent [] would
@@ -359,8 +376,6 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
       const address = q.get("address");
       if (!address) return json(res, 400, { error: "address required" });
       if (!isValidAddress(address)) return json(res, 400, { error: "address must be a base58 Solana pubkey" });
-      // GET-only like /lots — the method gate precedes the not-configured check (see /lots)
-      if (isHead) return json(res, 405, { error: "wallet scans are GET-only" }, { Allow: "GET" });
       if (!walletScanner) return json(res, 503, { error: demo ? "the demo instance serves a static snapshot and does not scan wallets — boot without --demo for the live feed" : "wallet scanner not configured", kind: "not-configured" });
       if (scanActive) return scanBusy(res);
       if (!allow(scanLimiter, req, res)) return;
@@ -655,11 +670,17 @@ export function createApiServer({ registry, events = [], port = 0, host = "127.0
   // always observed instantly: a scan call already selected by the RpcClient pacing gate
   // surfaces only when the gate's non-abortable sleep runs out (up to minIntervalMs) —
   // resolving at the bare window's edge used to win the exit race and the client saw a
-  // bare connection reset instead of the 503 (r36/r48 SRE rounds). The cap keeps the
+  // bare connection reset instead of the 503. The cap keeps the
   // stop bounded when a scanner ignores the signal entirely.
   const ABORT_SETTLE_CAP_MS = 2_000;
+  // The drain's admission flag, flipped BEFORE the listener closes: server.close() stops
+  // new CONNECTIONS, but requests still arrive on keep-alive sockets closeIdleConnections
+  // does not kill (a connection busy with the in-flight scan is not idle). The request
+  // handler reads it first thing — see the 503 "shutting-down" at admission.
+  let draining = false;
   server.shutdown = ({ drainMs = 15_000 } = {}) =>
     new Promise((resolve) => {
+      draining = true; // no request entering after this line is admitted to new work
       server.close(); // the listener is down: no new connection enters the drain
       // keep-alive sockets without a request in flight would hold the process for
       // their own idle timeout — they carry nothing, drop them at once

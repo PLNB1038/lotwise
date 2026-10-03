@@ -45,20 +45,21 @@ export function demoSnapshotAgeDays(now = Date.now()) {
 // The demo registry: the same entry shape as data/tokens.json (validateRegistry enforces it),
 // issuers drawn from the existing enum. The three provenance fields ride along so a
 // /tokens row has the SAME field set on a demo boot as on a live one (a client typing the
-// row shape against the live registry used to read undefined on --demo): sourceUrl and
-// sourceDecimals carry the literal demo source marker (never a fabricated issuer URL or
-// enrichment source), verified is false — a demo set is by definition not issuer-confirmed,
-// the events' status: "unverified" honesty mirrored into the registry row.
+// row shape against the live registry used to read undefined on --demo): all three carry
+// the literal demo source marker (never a fabricated issuer URL or enrichment source) —
+// verified included, because the live field is a provenance STRING ("carried+rpc") and a
+// boolean here would hand the same served field a second type. A demo set is by definition
+// not issuer-confirmed; the marker says exactly that without breaking the field's type.
 // This array REPLACES the live registry under --demo — a demo instance must not mix
 // fictional tokens with tracked ones.
 export const DEMO_REGISTRY = [
   {
     mint: DEMO_MINT, symbol: "DEMOx", name: "Demo Industries (demo token)", issuer: "tessera", decimals: 6,
-    sourceUrl: SOURCE, verified: false, sourceDecimals: SOURCE,
+    sourceUrl: SOURCE, verified: SOURCE, sourceDecimals: SOURCE,
   },
   {
     mint: DEMO2_MINT, symbol: "DEMO2x", name: "Demo Biotech (demo token)", issuer: "backpack", decimals: 6,
-    sourceUrl: SOURCE, verified: false, sourceDecimals: SOURCE,
+    sourceUrl: SOURCE, verified: SOURCE, sourceDecimals: SOURCE,
   },
 ];
 

@@ -229,8 +229,16 @@ export function withStoreLock(filePath, fn, { staleMs = 10_000, attempts, retryP
   const lockPath = `${filePath}.lock`;
   const maxAttempts = attempts ?? Math.ceil(staleMs / retryPauseMs) + 100;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  // the attempt counter is a false metric on Windows: Atomics.wait(5) really takes
+  // ~15.6ms, so the default 2100 attempts (staleMs=10s) blocked ~33s instead of the
+  // contract ~10s — updateStore is synchronous and froze the CLI for the whole budget.
+  // The honest ceiling is the wall clock, same deadline as the journal twin
+  // (acquireSyncLock): degradation no later than ~staleMs regardless of OS; the attempt
+  // cap stays only as the loop's backstop.
+  const deadline = Date.now() + staleMs;
   let fd = null;
   for (let i = 0; i < maxAttempts && fd === null; i++) {
+    if (i > 0 && Date.now() >= deadline) break;
     if (i > 0) Atomics.wait(sleeper, 0, 0, retryPauseMs);
     try {
       fd = openSync(lockPath, "wx");

@@ -40,12 +40,14 @@ test("demo boot: HEAD /accruals answers 405 + Allow: GET the same way", async ()
   }
 });
 
-test("demo boot: POST /lots keeps the generic 405 + Allow: GET, HEAD (the shared gate is untouched)", async () => {
+test("demo boot: POST /lots keeps the generic 405, now with the route's own Allow: GET (no HEAD advertised)", async () => {
   const { server, base } = await demoBase();
   try {
     const res = await fetch(`${base}/lots?address=${ADDR}`, { method: "POST" });
     assert.equal(res.status, 405);
-    assert.equal(res.headers.get("allow"), "GET, HEAD");
+    // the route refuses HEAD itself (wallet scans are GET-only), so the shared gate must
+    // not advertise it here — discovery promises only what the route really serves
+    assert.equal(res.headers.get("allow"), "GET");
   } finally {
     server.close();
   }

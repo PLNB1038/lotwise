@@ -109,7 +109,9 @@ the caller no rate budget, and the running scan is untouched.
 ### GET-only
 
 `/lots` and `/accruals` are GET-only: a HEAD probe answers `405` (`Allow:
-GET`) without running a scan.
+GET`) at any query — including a bare path with none — without running a scan.
+Other methods get the same refusal with the same `Allow: GET`: the list is the
+route's own truth, and it never advertises HEAD on these routes.
 
 ### Queue priorities
 
