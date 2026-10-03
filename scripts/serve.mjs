@@ -472,7 +472,7 @@ try {
 const bound = server.address();
 const boundHost = bound.family === "IPv6" ? `[${bound.address}]` : bound.address;
 console.log(`\n[serve] Lotwise API: http://${boundHost}:${bound.port}`);
-console.log(`[serve] vitrine: http://${boundHost}:${bound.port}/`);
+console.log(`[serve] report page: http://${boundHost}:${bound.port}/`);
 if (demo) {
   // no "on-chain RPC:" line in the demo banner — printing an RPC origin the server never
   // touches would advertise a source the mode does not have

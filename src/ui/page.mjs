@@ -67,6 +67,7 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
   .verdict.ok { color: var(--ok); border-color: var(--ok); }
   .verdict.disagree { color: var(--bad); border-color: var(--bad); }
   .verdict.unavailable { color: var(--warn); border-color: var(--warn); }
+  .verdict.neutral { color: var(--muted); border-color: var(--border); }
   .timeline .verdict { font-size: 11px; padding: 0 6px; margin-left: 6px; cursor: help; }
   .note { color: var(--muted); font-size: 13px; }
   input[type=number], input[type=date], #token-filter, select {
@@ -166,7 +167,8 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
       </div>
       <p class="note">Scans the wallet history on-chain and rebuilds tax lots for tracked tokens.
         Raw balances are shown as stored on-chain; the adjusted view applies the multiplier timeline.
-        A first scan of an active wallet can take several minutes on public RPC.</p>
+        A first scan of an active wallet can take several minutes on public RPC.${demo ? `
+        Wallet scans are off on this instance — boot without <code>--demo</code> for the live feed.` : ""}</p>
       <div id="wallet-out"></div>
     </div>
   </section>
@@ -208,6 +210,9 @@ export function renderPage({ demo = false, demoSnapshotAsOf = null } = {}) {
 <script>
 'use strict';
 var state = { tokens: [], selected: null };
+// Server-rendered: true only on a --demo boot (the banner above is that fact's single
+// source — the client does not re-derive the mode from /health).
+var IS_DEMO = ${demo};
 
 function el(id) { return document.getElementById(id); }
 // The table shows a SHORT multiplier (6 decimals read fine; 16 are visual noise and a
@@ -450,6 +455,16 @@ function loadPlanes(t) {
     .then(function (res) {
       if (state.selected !== t) return; // stale response
       if (!res.ok) {
+        // A --demo boot has no chain reader BY DESIGN: the not-configured 503 is the mode,
+        // not a broken source, and a demo token has no live chain even in principle — the
+        // red "unavailable — fail-closed" card over every token read as the page being
+        // broken. Neutral here; the honest refusal stays for a live boot whose chain is
+        // actually unreachable (and for any non-configured shape a demo page never sees).
+        if (IS_DEMO && res.body.kind === 'not-configured') {
+          setVerdict('neutral', 'skipped in demo');
+          el('planes').innerHTML = '<dt>on-chain source</dt><dd>skipped in demo — reconcile needs the live chain</dd>';
+          return;
+        }
         setVerdict('unavailable', 'unavailable');
         el('planes').innerHTML = '<dt>on-chain source</dt><dd class="err">' +
           esc(res.body.error || 'unavailable') + ' — fail-closed, not guessing</dd>';

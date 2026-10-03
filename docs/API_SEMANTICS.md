@@ -67,6 +67,12 @@ strings, unknown ones are `null` — never an invented number):
 }
 ```
 
+When the RPC could not order same-slot balance pairs, the report carries a
+top-level `ambiguousSlotPairs` count (present only when non-zero). It is a
+fourth `complete: false` cause beside `truncated`, per-token `gaps` and a
+failed `reconciles`: the order in the transaction list is then a deterministic
+guess, and a guessed order is not a certified history.
+
 ### Unpriced money: `moneyOnly`
 
 `moneyOnly` rows list USDC the pricing did not consume:
@@ -165,23 +171,17 @@ Two same-day consequences of that order are stated, not hidden:
   does not divide evenly — divisibility can depend on the order even though the
   composition does not, and the engine never rounds.
 - A `DIVIDEND_ACCRUAL` for a merger's NEW mint on the merger day applies while the old
-  mint's holders are still on the old mint. If nobody else held the new mint the
-  accrual is zero and the report carries
-  `{kind: "dividend-shadowed-by-merger", mint, day, amountPerUnitRaw}` instead of a
-  silent zero; if someone did, the day's accrual is understated by the converted units
-  and the report carries
-  `{kind: "dividend-partially-shadowed-by-merger", mint, day, amountPerUnitRaw, shadowedQtyRaw}`.
-  Only units an exchange moved from lots that predate the ex-day base count as shadowed
-  — an exchange on a different day, into a different mint, or of intraday lots is real
-  economics and produces no warning. A consumer can size the understatement exactly:
-  the counterfactual declared income of the day is `Σ accruals.totalRaw +
-  amountPerUnitRaw × shadowedQtyRaw` per dividend identity — an exact integer,
-  repairable per identity. Two caveats: it is the declared income the canonical order
-  lost, not a claim the issuer owes it; and `shadowedQtyRaw` is a quantity without
-  owner attribution. The formula is exact against its own counterfactual — the same
-  facts with the exchange a day earlier and the dividend still at the ex-day midnight
-  base; do not validate it by moving exchanges across days, which drags other same-day
-  arithmetic along and diverges mechanically.
+  mint's holders are still on the old mint. If nobody else held the new mint at the
+  ex-day midnight base, the day's accrual is `0`; if someone did, it is understated by
+  the units a same-day exchange moved onto the new mint (only units from lots that
+  predate the ex-day base count — an exchange on a different day, into a different
+  mint, or of intraday lots is real economics and accrues as usual). This shadowing is
+  silent on the wire: `/accruals` rows have no warnings channel, so a merger-shadowed
+  zero is not distinguishable from "no dividend" by the response shape alone — size the
+  caveat from the events themselves (a merger and a dividend sharing one day on the
+  dividend's mint). The explicit `dividend-shadowed-by-merger` /
+  `dividend-partially-shadowed-by-merger` warnings exist in the lot engine; no served
+  endpoint surfaces them today.
 
 ### `baseIncomplete` and `totalRaw: null`
 

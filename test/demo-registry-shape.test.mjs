@@ -42,6 +42,7 @@ test("demo /tokens row values are honest demo markers, not fabricated live claim
     assert.equal(row.sourceUrl, "lotwise-demo-snapshot", "the demo source marker, never a real-looking issuer URL");
     assert.equal(row.verified, "lotwise-demo-snapshot", "the demo marker string — the live field's type, never a fabricated live claim");
     assert.equal(row.sourceDecimals, "lotwise-demo-snapshot", "the snapshot's own registry declaration is the decimals source");
-    assert.equal(row.decimals, 6, "the registry decimals the snapshot declares");
+    assert.equal(row.decimals, row.issuer === "tessera" ? 9 : 6,
+      `${row.symbol}: the issuer family's decimals (9 = PreStocks/Tessera, 6 = Backpack), the parameter the README teaches to check`);
   }
 });

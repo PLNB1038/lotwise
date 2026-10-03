@@ -36,7 +36,12 @@ Exit codes: `0` no failures / `1` some deliveries failed / `2` usage-or-input er
   matches the `X-Lotwise-Delivery` header, `sentAt` is the ISO-8601 send time, and
   `event` is the canonical event record. The signature covers these exact bytes —
   all retries carry the byte-for-byte same body.
-- Up to 3 attempts, backing off 1s → 4s between them (success is any `2xx`).
+- Up to 3 attempts, backing off 1s → 4s between them (success is any `2xx`). Each
+  attempt is aborted after 10 seconds without a response (a fixed default, not a
+  flag — the CLI has no timeout knob), so one event's delivery worst case is
+  3 × 10s + the backoffs ≈ 35s.
+- A redirect (`3xx`) fails the attempt like any non-2xx: the request is not
+  replayed to a redirect target, signed headers included.
 
 ## SSRF policy
 

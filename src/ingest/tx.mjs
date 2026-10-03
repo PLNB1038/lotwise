@@ -49,6 +49,11 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
     if (byAccount.has(key)) { ambiguous.add(key); continue; }
+    // An indexed row WITHOUT an owner is unpairable evidence (the lying-gateway class):
+    // letting it in would fire the ownership-change branch against owner === undefined and
+    // book a phantom disposal to the old owner plus an acquisition under the literal
+    // undefined. It pairs with nothing → the same ambiguous verdict, dropped whole.
+    if (typeof b.owner !== "string") { ambiguous.add(key); continue; }
     byAccount.set(key, { owner: b.owner, mint: b.mint, preRaw: BigInt(b.uiTokenAmount.amount), postRaw: 0n });
   }
   const postSeen = new Set();
@@ -56,8 +61,20 @@ export async function fetchWalletDeltas(client, signature, mints, opts = {}) {
     if (!match(b.mint) && !isMoney(b.mint)) continue;
     const key = b.accountIndex ?? `${b.owner}|${b.mint}`;
     if (postSeen.has(key)) { ambiguous.add(key); continue; }
+    // Same verdict for an ownerless POST row: it cannot be paired against a pre entry
+    // without fabricating a nonsense owner on one of the two sides — drop the pair whole.
+    if (typeof b.owner !== "string") { ambiguous.add(key); continue; }
     postSeen.add(key);
     const cur = byAccount.get(key);
+    if (cur !== undefined && cur.mint !== b.mint) {
+      // A token account cannot change its mint within a tx: a DIFFERENT mint under the same
+      // accountIndex is a lying-gateway shape, and pairing it books the old owner a phantom
+      // disposal of a mint that is no longer there and the new owner an unpriced lot of a
+      // mint nobody bought — only the coarse reconciles:false would ever flag it. The rows
+      // cannot be paired → the same ambiguous verdict, dropped whole with the warn below.
+      ambiguous.add(key);
+      continue;
+    }
     if (cur !== undefined && cur.owner !== b.owner) {
       // Token-account ownership change WITHIN a tx (SetAuthority on the account): the pre-entry
       // belongs to the old owner. Writing post to him would hide the transfer: his delta

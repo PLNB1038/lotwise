@@ -1,6 +1,7 @@
 # Errors and rate limits
 
-Every response is JSON; decimal quantities are strings everywhere (including
+Every response is JSON (the showcase page at `/` is HTML); decimal quantities
+are strings everywhere (including
 `amountPerUnitRaw` in `/events`); `/events` rows are chronological. This file carries
 the full response/error contract; the README keeps the summary. Nothing here
 introduces behavior — every statement is pinned by the test suite.
@@ -9,13 +10,19 @@ introduces behavior — every statement is pinned by the test suite.
 
 Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy.
 
-Two responses carry documented extras:
+Several responses carry documented extras:
 
 - a `404` body adds `endpoints` — the list of routable paths, so a mistyped path is
   answerable without leaving the API;
 - a `400` refusal for a token excluded from multiplier reporting (`/events`, `/onchain`,
   `/crosscheck`, `/accruals`) adds `excluded: true` and `excludedReason` — the reason
-  from `error`, duplicated for programmatic consumers.
+  from `error`, duplicated for programmatic consumers;
+- the exclusion marks also ride on `200` responses: `/summary` rows add `excluded: true`
+  and `excludedReason` for such a token; `/multiplier` for it answers `200` with the
+  no-timeline default `multiplier: "1"`, `events: 0` and the same two fields — that `1`
+  is a default, not a computation; `/lots` token rows add both fields plus
+  `adjustedAvailable: false`. `false` is the only value the field ever carries; its
+  absence means the adjusted values were computed.
 
 ## Transient — back off and retry
 
@@ -59,9 +66,10 @@ and every other non-GET method is refused by the same route with the same `Allow
 
 ## Before the handler
 
-One refusal never reaches the JSON contract: a request target beyond the HTTP
-stack's request-line limit (node:http's 16 KB header cap) is answered by the
-transport with a bare `431` and an empty body — no `error`/`kind` shape, nothing
+One refusal never reaches the JSON contract: a request whose request line and
+headers together exceed node:http's 16 KB header cap — an oversized request
+target, one long header, or many small ones — is answered by the transport
+with a bare `431` and an empty body — no `error`/`kind` shape, nothing
 to retry against, the endpoint never sees the request. Just below the cap the
 app's own contract holds again (an oversized-but-fitting address is a `400`).
 

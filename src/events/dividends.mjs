@@ -358,6 +358,45 @@ export function buildDeclarationEvents(declarations, { symbol } = {}) {
     }
   }
 
+  // ONE EX-DAY CARRIES ONE DECLARED AMOUNT — also AFTER the supersedes resolution. The
+  // plain gate above groups plain declarations only (a correction is the legal way to
+  // change a same-day amount), and no other check looks at WHERE a replacement lands: a
+  // correction whose replacement carries a different amount than another SURVIVING event
+  // of the same canonical ex-day re-creates the exact doubled income the plain pair is
+  // refused for — one day, two declared sums, each accruing on the full basis (the
+  // /accruals day-key dedup cannot collapse them: the identity includes the amount). The
+  // same contract runs over the survivors instead: group every event that made it past
+  // the replacement by canonical ex-day and refuse the whole feed when a day carries two
+  // distinct amounts — the correction loop lands in the honest zero the plain path gets,
+  // not in a doubled /accruals. A replacement repeating an amount the day already
+  // carries is NOT a conflict: one declared amount is one declared amount, and the
+  // engine's identity dedup collapses the sightings the same way it does for two plain
+  // lines of one amount. Plain-only files never reach a conflict here — the plain gate
+  // refused their same-day sums already.
+  const survivorsByDay = new Map(); // canonical ex-day → the distinct amounts still accruing
+  for (const e of events) {
+    const day = String(e.effectiveDate).slice(0, 10);
+    if (!survivorsByDay.has(day)) survivorsByDay.set(day, new Set());
+    survivorsByDay.get(day).add(String(e.amountPerUnitRaw));
+  }
+  const survivorConflicts = [];
+  for (const day of [...survivorsByDay.keys()].sort()) {
+    const amounts = [...survivorsByDay.get(day)].sort((a, b) => Number(a) - Number(b));
+    if (amounts.length < 2) continue;
+    const listed = amounts.length === 2
+      ? `${amounts[0]} and ${amounts[1]}`
+      : `${amounts.slice(0, -1).join(", ")} and ${amounts[amounts.length - 1]}`;
+    const label = amounts.length === 2 ? "two dividends" : `${amounts.length} dividends`;
+    survivorConflicts.push(`${label} for one ex-day after the supersedes resolution (${day}, amountPerUnitRaw ${listed}) — one ex-day carries one declared amount; a replacement must not land on an ex-day another amount already carries, resolve the file`);
+  }
+  if (survivorConflicts.length > 0) {
+    // the same reason discipline as the plain gate above: the first ten teach
+    // the fix, the rest are counted
+    const listed = survivorConflicts.slice(0, 10);
+    if (survivorConflicts.length > 10) listed.push(`…and ${survivorConflicts.length - 10} more conflicted ex-days`);
+    throw new DeclarationError(listed.join("; "));
+  }
+
   // Sort by moment in time (as a number, not a string) — a deterministic order
   // old → new, as in multiplierHistoryToEvents; the dates are already canonical,
   // parseIsoDateMs cannot return null here.

@@ -52,9 +52,13 @@ export function demoSnapshotAgeDays(now = Date.now()) {
 // not issuer-confirmed; the marker says exactly that without breaking the field's type.
 // This array REPLACES the live registry under --demo — a demo instance must not mix
 // fictional tokens with tracked ones.
+// decimals follow the issuer families the README teaches (8 xStocks, 6 Backpack,
+// 9 PreStocks/Tessera): a reviewer checking the demo set against that lesson must find
+// the parameter consistent, not fictional. DEMOx is tessera → 9, DEMO2x is backpack → 6;
+// DEMOx's dividend amounts below move with the base (2.00/2.50 per unit at 9 decimals).
 export const DEMO_REGISTRY = [
   {
-    mint: DEMO_MINT, symbol: "DEMOx", name: "Demo Industries (demo token)", issuer: "tessera", decimals: 6,
+    mint: DEMO_MINT, symbol: "DEMOx", name: "Demo Industries (demo token)", issuer: "tessera", decimals: 9,
     sourceUrl: SOURCE, verified: SOURCE, sourceDecimals: SOURCE,
   },
   {
@@ -81,8 +85,8 @@ const DEMO_EVENTS_BY_SYMBOL = {
       effectiveDate: "2026-05-08",
       status: "unverified",
       sources: [SOURCE],
-      amountPerUnitRaw: 2_000_000,
-      decimals: 6,
+      amountPerUnitRaw: 2_000_000_000,
+      decimals: 9,
       reason: "Quarterly dividend, 2.00 per unit (demo snapshot)",
     },
     {
@@ -99,8 +103,8 @@ const DEMO_EVENTS_BY_SYMBOL = {
       effectiveDate: "2026-08-14",
       status: "unverified",
       sources: [SOURCE],
-      amountPerUnitRaw: 2_500_000,
-      decimals: 6,
+      amountPerUnitRaw: 2_500_000_000,
+      decimals: 9,
       reason: "Quarterly dividend, 2.50 per unit (demo snapshot)",
     },
     {

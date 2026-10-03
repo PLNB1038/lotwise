@@ -7,6 +7,10 @@ A corporate actions engine for tokenized equities on Solana. Lotwise normalizes 
 
 ![The report page](docs/screenshots/landing.png)
 
+## Try it live
+
+A deployed showcase runs on live mainnet at **https://lotwise.tail88c821.ts.net** — read-only, no wallet scans, safe to open or curl: the tracked registry, per-token event histories with price verdicts, the issuer-vs-chain reconcile, current multipliers. The [30-second tour](#30-second-tour) walks it in four curls; to serve the same API offline on a static demonstration set, boot `--demo` (see [Quickstart](#quickstart)).
+
 ## Problem
 
 Tokenized equity issuers rebase positions when corporate actions happen. In the xStocks model the raw balance never changes: a supply multiplier (Token-2022 `scaledUiAmountConfig`) scales the displayed quantity instead. Other issuers rotate mints outright. The event data behind these rebases lives in issuer APIs and, for some issuers, only in on-chain mint state. There is no normalized, queryable source of corporate actions for tokenized equities. Portfolio trackers do not model them at all, and generic crypto tax services treat every mint as an ordinary token with no concept of a split, dividend accrual, merger or ticker change.
@@ -17,7 +21,7 @@ Lotwise closes that gap with one canonical event stream, verified against the ch
 
 ## What it does
 
-- **Token registry**: 31 tokenized equities from 4 issuers (xStocks/Backed 16, PreStocks 8, Backpack 4, Tessera 3). Token-2022 mints — decimals per issuer family: 8 (xStocks), 6 (Backpack), 9 (PreStocks/Tessera) — every mint and its decimals verified against mainnet.
+- **Token registry**: 31 tokenized equities from 4 issuers: xStocks (issuer: Backed) 16, PreStocks 8, Backpack 4, Tessera 3. Token-2022 mints — decimals per issuer family: 8 (xStocks), 6 (Backpack), 9 (PreStocks/Tessera) — every mint and its decimals verified against mainnet.
 - **Canonical events**: one schema, 6 event types (`SPLIT`, `DIVIDEND_ACCRUAL`, `MERGER`, `TICKER_CHANGE`, `REDEEM`, `MULTIPLIER_CHANGE`). Strict validation: canonical ISO-8601 dates, exact decimal multipliers as strings (no floats), mandatory source references. All six are schema-validated and engine-ready; today's live feed produces `MULTIPLIER_CHANGE` (xStocks issuer history and the on-chain journal) — the rest appear the moment an issuer or operator supplies them. Events apply in a canonical order — chronologically by day, and within a day `SPLIT`, then `DIVIDEND_ACCRUAL`, then `MERGER`, then `REDEEM` — so the same facts in any feed order produce the same report. A dividend declared for a merger's new mint on the merger day accrues nothing (the holders are still on the old mint when it applies) — the engine reports that as an explicit warning instead of a silent zero.
 - **Event sources**: the xStocks issuer API (paginated history with a completeness check: the oldest node must start at multiplier `1`), and for PreStocks/Backpack the mint state itself, read via an on-chain journal that backfills and diffs across restarts.
 - **Adjusted lots**: FIFO lots rebuilt from wallet history and adjusted through the multiplier timeline, with exact dust arithmetic (BigInt rationals; `sampleScaledQty` reports the exact remainder). Swaps against a **USDC leg carry their cost basis**: a lot bought against USDC knows its `basisRaw`, a disposal against USDC books `proceedsRaw` and `pnlRaw` per FIFO piece (basis transfers proportionally with exact trunc-remainder accounting). A trade without a USDC leg — a transfer, a token→token swap, several tracked tokens inside one tx — is flagged `basisKnown: false` / `proceedsKnown: false`, never an invented number.
@@ -41,7 +45,7 @@ Then open http://127.0.0.1:8787/ .
 
 On startup the server loads the registry, reads mint state for every non-xStocks token, pulls xStocks multiplier history, and only then starts listening. Unavailable sources are skipped with a warning instead of crashing the boot; the state of every source is visible at `/health`. The first `/lots` on the default public RPC can hit a relayed upstream rate limit (`503 {"kind":"rate-limit"}` — the endpoint relays the upstream `429`): that is Solana's public quota talking, not a server fault — `--rpc` with your own endpoint removes it.
 
-Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota. `--rpc` and `--demo` refuse each other at startup (exit 1): the demo boot has no network, so a launch line carrying both is a contradiction, not a configuration. `-h`/`--help` prints the full grammar.
+Flags: `--port 8787`, `--host 127.0.0.1`, `--rpc https://api.mainnet-beta.solana.com` (any Solana JSON-RPC endpoint), `--max-txs 300` (signature cap **per source** — the owner address and each token account — for wallet scans). The port is probed for availability and the host is resolved before boot spends any RPC quota. `--rpc` and `--demo` refuse each other at startup (exit 1): the `--demo` boot has no network, so a launch line carrying both is a contradiction, not a configuration. `-h`/`--help` prints the full grammar.
 
 `--demo` boots offline in milliseconds: a static demonstration set (fictional `DEMOx`/`DEMO2x` tokens, sources marked `lotwise-demo-snapshot`) serves **all six event types** — see the whole schema without waiting for live issuers. Demo `/tokens` rows carry the same eight fields as the live registry, filled honestly: `sourceUrl`/`sourceDecimals`/`verified` are the `lotwise-demo-snapshot` marker (a demo set is by definition not issuer-confirmed; `verified` keeps the live field's provenance-string type). `/health` marks the mode with `demo: { snapshotAsOf, snapshotAgeDays }`: the snapshot is frozen at 2026-09-27 and the age tells how far the story is behind today, so a stale-looking demo identifies itself instead of passing for fresh. Without the flag the live boot is unchanged.
 
@@ -51,7 +55,7 @@ node scripts/serve.mjs --demo   # then: curl "http://127.0.0.1:8787/events?symbo
 
 ## 30-second tour
 
-The demo runs on live mainnet — read-only, no wallet scans, safe to curl:
+The deployed showcase runs on live mainnet — these curls hit the public deployment, not a local `--demo` boot (that one serves its offline snapshot). Read-only, no wallet scans, safe to curl:
 
 ```sh
 # Pulse: 31 tokens, event counts, journal and registry integrity flags
@@ -121,7 +125,7 @@ curl "http://127.0.0.1:8787/crosscheck?symbol=OPENAI"
 
 ### Response and error contract
 
-Every response is JSON; decimal quantities are strings everywhere (including `amountPerUnitRaw` in `/events`); `/events` rows are chronological. Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy: transient (`rate-limit`, `network`, `scan-busy`, `aborted`) means back off and retry; everything else is a stable refusal answered `503` without fabricating data — the upstream refusing or sending garbage, or a component this deployment does not have (`not-configured`: a `--demo` boot serves a static snapshot). A `400` is the request itself being wrong and fails identically on every retry. Full contract — both rate-limit shapes, the kind catalog, HEAD rules, rate buckets and their env knobs: **docs/ERRORS.md**.
+Every response is JSON (the showcase page at `/` is HTML); decimal quantities are strings everywhere (including `amountPerUnitRaw` in `/events`); `/events` rows are chronological. Errors are `{"error": string, "kind"?: string}` — `kind` is the retry policy: transient (`rate-limit`, `network`, `scan-busy`, `aborted`, `shutting-down`) means back off and retry; everything else is a stable refusal answered `503` without fabricating data — the upstream refusing or sending garbage, or a component this deployment does not have (`not-configured`: a `--demo` boot serves a static snapshot). A `400` is the request itself being wrong and fails identically on every retry. Full contract — both rate-limit shapes, the kind catalog, HEAD rules, rate buckets and their env knobs: **docs/ERRORS.md**.
 
 Response shape (a real `/events` row, truncated):
 
@@ -132,7 +136,7 @@ Response shape (a real `/events` row, truncated):
  "mint":"XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C"}
 ```
 
-Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, and `truncated` when the signature cap or a stuck page cut the walk short. Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
+Wallet scans (`/lots`, `/accruals`) walk full transaction history synchronously — an active wallet can take minutes. The report says so instead of hiding it: `complete: false`, per-token `gaps`, `truncated` when the signature cap or a stuck page cut the walk short, and `ambiguousSlotPairs` when the RPC could not order same-slot balance pairs (the order in the transaction list is then a deterministic guess, not a certified history). Pricing is honest about what it knows: realized rows carry `basisRaw` / `proceedsRaw` / `pnlRaw` only when the trade had a USDC leg; the rest are marked unpriced, and a gap piece books its own proceeds share with an unknown basis. `proceedsRaw` is the transaction's NET USDC delta: an unrelated USDC outgoing in the same tx reduces it — reconcile against the `moneyOnly` rows before reading it as a sale price.
 
 Rate limits, per client IP: 12 wallet scans/min, 60 on-chain/price calls/min (see docs/ERRORS.md for buckets and env knobs). Token endpoints and `/accruals` accept both `mint` and `symbol` — when both are passed, `mint` wins. `/onchain` verdicts are `ok | planes-disagree` — the verdict compares the issuer plan (`api`, evaluated at the requested date) against `onChainEffective` (the mint's current `active` multiplier with an already-activated `pending` applied); the raw `active` value may legitimately differ from `api` when a pending rebase sits in between. `/crosscheck` verdicts are the five values listed above.
 
@@ -183,7 +187,7 @@ flowchart LR
 
 `scripts/serve.mjs` wires everything together: registry, then events from both source families, then the API server. Modules under `src/`:
 
-- `registry/` token registry (`data/tokens.json`). Corrupt file is an explicit state: the evidence is preserved next to the original, boot continues on an empty registry, corruption is flagged in `/health`.
+- `registry/` token registry (`data/tokens.json`). Corrupt file is an explicit state: the evidence is preserved next to the original, boot continues on an empty registry, corruption is flagged in `/health`. A registry beyond 2048 tokens refuses the boot up front — the walk over every token is linear, and a runaway registry would turn a restart into hours of pre-listen downtime. Split or shrink `data/tokens.json`.
 - `schema/` canonical event validation and a strict ISO-8601 date parser shared by every layer.
 - `events/` normalization from xStocks history and on-chain mint state; the on-chain journal (backfill, replay across restarts, read-only mode when evidence preservation fails); the price cross-check.
 - `issuer/` xStocks API client and the Token-2022 `scaledUiAmountConfig` parser.
@@ -206,7 +210,7 @@ Live on-chain findings observed during development: SPACEX multiplier `1` → `5
 node --test test/*.test.mjs
 ```
 
-1002 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
+1021 tests, all green (plain `node:test`; no mocks for the core paths — the lot engine, timeline and reconcile are tested as pure functions on real-shaped data).
 
 ## Status
 
